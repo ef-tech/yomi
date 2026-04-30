@@ -1,4 +1,5 @@
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+import { prefs } from "./prefs.js";
 
 const els = {
   tree: document.getElementById("tree"),
@@ -17,11 +18,9 @@ const els = {
 
 const VIEW_MODES = ["preview", "split", "md"];
 const DEFAULT_VIEW_MODE = "preview";
-const STORAGE_KEY_VIEW = "yomi:viewMode:v1";
 
 const THEME_MODES = ["auto", "light", "dark"];
 const DEFAULT_THEME_MODE = "auto";
-const STORAGE_KEY_THEME = "yomi:themeMode:v1";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -62,9 +61,6 @@ const state = {
   /** テーマモード: auto | light | dark */
   themeMode: DEFAULT_THEME_MODE,
 };
-
-const STORAGE_KEY_OPEN = "yomi:openDirs:v1";
-const STORAGE_KEY_CURRENT = "yomi:currentPath:v1";
 
 restorePreferences();
 applyViewMode(state.viewMode);
@@ -254,46 +250,29 @@ function setStatus(kind, text) {
 }
 
 function restorePreferences() {
-  try {
-    const open = localStorage.getItem(STORAGE_KEY_OPEN);
-    if (open) {
-      const arr = JSON.parse(open);
-      if (Array.isArray(arr)) {
-        state.openDirs = new Set([...arr, ""]);
-      }
-    }
-    const cur = localStorage.getItem(STORAGE_KEY_CURRENT);
-    if (cur) state.currentPath = cur;
-    const view = localStorage.getItem(STORAGE_KEY_VIEW);
-    if (view && VIEW_MODES.includes(view)) state.viewMode = view;
-    const theme = localStorage.getItem(STORAGE_KEY_THEME);
-    if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
-  } catch {
-    /* localStorage 不可 */
-  }
+  const open = prefs.openDirs.load();
+  if (open) state.openDirs = new Set([...open, ""]);
+
+  const cur = prefs.currentPath.load();
+  if (cur) state.currentPath = cur;
+
+  const view = prefs.viewMode.load();
+  if (view && VIEW_MODES.includes(view)) state.viewMode = view;
+
+  const theme = prefs.themeMode.load();
+  if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
 }
 
 function saveOpenDirs() {
-  try {
-    localStorage.setItem(
-      STORAGE_KEY_OPEN,
-      JSON.stringify([...state.openDirs]),
-    );
-  } catch {}
+  prefs.openDirs.save([...state.openDirs]);
 }
 
 function saveCurrentPath() {
-  try {
-    if (state.currentPath) {
-      localStorage.setItem(STORAGE_KEY_CURRENT, state.currentPath);
-    }
-  } catch {}
+  if (state.currentPath) prefs.currentPath.save(state.currentPath);
 }
 
 function saveViewMode() {
-  try {
-    localStorage.setItem(STORAGE_KEY_VIEW, state.viewMode);
-  } catch {}
+  prefs.viewMode.save(state.viewMode);
 }
 
 /* ===== 表示モード切替 ===== */
@@ -356,9 +335,7 @@ function applyThemeMode(mode) {
 }
 
 function saveThemeMode() {
-  try {
-    localStorage.setItem(STORAGE_KEY_THEME, state.themeMode);
-  } catch {}
+  prefs.themeMode.save(state.themeMode);
 }
 
 /* ===== Live reload via WebSocket ===== */
