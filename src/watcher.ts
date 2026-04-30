@@ -1,6 +1,7 @@
 import { watch } from "node:fs";
-import { sep } from "node:path";
-import { DEFAULT_EXCLUDES, MD_EXTENSIONS } from "./scanner.ts";
+import { DEFAULT_EXCLUDES } from "./scanner.ts";
+import { isMarkdownExtension } from "./util/markdown-ext.ts";
+import { toPosix } from "./util/path-util.ts";
 
 export type ChangeKind = "rename" | "change";
 
@@ -40,7 +41,7 @@ export function createWatcher(
         const rel = toPosix(String(filename));
         if (!rel) return;
         if (isExcluded(rel)) return;
-        if (!isMarkdownFile(rel)) return;
+        if (!isMarkdownExtension(rel)) return;
         fire(rel, eventType === "rename" ? "rename" : "change");
       },
     );
@@ -68,14 +69,4 @@ export function createWatcher(
 function isExcluded(rel: string): boolean {
   const segs = rel.split("/");
   return segs.some((s) => DEFAULT_EXCLUDES.has(s));
-}
-
-function isMarkdownFile(rel: string): boolean {
-  const dot = rel.lastIndexOf(".");
-  if (dot < 0) return false;
-  return MD_EXTENSIONS.has(rel.slice(dot).toLowerCase());
-}
-
-function toPosix(p: string): string {
-  return sep === "/" ? p : p.split(sep).join("/");
 }

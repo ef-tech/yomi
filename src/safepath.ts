@@ -1,17 +1,14 @@
-import { resolve, relative, sep, isAbsolute } from "node:path";
+import { resolve, relative, isAbsolute } from "node:path";
 import { realpath } from "node:fs/promises";
+import { toPosix } from "./util/path-util.ts";
+
+export { isMarkdownExtension as isMarkdownPath } from "./util/markdown-ext.ts";
 
 export class UnsafePathError extends Error {
   constructor(public readonly requestedPath: string, message: string) {
     super(message);
     this.name = "UnsafePathError";
   }
-}
-
-const MD_PATTERN = /\.(md|markdown|mdx)$/i;
-
-export function isMarkdownPath(p: string): boolean {
-  return MD_PATTERN.test(p);
 }
 
 export interface ResolvedPath {
@@ -55,8 +52,4 @@ async function safeRealpath(p: string): Promise<string> {
   } catch {
     return resolve(p);
   }
-}
-
-function toPosix(p: string): string {
-  return sep === "/" ? p : p.split(sep).join("/");
 }

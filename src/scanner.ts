@@ -1,5 +1,7 @@
 import { readdir } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative } from "node:path";
+import { isMarkdownExtension } from "./util/markdown-ext.ts";
+import { toPosix } from "./util/path-util.ts";
 
 export const DEFAULT_EXCLUDES = new Set<string>([
   "node_modules",
@@ -20,19 +22,11 @@ export const DEFAULT_EXCLUDES = new Set<string>([
   ".vscode",
 ]);
 
-export const MD_EXTENSIONS = new Set<string>([".md", ".markdown", ".mdx"]);
-
 export interface TreeNode {
   name: string;
   path: string;
   type: "file" | "dir";
   children?: TreeNode[];
-}
-
-function isMarkdown(name: string): boolean {
-  const dot = name.lastIndexOf(".");
-  if (dot < 0) return false;
-  return MD_EXTENSIONS.has(name.slice(dot).toLowerCase());
 }
 
 export interface ScanOptions {
@@ -90,7 +84,7 @@ async function walk(
       };
       parent.children!.push(dirNode);
       await walk(root, absPath, dirNode, excludes, followSymlinks);
-    } else if (entry.isFile() && isMarkdown(entry.name)) {
+    } else if (entry.isFile() && isMarkdownExtension(entry.name)) {
       parent.children!.push({
         name: entry.name,
         path: relPath,
@@ -117,8 +111,4 @@ function sortTree(node: TreeNode): void {
     return a.name.localeCompare(b.name);
   });
   for (const child of node.children) sortTree(child);
-}
-
-function toPosix(p: string): string {
-  return sep === "/" ? p : p.split(sep).join("/");
 }
