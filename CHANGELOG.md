@@ -65,5 +65,21 @@ yomi の主要な変更点をこのファイルに記録します。
 - `src/safepath.ts` — パストラバーサル検証
 - `src/network.ts` — LAN IP 列挙、URL 組み立て、ブラウザオープン用 URL 選択
 - `src/open-browser.ts` — プラットフォーム別ブラウザ自動オープン
+- `src/banner.ts` — 起動時バナー組み立て (リファクタで分離)
+- `src/frontmatter.ts` — YAML フロントマター処理 (リファクタで renderer から分離)
+- `src/util/path-util.ts` / `markdown-ext.ts` / `excludes.ts` / `html.ts` — 共通ユーティリティ
+- `public/prefs.js` — クライアント側 localStorage アクセス (リファクタで分離)
 
 設計書記載のモジュール (`server.ts` / `scanner.ts` / `watcher.ts` / `renderer.ts`) はそのまま実装。
+
+### Refactor (post-MVP)
+
+サーバー側・クライアント側に渡る全体リファクタ。挙動は完全互換、内部構造のみ整理。
+
+- 共通ユーティリティ集約: `toPosix`, `isMarkdownExtension`, `isExcludedPath`, `escapeHtml` を `src/util/` に切り出し、scanner/safepath/watcher/renderer/frontmatter での重複を解消
+- `renderer.ts` を marked + Mermaid 専用に縮小 (127→38 行)、フロントマター処理は `frontmatter.ts` に
+- `parseArgs` を `--name=value` 正規化 + ヘルパー (`parsePort`, `takeValue`) で簡素化、二重ロジックを解消
+- `bin/yomi.ts` の起動ログ整形を `src/banner.ts` に切り出し、`main()` をリニア化
+- クライアント `app.js` の `localStorage` アクセスを `public/prefs.js` の prefs オブジェクトに集約
+- ツリー DOM 再走査を `state.dirNodes` Map に置換 (`querySelector` 廃止、`cssAttrEscape` 削除)
+- テーマ切替時のサーバー再フェッチを廃止し、キャッシュ済み HTML を再描画して Mermaid のみテーマ反映
