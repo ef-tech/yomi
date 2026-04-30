@@ -30,11 +30,44 @@ export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
   yomi --host 127.0.0.1            # 自端末からのみ
 `;
 
+/** "--name=value" 形式を "--name" "value" に分割し、引数列を統一形式に正規化する */
+function normalize(argv: readonly string[]): string[] {
+  const result: string[] = [];
+  for (const arg of argv) {
+    const eq = arg.indexOf("=");
+    if (arg.startsWith("--") && eq > 2) {
+      result.push(arg.slice(0, eq), arg.slice(eq + 1));
+    } else {
+      result.push(arg);
+    }
+  }
+  return result;
+}
+
+function parsePort(value: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`--port は 1〜65535 の整数で指定してください: ${value}`);
+  }
+  return n;
+}
+
+function takeValue(
+  argv: readonly string[],
+  index: number,
+  flag: string,
+): string {
+  const value = argv[index + 1];
+  if (value === undefined) throw new Error(`${flag} には値が必要です`);
+  return value;
+}
+
 export function parseArgs(argv: readonly string[]): CliOptions {
   const opts: CliOptions = { ...DEFAULT_OPTIONS };
+  const args = normalize(argv);
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--help":
       case "-h":
@@ -43,37 +76,16 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       case "--no-open":
         opts.open = false;
         break;
-      case "--port": {
-        const next = argv[i + 1];
-        if (next === undefined) throw new Error("--port には値が必要です");
-        const n = Number(next);
-        if (!Number.isInteger(n) || n < 1 || n > 65535) {
-          throw new Error(`--port は 1〜65535 の整数で指定してください: ${next}`);
-        }
-        opts.port = n;
+      case "--port":
+        opts.port = parsePort(takeValue(args, i, "--port"));
         i++;
         break;
-      }
-      case "--host": {
-        const next = argv[i + 1];
-        if (next === undefined) throw new Error("--host には値が必要です");
-        opts.host = next;
+      case "--host":
+        opts.host = takeValue(args, i, "--host");
         i++;
         break;
-      }
       default:
-        if (arg && arg.startsWith("--port=")) {
-          const value = arg.slice("--port=".length);
-          const n = Number(value);
-          if (!Number.isInteger(n) || n < 1 || n > 65535) {
-            throw new Error(`--port は 1〜65535 の整数で指定してください: ${value}`);
-          }
-          opts.port = n;
-        } else if (arg && arg.startsWith("--host=")) {
-          opts.host = arg.slice("--host=".length);
-        } else {
-          throw new Error(`不明なオプション: ${arg}`);
-        }
+        throw new Error(`不明なオプション: ${arg}`);
     }
   }
 
