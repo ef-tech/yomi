@@ -88,4 +88,4 @@ yomi が起動しました
 
 ## ライセンス
 
-MIT
+MIT — 詳細は [`LICENSE`](LICENSE) を参照。
