@@ -8,7 +8,7 @@
 - Mermaid 図のインライン描画
 - ファイル保存で自動リロード（ライブプレビュー）
 - GitHub 風 CSS、システムのダーク/ライト追従
-- localhost バインドのみ（個人利用前提）
+- 同 LAN 内の別端末からも閲覧可（`--host 127.0.0.1` でローカル限定）
 
 ## 必要環境
 
@@ -18,6 +18,23 @@
 
 ```bash
 bun install -g github:ef-tech/yomi
+```
+
+## アップデート
+
+最新の `main` を取得するには、もう一度同じコマンドを実行します。
+Bun は同じパッケージ名で再インストールするとリモートの最新ソースを取得して上書きします。
+
+```bash
+bun install -g github:ef-tech/yomi
+```
+
+特定のタグ・ブランチ・コミットを使いたい場合：
+
+```bash
+bun install -g github:ef-tech/yomi#v0.2.0    # タグ
+bun install -g github:ef-tech/yomi#main      # ブランチ
+bun install -g github:ef-tech/yomi#abc1234   # コミット SHA
 ```
 
 ## アンインストール
