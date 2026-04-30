@@ -41,14 +41,18 @@ function initMermaid(mode) {
 darkQuery.addEventListener("change", () => {
   if (state.themeMode !== "auto") return;
   initMermaid(state.themeMode);
-  if (state.currentPath) {
-    selectFile(state.currentPath).catch(() => {});
+  // テーマだけ変わってもサーバー側の HTML は同じなので、再フェッチせず
+  // キャッシュから innerHTML を再設定して Mermaid を新テーマで描き直す
+  if (state.currentHtml && state.viewMode !== "md") {
+    renderCurrentFile();
   }
 });
 
 const state = {
   /** path -> tree-item ボタン要素 */
   fileButtons: new Map(),
+  /** path -> { button, ul } (ディレクトリの開閉に使用) */
+  dirNodes: new Map(),
   /** 開いているディレクトリ path のセット */
   openDirs: new Set([""]),
   /** 現在表示中のファイル path */
@@ -102,6 +106,7 @@ async function fetchJson(url) {
 
 function renderTree(root) {
   state.fileButtons.clear();
+  state.dirNodes.clear();
   els.tree.removeAttribute("aria-busy");
   els.tree.innerHTML = "";
 
@@ -134,6 +139,7 @@ function renderNode(node) {
       ul.appendChild(renderNode(child));
     }
     li.appendChild(ul);
+    state.dirNodes.set(node.path, { button, ul });
 
     const isOpen = state.openDirs.has(node.path);
     setDirOpen(button, ul, isOpen);
@@ -225,21 +231,10 @@ function expandAncestors(path) {
   for (const seg of segments) {
     acc = acc ? `${acc}/${seg}` : seg;
     state.openDirs.add(acc);
+    const node = state.dirNodes.get(acc);
+    if (node) setDirOpen(node.button, node.ul, true);
   }
   saveOpenDirs();
-  // 既に DOM 構築済みなのでクラス更新
-  for (const dir of state.openDirs) {
-    const escaped = cssAttrEscape(dir);
-    const btn = els.tree.querySelector(`.tree-item.is-dir[title="${escaped}"]`);
-    if (btn) {
-      const ul = btn.parentElement?.querySelector(":scope > ul");
-      if (ul) setDirOpen(btn, ul, true);
-    }
-  }
-}
-
-function cssAttrEscape(s) {
-  return s.replace(/["\\]/g, "\\$&");
 }
 
 function setStatus(kind, text) {
@@ -313,9 +308,10 @@ function wireThemeToggle() {
       applyThemeMode(mode);
       saveThemeMode();
       initMermaid(mode);
-      // Mermaid を新テーマで再描画するために再フェッチ
-      if (state.currentPath && state.viewMode !== "md") {
-        selectFile(state.currentPath).catch(() => {});
+      // テーマだけ変わってもサーバー HTML は同じ。キャッシュから再描画して
+      // Mermaid を新テーマで描き直す
+      if (state.currentHtml && state.viewMode !== "md") {
+        renderCurrentFile();
       }
     });
   }
