@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { DEFAULT_EXCLUDES } from "./scanner.ts";
+import { isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
 
@@ -40,7 +40,7 @@ export function createWatcher(
         if (!filename) return;
         const rel = toPosix(String(filename));
         if (!rel) return;
-        if (isExcluded(rel)) return;
+        if (isExcludedPath(rel)) return;
         if (!isMarkdownExtension(rel)) return;
         fire(rel, eventType === "rename" ? "rename" : "change");
       },
@@ -66,7 +66,3 @@ export function createWatcher(
   };
 }
 
-function isExcluded(rel: string): boolean {
-  const segs = rel.split("/");
-  return segs.some((s) => DEFAULT_EXCLUDES.has(s));
-}

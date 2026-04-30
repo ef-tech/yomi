@@ -1,26 +1,10 @@
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
 
-export const DEFAULT_EXCLUDES = new Set<string>([
-  "node_modules",
-  ".git",
-  ".svn",
-  ".hg",
-  "dist",
-  "build",
-  ".next",
-  ".cache",
-  "coverage",
-  ".nyc_output",
-  "vendor",
-  ".bun",
-  ".turbo",
-  ".vercel",
-  ".idea",
-  ".vscode",
-]);
+export { DEFAULT_EXCLUDES };
 
 export interface TreeNode {
   name: string;
@@ -30,7 +14,7 @@ export interface TreeNode {
 }
 
 export interface ScanOptions {
-  excludes?: Set<string>;
+  excludes?: ReadonlySet<string>;
   followSymlinks?: boolean;
 }
 
@@ -56,7 +40,7 @@ async function walk(
   root: string,
   current: string,
   parent: TreeNode,
-  excludes: Set<string>,
+  excludes: ReadonlySet<string>,
   followSymlinks: boolean,
 ): Promise<void> {
   let entries;
@@ -67,8 +51,7 @@ async function walk(
   }
 
   for (const entry of entries) {
-    if (entry.name.startsWith(".") && excludes.has(entry.name)) continue;
-    if (excludes.has(entry.name)) continue;
+    if (isExcludedPath(entry.name, excludes)) continue;
 
     const absPath = join(current, entry.name);
     const relPath = toPosix(relative(root, absPath));
