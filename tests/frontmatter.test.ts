@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  parseFrontmatter,
-  renderFrontmatter,
-} from "../src/frontmatter.ts";
+import { parseFrontmatter, renderFrontmatter } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {
   test("フロントマターなしならそのまま body", () => {
@@ -22,8 +19,7 @@ describe("parseFrontmatter", () => {
   });
 
   test("空行と YAML コメント (#) をスキップ", () => {
-    const src =
-      "---\ntitle: A\n\n# これはコメント\nauthor: B\n---\n本文";
+    const src = "---\ntitle: A\n\n# これはコメント\nauthor: B\n---\n本文";
     const r = parseFrontmatter(src);
     expect(r.entries).toEqual([
       { key: "title", value: "A" },
@@ -32,8 +28,7 @@ describe("parseFrontmatter", () => {
   });
 
   test("ネスト (1 段階) を children として保持", () => {
-    const src =
-      "---\nsummary:\n  good: 5\n  bad: 0\ntitle: T\n---\n本文";
+    const src = "---\nsummary:\n  good: 5\n  bad: 0\ntitle: T\n---\n本文";
     const r = parseFrontmatter(src);
     expect(r.entries).toHaveLength(2);
     expect(r.entries[0]).toEqual({
@@ -100,18 +95,12 @@ describe("renderFrontmatter", () => {
   });
 
   test("URL はリンクに変換 (新規タブ)", () => {
-    const html = renderFrontmatter([
-      { key: "url", value: "https://example.com/foo" },
-    ]);
-    expect(html).toContain(
-      '<a href="https://example.com/foo" target="_blank" rel="noopener">',
-    );
+    const html = renderFrontmatter([{ key: "url", value: "https://example.com/foo" }]);
+    expect(html).toContain('<a href="https://example.com/foo" target="_blank" rel="noopener">');
   });
 
   test("クォートで囲まれた値はクォートを除去", () => {
-    const html = renderFrontmatter([
-      { key: "title", value: '"Quoted"' },
-    ]);
+    const html = renderFrontmatter([{ key: "title", value: '"Quoted"' }]);
     expect(html).toContain("<dd>Quoted</dd>");
   });
 

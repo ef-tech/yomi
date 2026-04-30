@@ -1,4 +1,4 @@
-import { watch } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import { isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
@@ -13,10 +13,7 @@ export interface WatcherHandle {
 
 const DEBOUNCE_MS = 80;
 
-export function createWatcher(
-  rootDir: string,
-  onChange: ChangeListener,
-): WatcherHandle {
+export function createWatcher(rootDir: string, onChange: ChangeListener): WatcherHandle {
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
 
   const fire = (path: string, kind: ChangeKind) => {
@@ -31,20 +28,16 @@ export function createWatcher(
     );
   };
 
-  let watcher;
+  let watcher: FSWatcher;
   try {
-    watcher = watch(
-      rootDir,
-      { recursive: true },
-      (eventType, filename) => {
-        if (!filename) return;
-        const rel = toPosix(String(filename));
-        if (!rel) return;
-        if (isExcludedPath(rel)) return;
-        if (!isMarkdownExtension(rel)) return;
-        fire(rel, eventType === "rename" ? "rename" : "change");
-      },
-    );
+    watcher = watch(rootDir, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+      const rel = toPosix(String(filename));
+      if (!rel) return;
+      if (isExcludedPath(rel)) return;
+      if (!isMarkdownExtension(rel)) return;
+      fire(rel, eventType === "rename" ? "rename" : "change");
+    });
   } catch (err) {
     console.warn(
       `ファイル監視を開始できません: ${(err as Error).message}\n` +
@@ -65,4 +58,3 @@ export function createWatcher(
     },
   };
 }
-

@@ -2,11 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  isMarkdownPath,
-  resolveSafe,
-  UnsafePathError,
-} from "../src/safepath.ts";
+import { isMarkdownPath, resolveSafe, UnsafePathError } from "../src/safepath.ts";
 
 let root: string;
 
@@ -53,16 +49,12 @@ describe("resolveSafe", () => {
   });
 
   test("絶対パスは拒否", async () => {
-    await expect(resolveSafe(root, "/etc/passwd")).rejects.toThrow(
-      /絶対パス/,
-    );
+    await expect(resolveSafe(root, "/etc/passwd")).rejects.toThrow(/絶対パス/);
   });
 
   test("親ディレクトリ参照 (..) は拒否", async () => {
     await expect(resolveSafe(root, "../a.md")).rejects.toThrow(/\.\./);
-    await expect(resolveSafe(root, "sub/../../etc")).rejects.toThrow(
-      /\.\./,
-    );
+    await expect(resolveSafe(root, "sub/../../etc")).rejects.toThrow(/\.\./);
     await expect(resolveSafe(root, "sub/..")).rejects.toThrow(/\.\./);
   });
 

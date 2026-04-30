@@ -53,10 +53,7 @@ export function parseFrontmatter(source: string): ParsedFrontmatter {
 
 function renderValue(value: string): string {
   let v = value;
-  if (
-    (v.startsWith('"') && v.endsWith('"')) ||
-    (v.startsWith("'") && v.endsWith("'"))
-  ) {
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
     v = v.slice(1, -1);
   }
   if (!v) return "";
@@ -72,9 +69,7 @@ export function renderFrontmatter(entries: FrontmatterEntry[]): string {
   const rows: string[] = [];
   for (const e of entries) {
     if (e.value) {
-      rows.push(
-        `<dt>${escapeHtml(e.key)}</dt><dd>${renderValue(e.value)}</dd>`,
-      );
+      rows.push(`<dt>${escapeHtml(e.key)}</dt><dd>${renderValue(e.value)}</dd>`);
       continue;
     }
     if (e.children && e.children.length > 0) {
@@ -84,9 +79,7 @@ export function renderFrontmatter(entries: FrontmatterEntry[]): string {
             `<span class="fm-pair"><span class="fm-k">${escapeHtml(c.key)}</span>: <span class="fm-v">${renderValue(c.value)}</span></span>`,
         )
         .join("");
-      rows.push(
-        `<dt>${escapeHtml(e.key)}</dt><dd class="fm-nested">${inner}</dd>`,
-      );
+      rows.push(`<dt>${escapeHtml(e.key)}</dt><dd class="fm-nested">${inner}</dd>`);
     }
   }
   if (rows.length === 0) return "";

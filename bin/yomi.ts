@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-import { parseArgs, HELP_TEXT } from "../src/cli.ts";
+import { printStartupBanner } from "../src/banner.ts";
+import { HELP_TEXT, parseArgs } from "../src/cli.ts";
+import { pickBrowserUrl } from "../src/network.ts";
+import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
-import { openBrowser } from "../src/open-browser.ts";
-import { pickBrowserUrl } from "../src/network.ts";
-import { printStartupBanner } from "../src/banner.ts";
 
 async function main() {
   const options = parseOptionsOrExit();
@@ -13,10 +13,7 @@ async function main() {
     return;
   }
 
-  const port =
-    options.port !== null
-      ? options.port
-      : await findAvailablePort(options.host);
+  const port = options.port !== null ? options.port : await findAvailablePort(options.host);
 
   const rootDir = process.cwd();
 

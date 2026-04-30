@@ -53,18 +53,12 @@ describe("pickBrowserUrl", () => {
   });
 
   test("ループバックはそのまま", () => {
-    expect(pickBrowserUrl("127.0.0.1", 3939)).toBe(
-      "http://127.0.0.1:3939",
-    );
-    expect(pickBrowserUrl("localhost", 3939)).toBe(
-      "http://localhost:3939",
-    );
+    expect(pickBrowserUrl("127.0.0.1", 3939)).toBe("http://127.0.0.1:3939");
+    expect(pickBrowserUrl("localhost", 3939)).toBe("http://localhost:3939");
   });
 
   test("任意の IP もそのまま", () => {
-    expect(pickBrowserUrl("192.168.1.10", 8080)).toBe(
-      "http://192.168.1.10:8080",
-    );
+    expect(pickBrowserUrl("192.168.1.10", 8080)).toBe("http://192.168.1.10:8080");
   });
 });
 

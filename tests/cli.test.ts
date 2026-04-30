@@ -73,12 +73,7 @@ describe("parseArgs", () => {
 
   describe("複合", () => {
     test("複数オプションを組み合わせ", () => {
-      const opts = parseArgs([
-        "--port",
-        "3000",
-        "--host=127.0.0.1",
-        "--no-open",
-      ]);
+      const opts = parseArgs(["--port", "3000", "--host=127.0.0.1", "--no-open"]);
       expect(opts.port).toBe(3000);
       expect(opts.host).toBe("127.0.0.1");
       expect(opts.open).toBe(false);
@@ -92,9 +87,7 @@ describe("parseArgs", () => {
     });
 
     test("--unknown=value もエラー", () => {
-      expect(() => parseArgs(["--unknown=value"])).toThrow(
-        /不明なオプション/,
-      );
+      expect(() => parseArgs(["--unknown=value"])).toThrow(/不明なオプション/);
     });
   });
 

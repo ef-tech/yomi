@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
@@ -18,10 +19,7 @@ export interface ScanOptions {
   followSymlinks?: boolean;
 }
 
-export async function scanMarkdownTree(
-  root: string,
-  options: ScanOptions = {},
-): Promise<TreeNode> {
+export async function scanMarkdownTree(root: string, options: ScanOptions = {}): Promise<TreeNode> {
   const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const followSymlinks = options.followSymlinks ?? false;
   const rootNode: TreeNode = {
@@ -43,12 +41,14 @@ async function walk(
   excludes: ReadonlySet<string>,
   followSymlinks: boolean,
 ): Promise<void> {
-  let entries;
+  let entries: Dirent[];
   try {
     entries = await readdir(current, { withFileTypes: true });
   } catch {
     return;
   }
+
+  const children = parent.children ?? [];
 
   for (const entry of entries) {
     if (isExcludedPath(entry.name, excludes)) continue;
@@ -65,16 +65,18 @@ async function walk(
         type: "dir",
         children: [],
       };
-      parent.children!.push(dirNode);
+      children.push(dirNode);
       await walk(root, absPath, dirNode, excludes, followSymlinks);
     } else if (entry.isFile() && isMarkdownExtension(entry.name)) {
-      parent.children!.push({
+      children.push({
         name: entry.name,
         path: relPath,
         type: "file",
       });
     }
   }
+
+  parent.children = children;
 }
 
 function pruneEmpty(node: TreeNode): boolean {

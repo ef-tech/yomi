@@ -8,12 +8,8 @@ const els = {
   contentBody: document.getElementById("content-body"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
-  toggleButtons: Array.from(
-    document.querySelectorAll(".view-toggle-btn"),
-  ),
-  themeButtons: Array.from(
-    document.querySelectorAll(".theme-toggle-btn"),
-  ),
+  toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
+  themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
 };
 
 const VIEW_MODES = ["preview", "split", "md"];
@@ -389,10 +385,7 @@ async function handleLiveEvent(msg) {
         if (state.fileButtons.has(state.currentPath)) {
           highlightSelected(state.currentPath);
         } else {
-          setStatus(
-            "error",
-            `ファイルが削除されました: ${state.currentPath}`,
-          );
+          setStatus("error", `ファイルが削除されました: ${state.currentPath}`);
         }
       }
     } catch (err) {

@@ -65,15 +65,16 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
-    "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo,
-    sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, sans-serif;
   font-size: 14px;
   line-height: 1.6;
 }
@@ -142,11 +143,19 @@ body {
   font-weight: 600;
 }
 
-.status.is-error { color: #cf222e; }
-.status.is-ok    { color: #1a7f37; }
+.status.is-error {
+  color: #cf222e;
+}
+.status.is-ok {
+  color: #1a7f37;
+}
 @media (prefers-color-scheme: dark) {
-  .status.is-error { color: #ff7b72; }
-  .status.is-ok    { color: #56d364; }
+  .status.is-error {
+    color: #ff7b72;
+  }
+  .status.is-ok {
+    color: #56d364;
+  }
 }
 
 /* ===== レイアウト ===== */
@@ -236,6 +245,28 @@ body {
   position: relative;
 }
 
+/* 各モードに依存しない基本スタイル (data-mode セレクタより前に置く) */
+.preview {
+  overflow-y: auto;
+  padding: 2rem 2.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.source {
+  margin: 0;
+  padding: 1.5rem 2rem;
+  overflow: auto;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+
 .content-body[data-mode="preview"] {
   grid-template-columns: 1fr;
 }
@@ -262,33 +293,13 @@ body {
   border-right: 1px solid var(--border);
 }
 
-.preview {
-  overflow-y: auto;
-  padding: 2rem 2.5rem;
-  width: 100%;
-  min-width: 0;
-}
-
-.source {
-  margin: 0;
-  padding: 1.5rem 2rem;
-  overflow: auto;
-  background: var(--bg-subtle);
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-width: 0;
-}
-
 .placeholder {
   color: var(--text-muted);
 }
 
 /* ===== ツリー ===== */
-.tree, .tree ul {
+.tree,
+.tree ul {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -342,9 +353,15 @@ body {
   color: var(--text-muted);
 }
 
-.tree-item.is-dir > .icon::before { content: "▸"; }
-.tree-item.is-dir.is-open > .icon::before { content: "▾"; }
-.tree-item.is-file > .icon::before { content: "≡"; }
+.tree-item.is-dir > .icon::before {
+  content: "▸";
+}
+.tree-item.is-dir.is-open > .icon::before {
+  content: "▾";
+}
+.tree-item.is-file > .icon::before {
+  content: "≡";
+}
 
 .tree-item .name {
   white-space: nowrap;
@@ -363,10 +380,22 @@ body {
   padding-bottom: 0.3em;
 }
 
-.markdown-body h1 { font-size: 2em; margin: 0.6em 0 0.4em; }
-.markdown-body h2 { font-size: 1.5em; margin: 1.2em 0 0.4em; }
-.markdown-body h3 { font-size: 1.25em; margin: 1.2em 0 0.4em; }
-.markdown-body h4 { font-size: 1em;    margin: 1.2em 0 0.4em; }
+.markdown-body h1 {
+  font-size: 2em;
+  margin: 0.6em 0 0.4em;
+}
+.markdown-body h2 {
+  font-size: 1.5em;
+  margin: 1.2em 0 0.4em;
+}
+.markdown-body h3 {
+  font-size: 1.25em;
+  margin: 1.2em 0 0.4em;
+}
+.markdown-body h4 {
+  font-size: 1em;
+  margin: 1.2em 0 0.4em;
+}
 
 .markdown-body a {
   color: var(--link);
@@ -434,7 +463,8 @@ body {
   margin: 2em 0;
 }
 
-.markdown-body ul, .markdown-body ol {
+.markdown-body ul,
+.markdown-body ol {
   padding-left: 2em;
 }
 

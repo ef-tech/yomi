@@ -1,11 +1,14 @@
-import { resolve, relative, isAbsolute } from "node:path";
 import { realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { toPosix } from "./util/path-util.ts";
 
 export { isMarkdownExtension as isMarkdownPath } from "./util/markdown-ext.ts";
 
 export class UnsafePathError extends Error {
-  constructor(public readonly requestedPath: string, message: string) {
+  constructor(
+    public readonly requestedPath: string,
+    message: string,
+  ) {
     super(message);
     this.name = "UnsafePathError";
   }
@@ -18,10 +21,7 @@ export interface ResolvedPath {
   abs: string;
 }
 
-export async function resolveSafe(
-  rootDir: string,
-  requested: string,
-): Promise<ResolvedPath> {
+export async function resolveSafe(rootDir: string, requested: string): Promise<ResolvedPath> {
   if (!requested) {
     throw new UnsafePathError(requested, "path が空です");
   }
@@ -37,10 +37,7 @@ export async function resolveSafe(
   const rel = relative(rootAbs, candidateAbs);
 
   if (rel.startsWith("..") || isAbsolute(rel)) {
-    throw new UnsafePathError(
-      requested,
-      "ルートディレクトリの外を参照しています",
-    );
+    throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
   return { rel: toPosix(rel), abs: candidateAbs };

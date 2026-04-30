@@ -52,11 +52,7 @@ function parsePort(value: string): number {
   return n;
 }
 
-function takeValue(
-  argv: readonly string[],
-  index: number,
-  flag: string,
-): string {
+function takeValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (value === undefined) throw new Error(`${flag} には値が必要です`);
   return value;

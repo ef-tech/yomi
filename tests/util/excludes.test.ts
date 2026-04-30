@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  DEFAULT_EXCLUDES,
-  isExcludedPath,
-} from "../../src/util/excludes.ts";
+import { DEFAULT_EXCLUDES, isExcludedPath } from "../../src/util/excludes.ts";
 
 describe("DEFAULT_EXCLUDES", () => {
   test("代表的な無視ディレクトリを含む", () => {

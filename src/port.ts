@@ -11,9 +11,7 @@ export async function findAvailablePort(
   for (let port = startPort; port < startPort + limit; port++) {
     if (await isPortAvailable(host, port)) return port;
   }
-  throw new Error(
-    `空きポートが見つかりません (${startPort}〜${startPort + limit - 1} を試行)`,
-  );
+  throw new Error(`空きポートが見つかりません (${startPort}〜${startPort + limit - 1} を試行)`);
 }
 
 function isPortAvailable(host: string, port: number): Promise<boolean> {

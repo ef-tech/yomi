@@ -15,10 +15,8 @@ describe("renderMarkdown", () => {
     expect(html).toContain("<p>別段落</p>");
   });
 
-  test("Mermaid フェンスは <pre class=\"mermaid\"> に変換", async () => {
-    const html = await renderMarkdown(
-      "```mermaid\nflowchart LR\nA-->B\n```",
-    );
+  test('Mermaid フェンスは <pre class="mermaid"> に変換', async () => {
+    const html = await renderMarkdown("```mermaid\nflowchart LR\nA-->B\n```");
     expect(html).toContain('<pre class="mermaid">');
     expect(html).toContain("flowchart LR");
     expect(html).toContain("A--&gt;B");
@@ -30,10 +28,8 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain('<pre class="mermaid">');
   });
 
-  test("YAML フロントマターは <dl class=\"frontmatter\"> として先頭に", async () => {
-    const html = await renderMarkdown(
-      "---\ntitle: T\nurl: https://example.com\n---\n# 本文",
-    );
+  test('YAML フロントマターは <dl class="frontmatter"> として先頭に', async () => {
+    const html = await renderMarkdown("---\ntitle: T\nurl: https://example.com\n---\n# 本文");
     expect(html).toContain('<dl class="frontmatter">');
     expect(html).toContain("<dt>title</dt><dd>T</dd>");
     expect(html).toContain('<a href="https://example.com"');
@@ -62,9 +58,7 @@ describe("renderMarkdown", () => {
   });
 
   test("Mermaid フェンス内の HTML 特殊文字をエスケープ", async () => {
-    const html = await renderMarkdown(
-      '```mermaid\ngraph TD\nA["<script>"]-->B\n```',
-    );
+    const html = await renderMarkdown('```mermaid\ngraph TD\nA["<script>"]-->B\n```');
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });

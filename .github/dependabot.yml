@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # GitHub Actions の version 更新
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "ci"
+      - "dependencies"
+    open-pull-requests-limit: 5
+
+  # npm 依存 (marked, @types/bun, typescript, @biomejs/biome 等)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 5
+    groups:
+      types-and-tooling:
+        patterns:
+          - "@types/*"
+          - "typescript"
+          - "@biomejs/*"

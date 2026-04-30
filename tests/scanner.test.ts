@@ -45,10 +45,7 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function findChild(
-  node: TreeNode,
-  name: string,
-): TreeNode | undefined {
+function findChild(node: TreeNode, name: string): TreeNode | undefined {
   return node.children?.find((c) => c.name === name);
 }
 
@@ -84,23 +81,22 @@ describe("scanMarkdownTree", () => {
     const tree = await scanMarkdownTree(root);
     const sub = findChild(tree, "sub");
     expect(sub).toBeDefined();
-    expect(findChild(sub!, "empty")).toBeUndefined();
+    expect(findChild(sub as TreeNode, "empty")).toBeUndefined();
   });
 
   test("再帰スキャン: 深いネストもたどる", async () => {
     const tree = await scanMarkdownTree(root);
     const deep = findChild(tree, "deep");
     expect(deep).toBeDefined();
-    const lvl2 = findChild(deep!, "lvl2");
-    const lvl3 = findChild(lvl2!, "lvl3");
-    const file = findChild(lvl3!, "x.md");
+    const lvl2 = findChild(deep as TreeNode, "lvl2");
+    const lvl3 = findChild(lvl2 as TreeNode, "lvl3");
+    const file = findChild(lvl3 as TreeNode, "x.md");
     expect(file?.path).toBe("deep/lvl2/lvl3/x.md");
     expect(file?.type).toBe("file");
   });
 
   test("ソート: ディレクトリ -> ファイル、それぞれ alphabetical", async () => {
     const tree = await scanMarkdownTree(root);
-    const names = (tree.children ?? []).map((c) => c.name);
     // dirs before files
     const dirIdxs = (tree.children ?? [])
       .map((c, i) => (c.type === "dir" ? i : -1))
@@ -112,9 +108,7 @@ describe("scanMarkdownTree", () => {
       expect(Math.max(...dirIdxs)).toBeLessThan(Math.min(...fileIdxs));
     }
     // ファイル名は alphabetical
-    const fileNames = (tree.children ?? [])
-      .filter((c) => c.type === "file")
-      .map((c) => c.name);
+    const fileNames = (tree.children ?? []).filter((c) => c.type === "file").map((c) => c.name);
     const sorted = [...fileNames].sort((a, b) => a.localeCompare(b));
     expect(fileNames).toEqual(sorted);
   });
@@ -122,7 +116,7 @@ describe("scanMarkdownTree", () => {
   test("path は POSIX 形式の相対パス", async () => {
     const tree = await scanMarkdownTree(root);
     const sub = findChild(tree, "sub");
-    const d = findChild(sub!, "d.md");
+    const d = findChild(sub as TreeNode, "d.md");
     expect(d?.path).toBe("sub/d.md");
     expect(d?.path.includes("\\")).toBe(false);
   });

@@ -1,18 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scanMarkdownTree } from "./scanner.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
+import { scanMarkdownTree } from "./scanner.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
 
-const PUBLIC_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "public",
-);
+const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 
 const ASSET_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -119,25 +115,16 @@ async function handleTree(rootDir: string): Promise<Response> {
     const tree = await scanMarkdownTree(rootDir);
     return Response.json(tree);
   } catch (err) {
-    return Response.json(
-      { error: (err as Error).message },
-      { status: 500 },
-    );
+    return Response.json({ error: (err as Error).message }, { status: 500 });
   }
 }
 
-async function handleFile(
-  rootDir: string,
-  requested: string | null,
-): Promise<Response> {
+async function handleFile(rootDir: string, requested: string | null): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
   if (!isMarkdownPath(requested)) {
-    return Response.json(
-      { error: "Markdown ファイル以外は読み取れません" },
-      { status: 400 },
-    );
+    return Response.json({ error: "Markdown ファイル以外は読み取れません" }, { status: 400 });
   }
 
   try {
@@ -150,14 +137,8 @@ async function handleFile(
       return Response.json({ error: err.message }, { status: 400 });
     }
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return Response.json(
-        { error: `ファイルが見つかりません: ${requested}` },
-        { status: 404 },
-      );
+      return Response.json({ error: `ファイルが見つかりません: ${requested}` }, { status: 404 });
     }
-    return Response.json(
-      { error: (err as Error).message },
-      { status: 500 },
-    );
+    return Response.json({ error: (err as Error).message }, { status: 500 });
   }
 }

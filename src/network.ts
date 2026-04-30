@@ -38,14 +38,9 @@ export function listLanAddresses(): string[] {
  * - host がループバックの場合: そのアドレスのみ
  * - それ以外: そのアドレスのみ
  */
-export function buildAccessibleUrls(
-  host: string,
-  port: number,
-): ResolvedAddress[] {
+export function buildAccessibleUrls(host: string, port: number): ResolvedAddress[] {
   if (isWildcard(host)) {
-    const list: ResolvedAddress[] = [
-      { url: `http://127.0.0.1:${port}`, label: "ローカル" },
-    ];
+    const list: ResolvedAddress[] = [{ url: `http://127.0.0.1:${port}`, label: "ローカル" }];
     for (const ip of listLanAddresses()) {
       list.push({ url: `http://${ip}:${port}`, label: "LAN" });
     }

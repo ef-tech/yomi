@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  MD_EXTENSIONS,
-  isMarkdownExtension,
-} from "../../src/util/markdown-ext.ts";
+import { isMarkdownExtension, MD_EXTENSIONS } from "../../src/util/markdown-ext.ts";
 
 describe("MD_EXTENSIONS", () => {
   test("md / markdown / mdx を含む", () => {

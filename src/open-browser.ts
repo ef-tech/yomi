@@ -30,10 +30,6 @@ function pickCommands(): readonly Command[] {
     case "win32":
       return [["cmd", "/c", "start", '""']];
     default:
-      return [
-        ["xdg-open"],
-        ["gnome-open"],
-        ["wslview"],
-      ];
+      return [["xdg-open"], ["gnome-open"], ["wslview"]];
   }
 }
