@@ -86,6 +86,27 @@ yomi が起動しました
 - 設計の出発点: [`docs/design-yomi-20260430.md`](docs/design-yomi-20260430.md)
 - 変更履歴・設計書からの差分: [`CHANGELOG.md`](CHANGELOG.md)
 
+### テスト
+
+`bun test` で全テストを実行できます。
+
+```bash
+bun test
+```
+
+`tests/` 配下に `*.test.ts` 形式で配置されています。サーバー側の純関数・セキュリティ関連・パーサ・ファイルスキャナをカバーしています（クライアント `app.js` は対象外）。
+
+```bash
+bun test tests/util/        # util ディレクトリだけ
+bun test tests/safepath     # ファイル名で絞り込み
+```
+
+### 型チェック
+
+```bash
+bun run typecheck
+```
+
 ## ライセンス
 
 MIT — 詳細は [`LICENSE`](LICENSE) を参照。
