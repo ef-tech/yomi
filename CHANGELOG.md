@@ -29,6 +29,7 @@ yomi の主要な変更点をこのファイルに記録します。
 
 - GFM ソフト改行を有効化 (`marked` の `breaks: true`、1 行改行 → `<br>`)
 - YAML フロントマター対応: 先頭の `--- ... ---` を本文から切り離し、メタデータボックスとして整形表示。URL はリンク化、ネストは 1 段階までフラット表示
+- 右ペインに表示モード切替を追加: プレビューのみ / 並列 / MD (ソース) のみ。状態は localStorage 永続化
 - localStorage に「開いているディレクトリ」と「最後に表示していたファイル」を保存
 - 対応拡張子を `.md` / `.markdown` / `.mdx` に拡張 (設計書では `.md` のみ言及)
 - デフォルト除外パターンを 8 種から 16 種に拡張: 設計書の `node_modules` `.git` `dist` `build` `.next` `.cache` `coverage` `vendor` に加え、`.svn` `.hg` `.nyc_output` `.bun` `.turbo` `.vercel` `.idea` `.vscode` を追加
