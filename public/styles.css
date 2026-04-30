@@ -287,3 +287,42 @@ body {
   padding: 0.5em;
   text-align: center;
 }
+
+/* ===== YAML フロントマター ===== */
+.markdown-body .frontmatter {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25em 1em;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  margin: 0 0 1.5em;
+  font-size: 0.85em;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.markdown-body .frontmatter dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.markdown-body .frontmatter dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.markdown-body .frontmatter dd.fm-nested {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em 0.75em;
+}
+
+.markdown-body .frontmatter .fm-pair {
+  display: inline-flex;
+  gap: 0.25em;
+}
+
+.markdown-body .frontmatter .fm-k {
+  color: var(--text-muted);
+}
