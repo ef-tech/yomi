@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "bun run bin/yomi.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "files": [
     "bin",
