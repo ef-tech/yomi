@@ -5,6 +5,8 @@ import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
+import { DEFAULT_EXCLUDES } from "../src/util/excludes.ts";
+import { loadYomiignore } from "../src/yomiignore.ts";
 
 async function main() {
   const options = parseOptionsOrExit();
@@ -16,14 +18,20 @@ async function main() {
   const port = options.port !== null ? options.port : await findAvailablePort(options.host);
 
   const rootDir = process.cwd();
+  const userExcludes = await loadYomiignore(rootDir);
+  const excludes = new Set([...DEFAULT_EXCLUDES, ...userExcludes]);
 
   const handle = createServer({
     rootDir,
     hostname: options.host,
     port,
+    excludes,
   });
 
   printStartupBanner({ rootDir, host: options.host, port });
+  if (userExcludes.size > 0) {
+    console.log(`.yomiignore: ${userExcludes.size} 件追加 (${[...userExcludes].join(", ")})`);
+  }
 
   if (options.open) {
     openBrowser(pickBrowserUrl(options.host, port));

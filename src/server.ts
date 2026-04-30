@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { scanMarkdownTree } from "./scanner.ts";
+import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
@@ -26,6 +27,8 @@ export interface ServerConfig {
   hostname: string;
   port: number;
   watch?: boolean;
+  /** 除外するディレクトリ/ファイル名 (省略時は DEFAULT_EXCLUDES) */
+  excludes?: ReadonlySet<string>;
 }
 
 export interface ServerHandle {
@@ -34,6 +37,8 @@ export interface ServerHandle {
 }
 
 export function createServer(config: ServerConfig): ServerHandle {
+  const excludes = config.excludes ?? DEFAULT_EXCLUDES;
+
   const server = Bun.serve({
     hostname: config.hostname,
     port: config.port,
@@ -46,7 +51,7 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/tree") {
-        return handleTree(config.rootDir);
+        return handleTree(config.rootDir, excludes);
       }
 
       if (url.pathname === "/api/file") {
@@ -79,12 +84,16 @@ export function createServer(config: ServerConfig): ServerHandle {
 
   let watcher: WatcherHandle | null = null;
   if (config.watch !== false) {
-    watcher = createWatcher(config.rootDir, (path, kind) => {
-      server.publish(
-        WS_TOPIC,
-        JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
-      );
-    });
+    watcher = createWatcher(
+      config.rootDir,
+      (path, kind) => {
+        server.publish(
+          WS_TOPIC,
+          JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
+        );
+      },
+      { excludes },
+    );
   }
 
   return {
@@ -110,9 +119,9 @@ async function serveAsset(name: string): Promise<Response> {
   return new Response(file, { headers: { "Content-Type": type } });
 }
 
-async function handleTree(rootDir: string): Promise<Response> {
+async function handleTree(rootDir: string, excludes: ReadonlySet<string>): Promise<Response> {
   try {
-    const tree = await scanMarkdownTree(rootDir);
+    const tree = await scanMarkdownTree(rootDir, { excludes });
     return Response.json(tree);
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 500 });

@@ -1,5 +1,5 @@
 import { type FSWatcher, watch } from "node:fs";
-import { isExcludedPath } from "./util/excludes.ts";
+import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
 
@@ -11,9 +11,19 @@ export interface WatcherHandle {
   close(): void;
 }
 
+export interface WatcherOptions {
+  /** 除外するディレクトリ/ファイル名のセット (省略時は DEFAULT_EXCLUDES) */
+  excludes?: ReadonlySet<string>;
+}
+
 const DEBOUNCE_MS = 80;
 
-export function createWatcher(rootDir: string, onChange: ChangeListener): WatcherHandle {
+export function createWatcher(
+  rootDir: string,
+  onChange: ChangeListener,
+  options: WatcherOptions = {},
+): WatcherHandle {
+  const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
 
   const fire = (path: string, kind: ChangeKind) => {
@@ -34,7 +44,7 @@ export function createWatcher(rootDir: string, onChange: ChangeListener): Watche
       if (!filename) return;
       const rel = toPosix(String(filename));
       if (!rel) return;
-      if (isExcludedPath(rel)) return;
+      if (isExcludedPath(rel, excludes)) return;
       if (!isMarkdownExtension(rel)) return;
       fire(rel, eventType === "rename" ? "rename" : "change");
     });
