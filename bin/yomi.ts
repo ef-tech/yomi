@@ -2,6 +2,7 @@
 import { parseArgs, HELP_TEXT } from "../src/cli.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer } from "../src/server.ts";
+import { openBrowser } from "../src/open-browser.ts";
 
 async function main() {
   let options;
@@ -35,6 +36,10 @@ async function main() {
   console.log(`yomi が起動しました: ${url}`);
   console.log(`対象ディレクトリ: ${rootDir}`);
   console.log("停止するには Ctrl+C");
+
+  if (options.open) {
+    openBrowser(url);
+  }
 
   process.on("SIGINT", () => {
     console.log("\n終了します…");
