@@ -12,7 +12,7 @@ function escapeHtml(s: string): string {
 function createMarked(): Marked {
   const marked = new Marked({
     gfm: true,
-    breaks: false,
+    breaks: true,
   });
 
   marked.use({
