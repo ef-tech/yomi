@@ -25,16 +25,26 @@ async function main() {
 
   const rootDir = process.cwd();
 
-  const server = createServer({
+  const handle = createServer({
     rootDir,
     hostname: options.host,
     port,
   });
 
-  const url = `http://${server.hostname}:${server.port}`;
+  const url = `http://${handle.server.hostname}:${handle.server.port}`;
   console.log(`yomi が起動しました: ${url}`);
   console.log(`対象ディレクトリ: ${rootDir}`);
   console.log("停止するには Ctrl+C");
+
+  process.on("SIGINT", () => {
+    console.log("\n終了します…");
+    handle.close();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    handle.close();
+    process.exit(0);
+  });
 }
 
 main().catch((err) => {

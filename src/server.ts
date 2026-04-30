@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { scanMarkdownTree } from "./scanner.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
+import { createWatcher, type WatcherHandle } from "./watcher.ts";
+
+const WS_TOPIC = "yomi:file-events";
 
 const PUBLIC_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -26,14 +29,25 @@ export interface ServerConfig {
   rootDir: string;
   hostname: string;
   port: number;
+  watch?: boolean;
 }
 
-export function createServer(config: ServerConfig) {
-  return Bun.serve({
+export interface ServerHandle {
+  server: ReturnType<typeof Bun.serve>;
+  close(): void;
+}
+
+export function createServer(config: ServerConfig): ServerHandle {
+  const server = Bun.serve({
     hostname: config.hostname,
     port: config.port,
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url);
+
+      if (url.pathname === "/ws") {
+        if (server.upgrade(req)) return;
+        return new Response("Upgrade Required", { status: 426 });
+      }
 
       if (url.pathname === "/api/tree") {
         return handleTree(config.rootDir);
@@ -53,7 +67,37 @@ export function createServer(config: ServerConfig) {
 
       return new Response("Not Found", { status: 404 });
     },
+    websocket: {
+      open(ws) {
+        ws.subscribe(WS_TOPIC);
+        ws.send(JSON.stringify({ type: "hello" }));
+      },
+      close(ws) {
+        ws.unsubscribe(WS_TOPIC);
+      },
+      message() {
+        /* クライアントからのメッセージは現状不要 */
+      },
+    },
   });
+
+  let watcher: WatcherHandle | null = null;
+  if (config.watch !== false) {
+    watcher = createWatcher(config.rootDir, (path, kind) => {
+      server.publish(
+        WS_TOPIC,
+        JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
+      );
+    });
+  }
+
+  return {
+    server,
+    close() {
+      watcher?.close();
+      server.stop();
+    },
+  };
 }
 
 async function serveAsset(name: string): Promise<Response> {

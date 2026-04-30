@@ -39,6 +39,7 @@ const STORAGE_KEY_CURRENT = "yomi:currentPath:v1";
 
 restorePreferences();
 init();
+connectLiveReload();
 
 async function init() {
   try {
@@ -239,4 +240,62 @@ function saveCurrentPath() {
       localStorage.setItem(STORAGE_KEY_CURRENT, state.currentPath);
     }
   } catch {}
+}
+
+/* ===== Live reload via WebSocket ===== */
+
+let wsRetryDelay = 500;
+const WS_RETRY_MAX = 5000;
+
+function connectLiveReload() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}/ws`;
+  const ws = new WebSocket(url);
+
+  ws.addEventListener("open", () => {
+    wsRetryDelay = 500;
+  });
+
+  ws.addEventListener("message", (ev) => {
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    handleLiveEvent(msg);
+  });
+
+  ws.addEventListener("close", () => {
+    setTimeout(connectLiveReload, wsRetryDelay);
+    wsRetryDelay = Math.min(wsRetryDelay * 2, WS_RETRY_MAX);
+  });
+
+  ws.addEventListener("error", () => {
+    ws.close();
+  });
+}
+
+async function handleLiveEvent(msg) {
+  if (!msg || typeof msg !== "object") return;
+
+  if (msg.type === "changed" && msg.path && msg.path === state.currentPath) {
+    try {
+      await selectFile(state.currentPath);
+      setStatus("ok", `${state.currentPath} を再読込`);
+    } catch (err) {
+      setStatus("error", err.message);
+    }
+    return;
+  }
+
+  if (msg.type === "tree" || msg.type === "changed") {
+    try {
+      const tree = await fetchJson("/api/tree");
+      renderTree(tree);
+      if (state.currentPath) highlightSelected(state.currentPath);
+    } catch (err) {
+      setStatus("error", `ツリー再取得失敗: ${err.message}`);
+    }
+  }
 }
