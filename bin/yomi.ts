@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs, HELP_TEXT } from "../src/cli.ts";
 import { findAvailablePort } from "../src/port.ts";
+import { createServer } from "../src/server.ts";
 
 async function main() {
   let options;
@@ -22,22 +23,17 @@ async function main() {
       ? options.port
       : await findAvailablePort(options.host);
 
-  const server = Bun.serve({
+  const rootDir = process.cwd();
+
+  const server = createServer({
+    rootDir,
     hostname: options.host,
     port,
-    fetch(req) {
-      const url = new URL(req.url);
-      if (url.pathname === "/") {
-        return new Response("yomi: hello world", {
-          headers: { "Content-Type": "text/plain; charset=utf-8" },
-        });
-      }
-      return new Response("Not Found", { status: 404 });
-    },
   });
 
   const url = `http://${server.hostname}:${server.port}`;
   console.log(`yomi が起動しました: ${url}`);
+  console.log(`対象ディレクトリ: ${rootDir}`);
   console.log("停止するには Ctrl+C");
 }
 
