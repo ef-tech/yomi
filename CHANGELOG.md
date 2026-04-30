@@ -72,6 +72,16 @@ yomi の主要な変更点をこのファイルに記録します。
 
 設計書記載のモジュール (`server.ts` / `scanner.ts` / `watcher.ts` / `renderer.ts`) はそのまま実装。
 
+### CI / Templates (post-MVP)
+
+- GitHub Actions ワークフロー `.github/workflows/ci.yml` を追加。push to main / PR で `bun install --frozen-lockfile` → `bun run typecheck` → `bun test` を Linux + macOS の matrix で実行。同一ブランチへの連続 push は古いジョブをキャンセル
+- Issue テンプレート 2 種を追加 (YAML form 形式)
+  - `bug_report.yml` — 概要 / 再現手順 / 期待・実際 / yomi・Bun のバージョン / OS / 補足
+  - `feature_request.yml` — 概要 / 動機 / 提案する解決策 / 代替案 / 補足
+  - `config.yml` で blank issue を無効化
+- PR テンプレート (`pull_request_template.md`) を追加。タイトル形式の hint、関連 issue 欄、`bun run typecheck` / `bun test` / 手動スモークのチェックリスト
+- README に CI / License バッジを追加
+
 ### Tests (post-MVP)
 
 `bun test` ベースのユニットテストを 11 ファイルで導入。サーバー側のロジックをカバー（クライアント `app.js` は対象外）。

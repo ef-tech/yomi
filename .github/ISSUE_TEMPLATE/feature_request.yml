@@ -1,0 +1,44 @@
+name: ✨ 機能リクエスト
+description: 新機能や改善の提案
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提案ありがとうございます。「何を」だけでなく「なぜ」も書いていただけると、設計判断の材料になります。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: どんな機能か、1〜2 文で
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 動機 / 解決したい課題
+      description: 現状の困りごと、ユースケース
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案する解決策
+      description: UI / CLI フラグ / 設定など、具体的なイメージ
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 代替案・既に試したこと
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足

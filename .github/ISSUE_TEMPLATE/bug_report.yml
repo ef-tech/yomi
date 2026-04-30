@@ -1,0 +1,81 @@
+name: 🐛 バグ報告
+description: 動作が期待と違う、エラーになる、表示が崩れる など
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ご報告ありがとうございます。再現に必要な情報をなるべく具体的にお願いします。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 何が起きたか、何を期待していたかを 1〜2 文で
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+      description: |
+        例:
+        1. `cd /path/to/docs`
+        2. `yomi` を起動
+        3. ツリーから XX.md をクリック
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した挙動
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の挙動
+      description: エラーログ・スタックトレースがあれば貼り付けてください
+    validations:
+      required: true
+
+  - type: input
+    id: yomi-version
+    attributes:
+      label: yomi のバージョン or commit SHA
+      description: "`bun pm ls -g | grep yomi` または package.json の version"
+    validations:
+      required: false
+
+  - type: input
+    id: bun-version
+    attributes:
+      label: Bun のバージョン
+      description: "`bun --version` の出力"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - その他
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: スクリーンショット、設定ファイル、Markdown サンプルなど
