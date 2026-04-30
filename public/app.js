@@ -412,7 +412,16 @@ async function handleLiveEvent(msg) {
     try {
       const tree = await fetchJson("/api/tree");
       renderTree(tree);
-      if (state.currentPath) highlightSelected(state.currentPath);
+      if (state.currentPath) {
+        if (state.fileButtons.has(state.currentPath)) {
+          highlightSelected(state.currentPath);
+        } else {
+          setStatus(
+            "error",
+            `ファイルが削除されました: ${state.currentPath}`,
+          );
+        }
+      }
     } catch (err) {
       setStatus("error", `ツリー再取得失敗: ${err.message}`);
     }
