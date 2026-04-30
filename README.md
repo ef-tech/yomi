@@ -5,6 +5,11 @@
 
 ローカル Markdown ビューア。カレントディレクトリ配下の `.md` ファイルを再帰的に集めて、2 ペインのブラウザ UI（左：ツリー、右：プレビュー）で読むためのコマンドラインツール。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-preview.png">
+  <img alt="yomi のプレビュー画面" src="docs/screenshots/light-preview.png">
+</picture>
+
 ## 特徴
 
 - `cd <ドキュメント置き場> && yomi` で立ち上がる
@@ -12,6 +17,12 @@
 - ファイル保存で自動リロード（ライブプレビュー）
 - GitHub 風 CSS、システムのダーク/ライト追従
 - 同 LAN 内の別端末からも閲覧可（`--host 127.0.0.1` でローカル限定）
+
+## スクリーンショット
+
+| 並列ビュー (Markdown + プレビュー) | Mermaid 図のインライン描画 (ダーク) |
+|---|---|
+| ![split view](docs/screenshots/light-split.png) | ![mermaid in dark](docs/screenshots/dark-mermaid.png) |
 
 ## 必要環境
 
