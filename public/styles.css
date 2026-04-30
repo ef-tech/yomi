@@ -106,8 +106,11 @@ body {
 }
 
 .content-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
   border-bottom: 1px solid var(--border);
-  padding: 0.5rem 1.5rem;
+  padding: 0.4rem 1.5rem;
   font-size: 0.85rem;
   color: var(--text-muted);
   background: var(--bg-subtle);
@@ -115,15 +118,102 @@ body {
 }
 
 .current-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-.preview {
+/* ===== 表示モードトグル ===== */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.view-toggle-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+}
+
+.view-toggle-btn:first-child {
+  border-left: 0;
+}
+
+.view-toggle-btn:hover {
+  background: var(--bg-emphasis);
+}
+
+.view-toggle-btn[aria-selected="true"] {
+  background: var(--selected-bg);
+  color: var(--selected-text);
+  font-weight: 600;
+}
+
+/* ===== コンテンツ本体: モードでレイアウト切替 ===== */
+.content-body {
   flex: 1;
+  min-height: 0;
+  display: grid;
+  position: relative;
+}
+
+.content-body[data-mode="preview"] {
+  grid-template-columns: 1fr;
+}
+.content-body[data-mode="preview"] .source {
+  display: none;
+}
+.content-body[data-mode="preview"] .preview {
+  max-width: 1024px;
+  margin: 0 auto;
+}
+
+.content-body[data-mode="md"] {
+  grid-template-columns: 1fr;
+}
+.content-body[data-mode="md"] .preview {
+  display: none;
+}
+
+.content-body[data-mode="split"] {
+  grid-template-columns: 1fr 1fr;
+}
+.content-body[data-mode="split"] .source {
+  border-right: 1px solid var(--border);
+}
+
+.preview {
   overflow-y: auto;
   padding: 2rem 2.5rem;
-  max-width: 1024px;
   width: 100%;
+  min-width: 0;
+}
+
+.source {
+  margin: 0;
+  padding: 1.5rem 2rem;
+  overflow: auto;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .placeholder {

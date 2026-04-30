@@ -18,10 +18,39 @@
       <section class="content">
         <div class="content-header">
           <span id="current-path" class="current-path" aria-live="polite"></span>
+          <div class="view-toggle" role="tablist" aria-label="表示モード">
+            <button
+              type="button"
+              class="view-toggle-btn"
+              data-mode="preview"
+              role="tab"
+              aria-selected="true"
+              title="プレビューのみ"
+            >プレビュー</button>
+            <button
+              type="button"
+              class="view-toggle-btn"
+              data-mode="split"
+              role="tab"
+              aria-selected="false"
+              title="Markdown とプレビューを並列表示"
+            >並列</button>
+            <button
+              type="button"
+              class="view-toggle-btn"
+              data-mode="md"
+              role="tab"
+              aria-selected="false"
+              title="Markdown ソースのみ"
+            >MD</button>
+          </div>
         </div>
-        <article id="preview" class="preview markdown-body">
-          <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
-        </article>
+        <div id="content-body" class="content-body" data-mode="preview">
+          <pre id="source" class="source"></pre>
+          <article id="preview" class="preview markdown-body">
+            <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
+          </article>
+        </div>
       </section>
     </main>
     <script type="module" src="/assets/app.js"></script>

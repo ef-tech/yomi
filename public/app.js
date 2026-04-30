@@ -3,9 +3,18 @@ import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.mi
 const els = {
   tree: document.getElementById("tree"),
   preview: document.getElementById("preview"),
+  source: document.getElementById("source"),
+  contentBody: document.getElementById("content-body"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
+  toggleButtons: Array.from(
+    document.querySelectorAll(".view-toggle-btn"),
+  ),
 };
+
+const VIEW_MODES = ["preview", "split", "md"];
+const DEFAULT_VIEW_MODE = "preview";
+const STORAGE_KEY_VIEW = "yomi:viewMode:v1";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 mermaid.initialize({
@@ -32,12 +41,19 @@ const state = {
   openDirs: new Set([""]),
   /** 現在表示中のファイル path */
   currentPath: null,
+  /** 現在のファイル内容 */
+  currentRaw: "",
+  currentHtml: "",
+  /** 表示モード: preview | split | md */
+  viewMode: DEFAULT_VIEW_MODE,
 };
 
 const STORAGE_KEY_OPEN = "yomi:openDirs:v1";
 const STORAGE_KEY_CURRENT = "yomi:currentPath:v1";
 
 restorePreferences();
+applyViewMode(state.viewMode);
+wireViewToggle();
 init();
 connectLiveReload();
 
@@ -151,14 +167,24 @@ function findFirstFile(node) {
 async function selectFile(path) {
   const data = await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
   state.currentPath = data.path;
+  state.currentRaw = data.raw;
+  state.currentHtml = data.html;
   saveCurrentPath();
   els.currentPath.textContent = data.path;
-  els.preview.innerHTML = data.html;
+  renderCurrentFile();
   highlightSelected(data.path);
   expandAncestors(data.path);
-  els.preview.scrollTop = 0;
-  await renderMermaid();
   setStatus("ok", `${data.path} を表示`);
+}
+
+function renderCurrentFile() {
+  els.preview.innerHTML = state.currentHtml;
+  els.source.textContent = state.currentRaw;
+  els.preview.scrollTop = 0;
+  els.source.scrollTop = 0;
+  if (state.viewMode !== "md") {
+    renderMermaid().catch(() => {});
+  }
 }
 
 async function renderMermaid() {
@@ -220,6 +246,8 @@ function restorePreferences() {
     }
     const cur = localStorage.getItem(STORAGE_KEY_CURRENT);
     if (cur) state.currentPath = cur;
+    const view = localStorage.getItem(STORAGE_KEY_VIEW);
+    if (view && VIEW_MODES.includes(view)) state.viewMode = view;
   } catch {
     /* localStorage 不可 */
   }
@@ -240,6 +268,39 @@ function saveCurrentPath() {
       localStorage.setItem(STORAGE_KEY_CURRENT, state.currentPath);
     }
   } catch {}
+}
+
+function saveViewMode() {
+  try {
+    localStorage.setItem(STORAGE_KEY_VIEW, state.viewMode);
+  } catch {}
+}
+
+/* ===== 表示モード切替 ===== */
+
+function wireViewToggle() {
+  for (const btn of els.toggleButtons) {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      if (!mode || !VIEW_MODES.includes(mode)) return;
+      if (state.viewMode === mode) return;
+      applyViewMode(mode);
+      saveViewMode();
+      // プレビュー or 並列に切替時は Mermaid を再描画
+      if (state.currentHtml && mode !== "md") {
+        renderMermaid().catch(() => {});
+      }
+    });
+  }
+}
+
+function applyViewMode(mode) {
+  state.viewMode = mode;
+  els.contentBody.dataset.mode = mode;
+  for (const btn of els.toggleButtons) {
+    const active = btn.dataset.mode === mode;
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
 }
 
 /* ===== Live reload via WebSocket ===== */
