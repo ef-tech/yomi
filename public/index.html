@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>yomi</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 class="brand">yomi</h1>
+      <div class="status" id="status" aria-live="polite"></div>
+    </header>
+    <main class="layout">
+      <aside class="sidebar" aria-label="ファイルツリー">
+        <nav id="tree" class="tree" aria-busy="true">読み込み中…</nav>
+      </aside>
+      <section class="content">
+        <div class="content-header">
+          <span id="current-path" class="current-path" aria-live="polite"></span>
+        </div>
+        <article id="preview" class="preview markdown-body">
+          <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
+        </article>
+      </section>
+    </main>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

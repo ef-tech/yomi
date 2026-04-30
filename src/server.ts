@@ -1,7 +1,26 @@
 import { readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { scanMarkdownTree } from "./scanner.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
+
+const PUBLIC_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "public",
+);
+
+const ASSET_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
 
 export interface ServerConfig {
   rootDir: string;
@@ -25,15 +44,30 @@ export function createServer(config: ServerConfig) {
       }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
-        return new Response(
-          "<!doctype html><title>yomi</title><pre>yomi: hello world\n/api/tree, /api/file?path=... が利用可能です。</pre>",
-          { headers: { "Content-Type": "text/html; charset=utf-8" } },
-        );
+        return serveAsset("index.html");
+      }
+
+      if (url.pathname.startsWith("/assets/")) {
+        return serveAsset(url.pathname.slice("/assets/".length));
       }
 
       return new Response("Not Found", { status: 404 });
     },
   });
+}
+
+async function serveAsset(name: string): Promise<Response> {
+  if (name.includes("..") || name.startsWith("/")) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  const path = join(PUBLIC_DIR, name);
+  const file = Bun.file(path);
+  if (!(await file.exists())) {
+    return new Response("Not Found", { status: 404 });
+  }
+  const ext = name.slice(name.lastIndexOf("."));
+  const type = ASSET_TYPES[ext] ?? "application/octet-stream";
+  return new Response(file, { headers: { "Content-Type": type } });
 }
 
 async function handleTree(rootDir: string): Promise<Response> {
