@@ -9,6 +9,29 @@
   <body>
     <header class="topbar">
       <h1 class="brand">yomi</h1>
+      <div class="theme-toggle" role="group" aria-label="テーマ">
+        <button
+          type="button"
+          class="theme-toggle-btn"
+          data-theme-mode="auto"
+          title="システム設定に追従"
+          aria-pressed="true"
+        >自動</button>
+        <button
+          type="button"
+          class="theme-toggle-btn"
+          data-theme-mode="light"
+          title="ライトテーマ"
+          aria-pressed="false"
+        >ライト</button>
+        <button
+          type="button"
+          class="theme-toggle-btn"
+          data-theme-mode="dark"
+          title="ダークテーマ"
+          aria-pressed="false"
+        >ダーク</button>
+      </div>
       <div class="status" id="status" aria-live="polite"></div>
     </header>
     <main class="layout">

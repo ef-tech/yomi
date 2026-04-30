@@ -10,25 +10,38 @@ const els = {
   toggleButtons: Array.from(
     document.querySelectorAll(".view-toggle-btn"),
   ),
+  themeButtons: Array.from(
+    document.querySelectorAll(".theme-toggle-btn"),
+  ),
 };
 
 const VIEW_MODES = ["preview", "split", "md"];
 const DEFAULT_VIEW_MODE = "preview";
 const STORAGE_KEY_VIEW = "yomi:viewMode:v1";
 
+const THEME_MODES = ["auto", "light", "dark"];
+const DEFAULT_THEME_MODE = "auto";
+const STORAGE_KEY_THEME = "yomi:themeMode:v1";
+
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-  theme: darkQuery.matches ? "dark" : "default",
-});
-darkQuery.addEventListener("change", (e) => {
+
+function effectiveTheme(mode) {
+  if (mode === "light") return "light";
+  if (mode === "dark") return "dark";
+  return darkQuery.matches ? "dark" : "light";
+}
+
+function initMermaid(mode) {
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
-    theme: e.matches ? "dark" : "default",
+    theme: effectiveTheme(mode) === "dark" ? "dark" : "default",
   });
-  // 表示中なら再レンダリングのため再フェッチ
+}
+
+darkQuery.addEventListener("change", () => {
+  if (state.themeMode !== "auto") return;
+  initMermaid(state.themeMode);
   if (state.currentPath) {
     selectFile(state.currentPath).catch(() => {});
   }
@@ -46,6 +59,8 @@ const state = {
   currentHtml: "",
   /** 表示モード: preview | split | md */
   viewMode: DEFAULT_VIEW_MODE,
+  /** テーマモード: auto | light | dark */
+  themeMode: DEFAULT_THEME_MODE,
 };
 
 const STORAGE_KEY_OPEN = "yomi:openDirs:v1";
@@ -53,7 +68,10 @@ const STORAGE_KEY_CURRENT = "yomi:currentPath:v1";
 
 restorePreferences();
 applyViewMode(state.viewMode);
+applyThemeMode(state.themeMode);
+initMermaid(state.themeMode);
 wireViewToggle();
+wireThemeToggle();
 init();
 connectLiveReload();
 
@@ -248,6 +266,8 @@ function restorePreferences() {
     if (cur) state.currentPath = cur;
     const view = localStorage.getItem(STORAGE_KEY_VIEW);
     if (view && VIEW_MODES.includes(view)) state.viewMode = view;
+    const theme = localStorage.getItem(STORAGE_KEY_THEME);
+    if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
   } catch {
     /* localStorage 不可 */
   }
@@ -301,6 +321,44 @@ function applyViewMode(mode) {
     const active = btn.dataset.mode === mode;
     btn.setAttribute("aria-selected", active ? "true" : "false");
   }
+}
+
+/* ===== テーマ切替 ===== */
+
+function wireThemeToggle() {
+  for (const btn of els.themeButtons) {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.themeMode;
+      if (!mode || !THEME_MODES.includes(mode)) return;
+      if (state.themeMode === mode) return;
+      applyThemeMode(mode);
+      saveThemeMode();
+      initMermaid(mode);
+      // Mermaid を新テーマで再描画するために再フェッチ
+      if (state.currentPath && state.viewMode !== "md") {
+        selectFile(state.currentPath).catch(() => {});
+      }
+    });
+  }
+}
+
+function applyThemeMode(mode) {
+  state.themeMode = mode;
+  if (mode === "auto") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", mode);
+  }
+  for (const btn of els.themeButtons) {
+    const active = btn.dataset.themeMode === mode;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function saveThemeMode() {
+  try {
+    localStorage.setItem(STORAGE_KEY_THEME, state.themeMode);
+  } catch {}
 }
 
 /* ===== Live reload via WebSocket ===== */

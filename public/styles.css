@@ -1,4 +1,4 @@
-/* ===== カラートークン (GitHub 風 + システム追従) ===== */
+/* ===== カラートークン (GitHub 風 + システム追従/手動切替) ===== */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -28,6 +28,37 @@
     --code-bg: #161b22;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
+}
+
+/* 明示テーマ指定 (システム設定より優先) */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-subtle: #f6f8fa;
+  --bg-emphasis: #eaeef2;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --link: #0969da;
+  --selected-bg: #ddf4ff;
+  --selected-text: #0969da;
+  --code-bg: #f6f8fa;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --bg-subtle: #161b22;
+  --bg-emphasis: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #9198a1;
+  --link: #2f81f7;
+  --selected-bg: #1f2d3d;
+  --selected-text: #79c0ff;
+  --code-bg: #161b22;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 * {
@@ -74,6 +105,41 @@ body {
   margin-left: auto;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* ===== テーマトグル ===== */
+.theme-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.theme-toggle-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+}
+
+.theme-toggle-btn:first-child {
+  border-left: 0;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--bg-emphasis);
+}
+
+.theme-toggle-btn[aria-pressed="true"] {
+  background: var(--selected-bg);
+  color: var(--selected-text);
+  font-weight: 600;
 }
 
 .status.is-error { color: #cf222e; }
@@ -177,8 +243,9 @@ body {
   display: none;
 }
 .content-body[data-mode="preview"] .preview {
-  max-width: 1024px;
-  margin: 0 auto;
+  /* 全幅維持 (スクロールバーは画面右端) + 内容を中央寄せ */
+  padding-left: max(2.5rem, calc((100% - 1024px) / 2));
+  padding-right: max(2.5rem, calc((100% - 1024px) / 2));
 }
 
 .content-body[data-mode="md"] {
