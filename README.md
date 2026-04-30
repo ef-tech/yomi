@@ -83,7 +83,8 @@ yomi が起動しました
 
 ## 開発
 
-設計の詳細は [`docs/design-yomi-20260430.md`](docs/design-yomi-20260430.md) を参照。
+- 設計の出発点: [`docs/design-yomi-20260430.md`](docs/design-yomi-20260430.md)
+- 変更履歴・設計書からの差分: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## ライセンス
 
