@@ -7,7 +7,7 @@ export interface CliOptions {
 
 export const DEFAULT_OPTIONS: CliOptions = {
   port: null,
-  host: "127.0.0.1",
+  host: "0.0.0.0",
   open: true,
   help: false,
 };
@@ -20,12 +20,14 @@ export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
 オプション:
   --port <n>      ポートを指定（デフォルト: 3939 から自動探索）
   --no-open       ブラウザを自動で開かない
-  --host <addr>   バインドアドレス（デフォルト: 127.0.0.1）
+  --host <addr>   バインドアドレス（デフォルト: 0.0.0.0、同 LAN から閲覧可）
+                  ローカル限定にするには --host 127.0.0.1
   --help, -h      このヘルプを表示
 
 例:
   cd /path/to/docs && yomi
   yomi --port 8080 --no-open
+  yomi --host 127.0.0.1            # 自端末からのみ
 `;
 
 export function parseArgs(argv: readonly string[]): CliOptions {
