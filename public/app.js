@@ -1,9 +1,29 @@
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
 const els = {
   tree: document.getElementById("tree"),
   preview: document.getElementById("preview"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
 };
+
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: "strict",
+  theme: darkQuery.matches ? "dark" : "default",
+});
+darkQuery.addEventListener("change", (e) => {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: e.matches ? "dark" : "default",
+  });
+  // 表示中なら再レンダリングのため再フェッチ
+  if (state.currentPath) {
+    selectFile(state.currentPath).catch(() => {});
+  }
+});
 
 const state = {
   /** path -> tree-item ボタン要素 */
@@ -136,7 +156,19 @@ async function selectFile(path) {
   highlightSelected(data.path);
   expandAncestors(data.path);
   els.preview.scrollTop = 0;
+  await renderMermaid();
   setStatus("ok", `${data.path} を表示`);
+}
+
+async function renderMermaid() {
+  const nodes = els.preview.querySelectorAll("pre.mermaid");
+  if (nodes.length === 0) return;
+  try {
+    await mermaid.run({ nodes });
+  } catch (err) {
+    console.error("Mermaid render error:", err);
+    setStatus("error", `Mermaid 描画エラー: ${err.message ?? err}`);
+  }
 }
 
 function highlightSelected(path) {
