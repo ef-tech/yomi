@@ -11,6 +11,7 @@ const els = {
   currentPath: document.getElementById("current-path"),
   dirtyIndicator: document.getElementById("dirty-indicator"),
   editBtn: document.getElementById("edit-btn"),
+  discardBtn: document.getElementById("discard-btn"),
   openEditorBtn: document.getElementById("open-editor-btn"),
   conflictBanner: document.getElementById("conflict-banner"),
   conflictTakeServer: document.getElementById("conflict-take-server"),
@@ -359,11 +360,16 @@ function wireEditActions() {
   enableEditActions(false);
   els.editBtn.addEventListener("click", () => {
     if (state.editing) {
-      if (!confirmLeaveEdit()) return;
-      exitEditMode();
+      // 編集モード中の「完了」: 未保存があれば保存 → 成功で閉じる、失敗なら編集モード継続
+      handleFinishEdit().catch((err) => setStatus("error", err.message));
     } else {
       enterEditMode();
     }
+  });
+
+  els.discardBtn.addEventListener("click", () => {
+    if (!confirmDiscard()) return;
+    exitEditMode();
   });
 
   els.openEditorBtn.addEventListener("click", () => {
@@ -381,6 +387,21 @@ function wireEditActions() {
   els.conflictDismiss.addEventListener("click", () => hideConflict());
 }
 
+async function handleFinishEdit() {
+  if (!state.editing) return;
+  if (!state.dirty) {
+    exitEditMode();
+    return;
+  }
+  const ok = await saveEdit();
+  if (ok) exitEditMode();
+}
+
+function confirmDiscard() {
+  if (!state.dirty) return true;
+  return window.confirm("未保存の変更を破棄して編集を終了しますか?");
+}
+
 function enableEditActions(enabled) {
   els.editBtn.disabled = !enabled;
   els.openEditorBtn.disabled = !enabled;
@@ -393,7 +414,9 @@ function enterEditMode() {
   els.editor.value = state.currentRaw;
   els.editor.hidden = false;
   els.editBtn.setAttribute("aria-pressed", "true");
-  els.editBtn.textContent = "完了";
+  els.editBtn.textContent = "保存して閉じる";
+  els.editBtn.title = "保存して編集モードを終了 (Ctrl/Cmd+S でも保存可)";
+  els.discardBtn.hidden = false;
   setDirty(false);
   setTimeout(() => els.editor.focus(), 0);
 }
@@ -404,6 +427,8 @@ function exitEditMode() {
   els.editor.hidden = true;
   els.editBtn.setAttribute("aria-pressed", "false");
   els.editBtn.textContent = "編集";
+  els.editBtn.title = "ブラウザ内で編集する";
+  els.discardBtn.hidden = true;
   setDirty(false);
 }
 
@@ -418,7 +443,11 @@ function confirmLeaveEdit() {
 }
 
 async function saveEdit({ force = false } = {}) {
-  if (!state.editing || !state.currentPath) return;
+  if (!state.editing) return false;
+  if (!state.currentPath) {
+    setStatus("error", "保存失敗: 表示中のファイルがありません");
+    return false;
+  }
   const body = els.editor.value;
   const payload = { path: state.currentPath, body };
   if (!force && state.currentSha) payload.baseSha = state.currentSha;
@@ -440,6 +469,7 @@ async function saveEdit({ force = false } = {}) {
     }
     els.source.textContent = data.raw;
     setStatus("ok", `${state.currentPath} を保存`);
+    return true;
   } catch (err) {
     if (err.status === 409 && err.payload) {
       showConflict(err.payload);
@@ -447,6 +477,7 @@ async function saveEdit({ force = false } = {}) {
     } else {
       setStatus("error", `保存失敗: ${err.message}`);
     }
+    return false;
   }
 }
 
@@ -508,15 +539,21 @@ function forceOverwrite() {
 /* ===== キーボード ===== */
 
 function wireKeyboard() {
-  document.addEventListener("keydown", (ev) => {
-    // Ctrl/Cmd+S で保存
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") {
-      if (state.editing) {
-        ev.preventDefault();
-        saveEdit().catch((err) => setStatus("error", err.message));
-      }
-    }
-  });
+  // Ctrl/Cmd+S で保存。capture phase + ev.code で IME / Caps Lock / 拡張機能干渉に強くする。
+  // Shift などのモディファイアが余計に付いていても受ける (Cmd+Shift+S は除外で、Ctrl+S/Cmd+S のみ)。
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      const isSaveKey = ev.code === "KeyS" || ev.key === "s" || ev.key === "S";
+      const isModifier = ev.metaKey || ev.ctrlKey;
+      if (!isModifier || !isSaveKey || ev.altKey || ev.shiftKey) return;
+      if (!state.editing) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      saveEdit().catch((err) => setStatus("error", `保存失敗: ${err.message}`));
+    },
+    { capture: true },
+  );
 
   // textarea で Tab を押したら 2 スペース挿入
   els.editor.addEventListener("keydown", (ev) => {

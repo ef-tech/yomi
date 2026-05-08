@@ -10,9 +10,15 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Changed
+
+- 編集モードの「完了」ボタンを「**保存して閉じる**」に変更。クリックで未保存があれば自動保存 → 成功で編集モード解除、失敗時はステータス表示 + 編集モード継続。保存を忘れる事故と「Ctrl/Cmd+S を知らないと保存できない」UX 問題を解消。
+- 編集モード中に「**破棄**」ボタンを追加。未保存の変更を捨てて編集モードから抜ける明示的な経路を提供。
+- `Ctrl/Cmd+S` のキーボードハンドラを capture phase + `ev.code === "KeyS"` 判定に変更。IME / Caps Lock / ブラウザ拡張機能による干渉に強くした。
+
 ### Added
 
-- **Markdown 編集機能 (Issue #5)**: 右ペインに「編集」ボタンを追加し、`<textarea>` でその場編集 → `Ctrl/Cmd+S` で保存できるようにした。
+- **Markdown 編集機能 (Issue #5)**: 右ペインに「編集」ボタンを追加し、`<textarea>` でその場編集 → `Ctrl/Cmd+S` または「保存して閉じる」で保存できるようにした。
   - `POST /api/file` (新規): body 上限 10MB、`.md` / `.markdown` / `.mdx` のみ受理、`resolveSafe` で path 検証
   - `POST /api/open-editor` (新規): `YOMI_EDITOR` > `EDITOR` > `VISUAL` > `code` の優先順で外部エディタを起動
   - **CSRF 防御**: mutating エンドポイントは `Origin` ヘッダを検証し、サーバ自身と同じオリジン以外からの POST を 403 で拒否
