@@ -1,7 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openEditor } from "./open-editor.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
@@ -69,12 +68,6 @@ export function createServer(config: ServerConfig): ServerHandle {
           return handleFileWrite(config.rootDir, req, saveMark);
         }
         return new Response("Method Not Allowed", { status: 405 });
-      }
-
-      if (url.pathname === "/api/open-editor") {
-        if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
-        if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
-        return handleOpenEditor(config.rootDir, req);
       }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -294,39 +287,4 @@ async function handleFileWrite(
 
   const html = await renderMarkdown(body);
   return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
-}
-
-interface OpenEditorBody {
-  path?: unknown;
-}
-
-async function handleOpenEditor(rootDir: string, req: Request): Promise<Response> {
-  let parsed: OpenEditorBody;
-  try {
-    parsed = (await req.json()) as OpenEditorBody;
-  } catch {
-    return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
-  }
-  const { path } = parsed;
-  if (typeof path !== "string" || path.length === 0) {
-    return Response.json({ error: "path が必要です" }, { status: 400 });
-  }
-  if (!isMarkdownPath(path)) {
-    return Response.json({ error: "Markdown ファイル以外は開けません" }, { status: 400 });
-  }
-  let safe: { rel: string; abs: string };
-  try {
-    safe = await resolveSafe(rootDir, path);
-  } catch (err) {
-    if (err instanceof UnsafePathError) {
-      return Response.json({ error: err.message }, { status: 400 });
-    }
-    throw err;
-  }
-  try {
-    openEditor(safe.abs);
-  } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 500 });
-  }
-  return new Response(null, { status: 204 });
 }

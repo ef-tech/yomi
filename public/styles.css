@@ -209,8 +209,7 @@ body {
 }
 
 .edit-btn,
-.discard-btn,
-.open-editor-btn {
+.discard-btn {
   appearance: none;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -223,8 +222,7 @@ body {
 }
 
 .edit-btn:hover,
-.discard-btn:hover,
-.open-editor-btn:hover {
+.discard-btn:hover {
   background: var(--bg-emphasis);
 }
 

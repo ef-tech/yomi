@@ -12,7 +12,6 @@ const els = {
   dirtyIndicator: document.getElementById("dirty-indicator"),
   editBtn: document.getElementById("edit-btn"),
   discardBtn: document.getElementById("discard-btn"),
-  openEditorBtn: document.getElementById("open-editor-btn"),
   conflictBanner: document.getElementById("conflict-banner"),
   conflictTakeServer: document.getElementById("conflict-take-server"),
   conflictOverwrite: document.getElementById("conflict-overwrite"),
@@ -372,10 +371,6 @@ function wireEditActions() {
     exitEditMode();
   });
 
-  els.openEditorBtn.addEventListener("click", () => {
-    requestOpenEditor().catch((err) => setStatus("error", err.message));
-  });
-
   els.editor.addEventListener("input", () => {
     const dirty = els.editor.value !== state.currentRaw;
     setDirty(dirty);
@@ -404,7 +399,6 @@ function confirmDiscard() {
 
 function enableEditActions(enabled) {
   els.editBtn.disabled = !enabled;
-  els.openEditorBtn.disabled = !enabled;
 }
 
 function enterEditMode() {
@@ -479,27 +473,6 @@ async function saveEdit({ force = false } = {}) {
     }
     return false;
   }
-}
-
-async function requestOpenEditor() {
-  if (!state.currentPath) return;
-  const res = await fetch("/api/open-editor", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: state.currentPath }),
-  });
-  if (res.status === 204) {
-    setStatus("ok", "外部エディタで開きました");
-    return;
-  }
-  let msg = `HTTP ${res.status}`;
-  try {
-    const data = await res.json();
-    if (data?.error) msg = data.error;
-  } catch {
-    /* ignore */
-  }
-  throw new Error(msg);
 }
 
 /* ===== 競合バナー ===== */

@@ -236,64 +236,9 @@ describe("server", () => {
     });
   });
 
-  describe("POST /api/open-editor", () => {
-    test("Origin が異なれば 403", async () => {
-      const res = await fetch(`${ctx.url}/api/open-editor`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "http://attacker.example",
-        },
-        body: JSON.stringify({ path: "hello.md" }),
-      });
-      expect(res.status).toBe(403);
-    });
-
-    test("不正な拡張子なら 400", async () => {
-      const res = await fetch(`${ctx.url}/api/open-editor`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "danger.txt" }),
-      });
-      expect(res.status).toBe(400);
-    });
-
-    test("パストラバーサルは 400", async () => {
-      const res = await fetch(`${ctx.url}/api/open-editor`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "../escape.md" }),
-      });
-      expect(res.status).toBe(400);
-    });
-
-    test("正常系は 204 (実プロセス起動結果は detached で気にしない)", async () => {
-      // YOMI_EDITOR を絶対に存在しないコマンドにしておけば
-      // spawn 自体は走るが detached + on('error') で握り潰されるので 204 が返る
-      const prev = process.env.YOMI_EDITOR;
-      process.env.YOMI_EDITOR = "/bin/true";
-      try {
-        const res = await fetch(`${ctx.url}/api/open-editor`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: "hello.md" }),
-        });
-        expect(res.status).toBe(204);
-      } finally {
-        if (prev === undefined) delete process.env.YOMI_EDITOR;
-        else process.env.YOMI_EDITOR = prev;
-      }
-    });
-  });
-
   describe("HTTP method", () => {
     test("PUT /api/file は 405", async () => {
       const res = await fetch(`${ctx.url}/api/file`, { method: "PUT" });
-      expect(res.status).toBe(405);
-    });
-
-    test("GET /api/open-editor は 405", async () => {
-      const res = await fetch(`${ctx.url}/api/open-editor`);
       expect(res.status).toBe(405);
     });
   });
