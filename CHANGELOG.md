@@ -10,21 +10,25 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
-### Changed
+## [0.2.0] - 2026-05-08
 
-- 編集モードの「完了」ボタンを「**保存して閉じる**」に変更。クリックで未保存があれば自動保存 → 成功で編集モード解除、失敗時はステータス表示 + 編集モード継続。保存を忘れる事故と「Ctrl/Cmd+S を知らないと保存できない」UX 問題を解消。
-- 編集モード中に「**破棄**」ボタンを追加。未保存の変更を捨てて編集モードから抜ける明示的な経路を提供。
-- `Ctrl/Cmd+S` のキーボードハンドラを capture phase + `ev.code === "KeyS"` 判定に変更。IME / Caps Lock / ブラウザ拡張機能による干渉に強くした。
+ブラウザ内での Markdown 編集に対応。これまで読み取り専用だった yomi が、軽い文言修正なら yomi 単体で完結するようになる。
 
 ### Added
 
-- **Markdown 編集機能 (Issue #5)**: 右ペインに「編集」ボタンを追加し、`<textarea>` でその場編集 → `Ctrl/Cmd+S` または「保存して閉じる」で保存できるようにした。
-  - `POST /api/file` (新規): body 上限 10MB、`.md` / `.markdown` / `.mdx` のみ受理、`resolveSafe` で path 検証
-  - **CSRF 防御**: `POST /api/file` は `Origin` ヘッダを検証し、サーバ自身と同じオリジン以外からの POST を 403 で拒否
-  - **同時編集 (Lost Update) 検知**: `GET /api/file` のレスポンスに sha256 を含め、`POST /api/file` の `baseSha` と現状ファイルが一致しない場合は 409 + 現状内容を返却。クライアントは「サーバ内容を取り込む / 強制上書き / 閉じる」を選択
-  - **Watcher フィードバックループ防止**: `src/save-mark.ts` の `SaveMark` (LRU 64 entries, content-hash ベース) で「自分が書き込んだ直後の sha」を記録、watcher イベントの現状 sha と一致するイベントは publish スキップ
-  - 未保存状態のトップバー表示と `beforeunload` 警告
-  - `Tab` キーで 2 スペース挿入
+- **ブラウザ内 Markdown 編集 (Issue #5)**: 右ペインの「編集」ボタンで `<textarea>` に切り替わり、Ctrl/Cmd+S または「保存して閉じる」で保存できる。「破棄」ボタンで未保存の変更を捨てて終了。未保存状態のトップバー表示 + タブ閉じ警告つき。
+- **同時編集 (Lost Update) 検知**: 編集中に他プロセスが同じファイルを書き換えた場合、保存時に競合バナー (「サーバ内容を取り込む / 強制上書き / 閉じる」3 択) を表示。
+- **CSRF 防御**: 書き込みエンドポイントは `Origin` ヘッダを検証し、yomi 自身と同じオリジン以外からの POST を 403 で拒否。LAN 越しの正規利用 (例: Ubuntu 起動 + Mac 編集) は許可される。
+
+### Changed
+
+- `GET /api/file` のレスポンスに `sha` (sha256) を含めるようになった。クライアント側は次の保存時にこれを `baseSha` として送信し、サーバが現状ファイルと比較して 409 を返せるようにする。
+
+### Internal
+
+- 新エンドポイント `POST /api/file` (body 上限 10MB、`.md` / `.markdown` / `.mdx` のみ受理、`resolveSafe` で path 検証)
+- 新モジュール `src/save-mark.ts` (LRU 64 entries, content-hash ベース) と watcher 統合: 自分で書き込んだ直後の sha を記録し、watcher イベントの sha と一致するものは publish スキップ。これにより保存→ライブリロードのフィードバックループを防ぐ。
+- `Ctrl/Cmd+S` のキーボードハンドラを capture phase + `ev.code === "KeyS"` 判定に補強 (IME / Caps Lock / ブラウザ拡張機能の干渉に対する頑健化)。
 
 ### Tests
 
