@@ -5,9 +5,17 @@ const els = {
   tree: document.getElementById("tree"),
   preview: document.getElementById("preview"),
   source: document.getElementById("source"),
+  editor: document.getElementById("editor"),
   contentBody: document.getElementById("content-body"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
+  dirtyIndicator: document.getElementById("dirty-indicator"),
+  editBtn: document.getElementById("edit-btn"),
+  openEditorBtn: document.getElementById("open-editor-btn"),
+  conflictBanner: document.getElementById("conflict-banner"),
+  conflictTakeServer: document.getElementById("conflict-take-server"),
+  conflictOverwrite: document.getElementById("conflict-overwrite"),
+  conflictDismiss: document.getElementById("conflict-dismiss"),
   toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
   themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
 };
@@ -37,8 +45,6 @@ function initMermaid(mode) {
 darkQuery.addEventListener("change", () => {
   if (state.themeMode !== "auto") return;
   initMermaid(state.themeMode);
-  // テーマだけ変わってもサーバー側の HTML は同じなので、再フェッチせず
-  // キャッシュから innerHTML を再設定して Mermaid を新テーマで描き直す
   if (state.currentHtml && state.viewMode !== "md") {
     renderCurrentFile();
   }
@@ -56,10 +62,16 @@ const state = {
   /** 現在のファイル内容 */
   currentRaw: "",
   currentHtml: "",
+  /** 直近 GET / POST 時のサーバ側 sha (Lost Update 検知のベース) */
+  currentSha: null,
   /** 表示モード: preview | split | md */
   viewMode: DEFAULT_VIEW_MODE,
   /** テーマモード: auto | light | dark */
   themeMode: DEFAULT_THEME_MODE,
+  /** 編集モード中かどうか */
+  editing: false,
+  /** 編集中で未保存の差分があるかどうか */
+  dirty: false,
 };
 
 restorePreferences();
@@ -68,6 +80,9 @@ applyThemeMode(state.themeMode);
 initMermaid(state.themeMode);
 wireViewToggle();
 wireThemeToggle();
+wireEditActions();
+wireKeyboard();
+wireBeforeUnload();
 init();
 connectLiveReload();
 
@@ -91,11 +106,14 @@ async function init() {
   }
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error ?? `HTTP ${res.status}`);
+    const err = new Error(data.error ?? `HTTP ${res.status}`);
+    err.status = res.status;
+    err.payload = data;
+    throw err;
   }
   return data;
 }
@@ -150,6 +168,7 @@ function renderNode(node) {
   } else {
     state.fileButtons.set(node.path, button);
     button.addEventListener("click", () => {
+      if (!confirmLeaveEdit()) return;
       selectFile(node.path).catch((err) => {
         setStatus("error", err.message);
       });
@@ -185,12 +204,19 @@ async function selectFile(path) {
   state.currentPath = data.path;
   state.currentRaw = data.raw;
   state.currentHtml = data.html;
+  state.currentSha = data.sha ?? null;
   saveCurrentPath();
   els.currentPath.textContent = data.path;
+  hideConflict();
+  if (state.editing) {
+    // selectFile で別ファイルに切替 = 編集解除
+    exitEditMode();
+  }
   renderCurrentFile();
   highlightSelected(data.path);
   expandAncestors(data.path);
   setStatus("ok", `${data.path} を表示`);
+  enableEditActions(true);
 }
 
 function renderCurrentFile() {
@@ -276,7 +302,6 @@ function wireViewToggle() {
       if (state.viewMode === mode) return;
       applyViewMode(mode);
       saveViewMode();
-      // プレビュー or 並列に切替時は Mermaid を再描画
       if (state.currentHtml && mode !== "md") {
         renderMermaid().catch(() => {});
       }
@@ -304,8 +329,6 @@ function wireThemeToggle() {
       applyThemeMode(mode);
       saveThemeMode();
       initMermaid(mode);
-      // テーマだけ変わってもサーバー HTML は同じ。キャッシュから再描画して
-      // Mermaid を新テーマで描き直す
       if (state.currentHtml && state.viewMode !== "md") {
         renderCurrentFile();
       }
@@ -328,6 +351,196 @@ function applyThemeMode(mode) {
 
 function saveThemeMode() {
   prefs.themeMode.save(state.themeMode);
+}
+
+/* ===== 編集モード ===== */
+
+function wireEditActions() {
+  enableEditActions(false);
+  els.editBtn.addEventListener("click", () => {
+    if (state.editing) {
+      if (!confirmLeaveEdit()) return;
+      exitEditMode();
+    } else {
+      enterEditMode();
+    }
+  });
+
+  els.openEditorBtn.addEventListener("click", () => {
+    requestOpenEditor().catch((err) => setStatus("error", err.message));
+  });
+
+  els.editor.addEventListener("input", () => {
+    const dirty = els.editor.value !== state.currentRaw;
+    setDirty(dirty);
+  });
+
+  // 競合バナー
+  els.conflictTakeServer.addEventListener("click", () => takeServerVersion());
+  els.conflictOverwrite.addEventListener("click", () => forceOverwrite());
+  els.conflictDismiss.addEventListener("click", () => hideConflict());
+}
+
+function enableEditActions(enabled) {
+  els.editBtn.disabled = !enabled;
+  els.openEditorBtn.disabled = !enabled;
+}
+
+function enterEditMode() {
+  if (!state.currentPath) return;
+  state.editing = true;
+  els.contentBody.classList.add("is-editing");
+  els.editor.value = state.currentRaw;
+  els.editor.hidden = false;
+  els.editBtn.setAttribute("aria-pressed", "true");
+  els.editBtn.textContent = "完了";
+  setDirty(false);
+  setTimeout(() => els.editor.focus(), 0);
+}
+
+function exitEditMode() {
+  state.editing = false;
+  els.contentBody.classList.remove("is-editing");
+  els.editor.hidden = true;
+  els.editBtn.setAttribute("aria-pressed", "false");
+  els.editBtn.textContent = "編集";
+  setDirty(false);
+}
+
+function setDirty(dirty) {
+  state.dirty = dirty;
+  els.dirtyIndicator.hidden = !dirty;
+}
+
+function confirmLeaveEdit() {
+  if (!state.editing || !state.dirty) return true;
+  return window.confirm("未保存の変更があります。破棄して続行しますか?");
+}
+
+async function saveEdit({ force = false } = {}) {
+  if (!state.editing || !state.currentPath) return;
+  const body = els.editor.value;
+  const payload = { path: state.currentPath, body };
+  if (!force && state.currentSha) payload.baseSha = state.currentSha;
+
+  try {
+    const data = await fetchJson("/api/file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    state.currentRaw = data.raw;
+    state.currentHtml = data.html;
+    state.currentSha = data.sha;
+    setDirty(false);
+    hideConflict();
+    if (state.viewMode !== "md") {
+      els.preview.innerHTML = data.html;
+      renderMermaid().catch(() => {});
+    }
+    els.source.textContent = data.raw;
+    setStatus("ok", `${state.currentPath} を保存`);
+  } catch (err) {
+    if (err.status === 409 && err.payload) {
+      showConflict(err.payload);
+      setStatus("error", "競合: ファイルが他で更新されています");
+    } else {
+      setStatus("error", `保存失敗: ${err.message}`);
+    }
+  }
+}
+
+async function requestOpenEditor() {
+  if (!state.currentPath) return;
+  const res = await fetch("/api/open-editor", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: state.currentPath }),
+  });
+  if (res.status === 204) {
+    setStatus("ok", "外部エディタで開きました");
+    return;
+  }
+  let msg = `HTTP ${res.status}`;
+  try {
+    const data = await res.json();
+    if (data?.error) msg = data.error;
+  } catch {
+    /* ignore */
+  }
+  throw new Error(msg);
+}
+
+/* ===== 競合バナー ===== */
+
+let conflictServerSnapshot = null;
+
+function showConflict(payload) {
+  conflictServerSnapshot = payload;
+  els.conflictBanner.hidden = false;
+}
+
+function hideConflict() {
+  conflictServerSnapshot = null;
+  els.conflictBanner.hidden = true;
+}
+
+function takeServerVersion() {
+  if (!conflictServerSnapshot) return;
+  const snap = conflictServerSnapshot;
+  state.currentRaw = snap.raw ?? "";
+  state.currentHtml = snap.html ?? "";
+  state.currentSha = snap.sha ?? null;
+  els.editor.value = state.currentRaw;
+  setDirty(false);
+  els.preview.innerHTML = state.currentHtml;
+  els.source.textContent = state.currentRaw;
+  if (state.viewMode !== "md") renderMermaid().catch(() => {});
+  hideConflict();
+  setStatus("ok", "サーバ側の内容を取り込みました");
+}
+
+function forceOverwrite() {
+  hideConflict();
+  saveEdit({ force: true });
+}
+
+/* ===== キーボード ===== */
+
+function wireKeyboard() {
+  document.addEventListener("keydown", (ev) => {
+    // Ctrl/Cmd+S で保存
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") {
+      if (state.editing) {
+        ev.preventDefault();
+        saveEdit().catch((err) => setStatus("error", err.message));
+      }
+    }
+  });
+
+  // textarea で Tab を押したら 2 スペース挿入
+  els.editor.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Tab") return;
+    ev.preventDefault();
+    const ta = ev.currentTarget;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    ta.value = `${before}  ${after}`;
+    ta.selectionStart = ta.selectionEnd = start + 2;
+    // input イベントは自動発火しないので明示
+    ta.dispatchEvent(new Event("input"));
+  });
+}
+
+function wireBeforeUnload() {
+  window.addEventListener("beforeunload", (ev) => {
+    if (state.editing && state.dirty) {
+      ev.preventDefault();
+      ev.returnValue = "";
+    }
+  });
 }
 
 /* ===== Live reload via WebSocket ===== */
@@ -368,6 +581,18 @@ async function handleLiveEvent(msg) {
   if (!msg || typeof msg !== "object") return;
 
   if (msg.type === "changed" && msg.path && msg.path === state.currentPath) {
+    if (state.editing) {
+      // 編集中にライブリロードが来た = 外部で書き換えられた可能性。
+      // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
+      try {
+        const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
+        showConflict(latest);
+        setStatus("error", "ファイルが他で更新されています");
+      } catch (err) {
+        setStatus("error", err.message);
+      }
+      return;
+    }
     try {
       await selectFile(state.currentPath);
       setStatus("ok", `${state.currentPath} を再読込`);

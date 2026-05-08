@@ -10,6 +10,24 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added
+
+- **Markdown 編集機能 (Issue #5)**: 右ペインに「編集」ボタンを追加し、`<textarea>` でその場編集 → `Ctrl/Cmd+S` で保存できるようにした。
+  - `POST /api/file` (新規): body 上限 10MB、`.md` / `.markdown` / `.mdx` のみ受理、`resolveSafe` で path 検証
+  - `POST /api/open-editor` (新規): `YOMI_EDITOR` > `EDITOR` > `VISUAL` > `code` の優先順で外部エディタを起動
+  - **CSRF 防御**: mutating エンドポイントは `Origin` ヘッダを検証し、サーバ自身と同じオリジン以外からの POST を 403 で拒否
+  - **同時編集 (Lost Update) 検知**: `GET /api/file` のレスポンスに sha256 を含め、`POST /api/file` の `baseSha` と現状ファイルが一致しない場合は 409 + 現状内容を返却。クライアントは「サーバ内容を取り込む / 強制上書き / 閉じる」を選択
+  - **Watcher フィードバックループ防止**: `src/save-mark.ts` の `SaveMark` (LRU 64 entries, content-hash ベース) で「自分が書き込んだ直後の sha」を記録、watcher イベントの現状 sha と一致するイベントは publish スキップ
+  - 未保存状態のトップバー表示と `beforeunload` 警告
+  - `Tab` キーで 2 スペース挿入
+
+### Tests
+
+- `tests/save-mark.test.ts` (新規, 11 cases)
+- `tests/watcher.test.ts` (新規, 5 cases)
+- `tests/open-editor.test.ts` (新規, 13 cases)
+- `tests/server.test.ts` (新規, 27 cases): GET /api/file の sha 返却、POST /api/file の Origin / safepath / 拡張子 / body サイズ / baseSha 検証 / 405、POST /api/open-editor の Origin / safepath / 拡張子 / 正常系
+
 ## [0.1.0] - 2026-04-30
 
 最初の公式リリース。設計書に沿った機能一式 + 後続の追加機能 (テーマ手動切替、表示モード切替、YAML フロントマター対応、ファイル削除通知、GFM ソフト改行、`.yomiignore` 等) を含む。
