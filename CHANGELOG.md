@@ -10,6 +10,32 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-08
+
+ブラウザ内での Markdown 編集に対応。これまで読み取り専用だった yomi が、軽い文言修正なら yomi 単体で完結するようになる。
+
+### Added
+
+- **ブラウザ内 Markdown 編集 (Issue #5)**: 右ペインの「編集」ボタンで `<textarea>` に切り替わり、Ctrl/Cmd+S または「保存して閉じる」で保存できる。「破棄」ボタンで未保存の変更を捨てて終了。未保存状態のトップバー表示 + タブ閉じ警告つき。
+- **同時編集 (Lost Update) 検知**: 編集中に他プロセスが同じファイルを書き換えた場合、保存時に競合バナー (「サーバ内容を取り込む / 強制上書き / 閉じる」3 択) を表示。
+- **CSRF 防御**: 書き込みエンドポイントは `Origin` ヘッダを検証し、yomi 自身と同じオリジン以外からの POST を 403 で拒否。LAN 越しの正規利用 (例: Ubuntu 起動 + Mac 編集) は許可される。
+
+### Changed
+
+- `GET /api/file` のレスポンスに `sha` (sha256) を含めるようになった。クライアント側は次の保存時にこれを `baseSha` として送信し、サーバが現状ファイルと比較して 409 を返せるようにする。
+
+### Internal
+
+- 新エンドポイント `POST /api/file` (body 上限 10MB、`.md` / `.markdown` / `.mdx` のみ受理、`resolveSafe` で path 検証)
+- 新モジュール `src/save-mark.ts` (LRU 64 entries, content-hash ベース) と watcher 統合: 自分で書き込んだ直後の sha を記録し、watcher イベントの sha と一致するものは publish スキップ。これにより保存→ライブリロードのフィードバックループを防ぐ。
+- `Ctrl/Cmd+S` のキーボードハンドラを capture phase + `ev.code === "KeyS"` 判定に補強 (IME / Caps Lock / ブラウザ拡張機能の干渉に対する頑健化)。
+
+### Tests
+
+- `tests/save-mark.test.ts` (新規, 11 cases)
+- `tests/watcher.test.ts` (新規, 5 cases)
+- `tests/server.test.ts` (新規): GET /api/file の sha 返却、POST /api/file の Origin / safepath / 拡張子 / body サイズ / baseSha 検証 / 405
+
 ## [0.1.0] - 2026-04-30
 
 最初の公式リリース。設計書に沿った機能一式 + 後続の追加機能 (テーマ手動切替、表示モード切替、YAML フロントマター対応、ファイル削除通知、GFM ソフト改行、`.yomiignore` 等) を含む。

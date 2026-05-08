@@ -41,6 +41,23 @@
       <section class="content">
         <div class="content-header">
           <span id="current-path" class="current-path" aria-live="polite"></span>
+          <span id="dirty-indicator" class="dirty-indicator" aria-live="polite" hidden>● 未保存</span>
+          <div class="edit-actions">
+            <button
+              type="button"
+              id="edit-btn"
+              class="edit-btn"
+              aria-pressed="false"
+              title="ブラウザ内で編集する"
+            >編集</button>
+            <button
+              type="button"
+              id="discard-btn"
+              class="discard-btn"
+              title="編集を破棄して閉じる"
+              hidden
+            >破棄</button>
+          </div>
           <div class="view-toggle" role="tablist" aria-label="表示モード">
             <button
               type="button"
@@ -68,8 +85,33 @@
             >MD</button>
           </div>
         </div>
+        <div
+          id="conflict-banner"
+          class="conflict-banner"
+          role="alert"
+          hidden
+        >
+          <span class="conflict-message">他の場所でファイルが更新されています。</span>
+          <button type="button" id="conflict-take-server" class="conflict-action">
+            サーバ内容を取り込む
+          </button>
+          <button type="button" id="conflict-overwrite" class="conflict-action is-danger">
+            強制上書き
+          </button>
+          <button type="button" id="conflict-dismiss" class="conflict-action">
+            閉じる
+          </button>
+        </div>
         <div id="content-body" class="content-body" data-mode="preview">
           <pre id="source" class="source"></pre>
+          <textarea
+            id="editor"
+            class="editor"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Markdown エディタ"
+            hidden
+          ></textarea>
           <article id="preview" class="preview markdown-body">
             <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
           </article>

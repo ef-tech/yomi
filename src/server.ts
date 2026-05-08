@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
+import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
@@ -22,6 +23,9 @@ const ASSET_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
+/** 書き込み API の body サイズ上限 (bytes) */
+export const MAX_WRITE_BYTES = 10 * 1024 * 1024;
+
 export interface ServerConfig {
   rootDir: string;
   hostname: string;
@@ -38,6 +42,7 @@ export interface ServerHandle {
 
 export function createServer(config: ServerConfig): ServerHandle {
   const excludes = config.excludes ?? DEFAULT_EXCLUDES;
+  const saveMark = new SaveMark();
 
   const server = Bun.serve({
     hostname: config.hostname,
@@ -55,7 +60,14 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/file") {
-        return handleFile(config.rootDir, url.searchParams.get("path"));
+        if (req.method === "GET") {
+          return handleFileRead(config.rootDir, url.searchParams.get("path"));
+        }
+        if (req.method === "POST") {
+          if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
+          return handleFileWrite(config.rootDir, req, saveMark);
+        }
+        return new Response("Method Not Allowed", { status: 405 });
       }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -92,7 +104,7 @@ export function createServer(config: ServerConfig): ServerHandle {
           JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
         );
       },
-      { excludes },
+      { excludes, saveMark },
     );
   }
 
@@ -103,6 +115,32 @@ export function createServer(config: ServerConfig): ServerHandle {
       server.stop();
     },
   };
+}
+
+/**
+ * Origin ヘッダによる CSRF 防御。
+ * - Origin がない (curl 等) → 許可 (ブラウザ CSRF の脅威モデル外)
+ * - Origin がある場合は Host ヘッダの値とホスト部 (host:port) が一致すれば許可
+ *
+ * yomi 自身は HTTP のみ。Origin が `http://<dest-host>:<port>` で Host が `<dest-host>:<port>` のとき
+ * 同一オリジンとみなす。攻撃者ページからのリクエストは Origin が外部のため Host と一致せず 403。
+ */
+export function checkOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true;
+  const host = req.headers.get("host");
+  if (!host) return false;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  return originHost === host;
+}
+
+function forbidden(message: string): Response {
+  return Response.json({ error: message }, { status: 403 });
 }
 
 async function serveAsset(name: string): Promise<Response> {
@@ -128,7 +166,7 @@ async function handleTree(rootDir: string, excludes: ReadonlySet<string>): Promi
   }
 }
 
-async function handleFile(rootDir: string, requested: string | null): Promise<Response> {
+async function handleFileRead(rootDir: string, requested: string | null): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
@@ -138,9 +176,10 @@ async function handleFile(rootDir: string, requested: string | null): Promise<Re
 
   try {
     const safe = await resolveSafe(rootDir, requested);
-    const raw = await readFile(safe.abs, "utf-8");
+    const buf = await readFile(safe.abs);
+    const raw = buf.toString("utf-8");
     const html = await renderMarkdown(raw);
-    return Response.json({ path: safe.rel, raw, html });
+    return Response.json({ path: safe.rel, raw, html, sha: sha256(buf) });
   } catch (err) {
     if (err instanceof UnsafePathError) {
       return Response.json({ error: err.message }, { status: 400 });
@@ -150,4 +189,102 @@ async function handleFile(rootDir: string, requested: string | null): Promise<Re
     }
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }
+}
+
+interface FileWriteBody {
+  path?: unknown;
+  body?: unknown;
+  baseSha?: unknown;
+}
+
+async function handleFileWrite(
+  rootDir: string,
+  req: Request,
+  saveMark: SaveMark,
+): Promise<Response> {
+  const lengthHeader = req.headers.get("content-length");
+  if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
+    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+  }
+
+  let parsed: FileWriteBody;
+  try {
+    const text = await req.text();
+    if (Buffer.byteLength(text, "utf-8") > MAX_WRITE_BYTES) {
+      return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+    }
+    parsed = JSON.parse(text) as FileWriteBody;
+  } catch {
+    return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
+  }
+
+  const { path, body, baseSha } = parsed;
+  if (typeof path !== "string" || path.length === 0) {
+    return Response.json({ error: "path が必要です" }, { status: 400 });
+  }
+  if (typeof body !== "string") {
+    return Response.json({ error: "body は string です" }, { status: 400 });
+  }
+  if (baseSha !== undefined && typeof baseSha !== "string") {
+    return Response.json({ error: "baseSha は string です" }, { status: 400 });
+  }
+  if (!isMarkdownPath(path)) {
+    return Response.json({ error: "Markdown ファイル以外には書き込めません" }, { status: 400 });
+  }
+  if (Buffer.byteLength(body, "utf-8") > MAX_WRITE_BYTES) {
+    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+  }
+
+  let safe: { rel: string; abs: string };
+  try {
+    safe = await resolveSafe(rootDir, path);
+  } catch (err) {
+    if (err instanceof UnsafePathError) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  if (typeof baseSha === "string") {
+    let currentSha: string | null;
+    let currentRaw: string | null;
+    try {
+      const currentBuf = await readFile(safe.abs);
+      currentSha = sha256(currentBuf);
+      currentRaw = currentBuf.toString("utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        currentSha = null;
+        currentRaw = null;
+      } else {
+        return Response.json({ error: (err as Error).message }, { status: 500 });
+      }
+    }
+    if (currentSha !== baseSha) {
+      const currentHtml = currentRaw === null ? "" : await renderMarkdown(currentRaw);
+      return Response.json(
+        {
+          error: "ファイルが他で更新されています",
+          path: safe.rel,
+          raw: currentRaw,
+          html: currentHtml,
+          sha: currentSha,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
+  const buf = Buffer.from(body, "utf-8");
+  const newSha = sha256(buf);
+  saveMark.set(safe.rel, newSha);
+  try {
+    await writeFile(safe.abs, buf);
+  } catch (err) {
+    saveMark.clear(safe.rel);
+    return Response.json({ error: (err as Error).message }, { status: 500 });
+  }
+
+  const html = await renderMarkdown(body);
+  return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
 }
