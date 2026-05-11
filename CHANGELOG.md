@@ -10,6 +10,29 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added
+
+- **目次 (TOC) 機能 (Issue #8)**: トップバーの「📖 目次」ボタン (または `Ctrl/Cmd+Shift+O`) でフローティングパネルを開閉。Markdown の見出しから階層構造の目次を生成し、`IntersectionObserver` でスクロールに合わせて現在地をハイライト。デフォルトは H1-H3 表示、「▾ H4- 展開」で H1-H6 全表示に切替可。パネル開閉状態と階層レベルは `localStorage` に永続化。
+  - エントリクリックで該当見出しへスムーズスクロール
+  - 編集モード中は TOC を一時非表示にし、終了時に元の状態へ復元
+  - `MD` モード時にボタンを押すと一時的に `プレビュー` 切替 (TOC を閉じると元のモードへ戻る、`localStorage` は変更しない)
+  - 見出し 0 個のドキュメントでは「目次がありません」を表示
+
+### Changed
+
+- `renderMarkdown` が見出しに `id` 属性を自動付与するようになった (`<h2 id="使い方">`)。slug 生成は英数字小文字化 + 日本語保持 + 記号除去。同名見出しの衝突は `-1`, `-2` サフィックスで回避。`renderMarkdown` は呼び出しごとに新規 Marked インスタンスを生成し、ドキュメント間で id 採番が独立する。
+
+### Internal
+
+- `src/util/slugify.ts` (新規): `slugify()` + `uniqueSlug()` の純関数
+- `public/toc.js` (新規): `buildTocTree(headings, maxLevel)` の純関数 (ブラウザから直接 import)
+
+### Tests
+
+- `tests/util/slugify.test.ts` (新規, 15 cases)
+- `tests/toc.test.ts` (新規, 8 cases — `public/toc.js` を import)
+- `tests/renderer.test.ts` (+4 cases): heading id 付与、日本語 id、重複サフィックス、複数文書間の独立採番
+
 ## [0.2.0] - 2026-05-08
 
 ブラウザ内での Markdown 編集に対応。これまで読み取り専用だった yomi が、軽い文言修正なら yomi 単体で完結するようになる。
