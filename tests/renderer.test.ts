@@ -2,10 +2,35 @@ import { describe, expect, test } from "bun:test";
 import { renderMarkdown } from "../src/renderer.ts";
 
 describe("renderMarkdown", () => {
-  test("見出しと段落をレンダリング", async () => {
+  test("見出しと段落をレンダリング (h1 に id 付与)", async () => {
     const html = await renderMarkdown("# Title\n\n本文");
-    expect(html).toContain("<h1>Title</h1>");
+    expect(html).toContain('<h1 id="title">Title</h1>');
     expect(html).toContain("<p>本文</p>");
+  });
+
+  test("日本語見出しは id にも日本語が残る", async () => {
+    const html = await renderMarkdown("## 使い方");
+    expect(html).toContain('<h2 id="使い方">使い方</h2>');
+  });
+
+  test("同じ見出しが複数あれば id にサフィックスが付く", async () => {
+    const html = await renderMarkdown("## intro\n\n## intro\n\n## intro");
+    expect(html).toContain('<h2 id="intro">intro</h2>');
+    expect(html).toContain('<h2 id="intro-1">intro</h2>');
+    expect(html).toContain('<h2 id="intro-2">intro</h2>');
+  });
+
+  test("見出しテキストが記号のみ → section-N fallback", async () => {
+    const html = await renderMarkdown("# !?&");
+    expect(html).toMatch(/<h1 id="section-\d+">/);
+  });
+
+  test("複数文書で id 採番が独立 (Marked インスタンス分離)", async () => {
+    const html1 = await renderMarkdown("## intro");
+    const html2 = await renderMarkdown("## intro");
+    // 2 つ目の文書でも -1 ではなく素の "intro" になる
+    expect(html1).toContain('<h2 id="intro">intro</h2>');
+    expect(html2).toContain('<h2 id="intro">intro</h2>');
   });
 
   test("GFM ソフト改行: 1 行改行 → <br>", async () => {
@@ -33,7 +58,7 @@ describe("renderMarkdown", () => {
     expect(html).toContain('<dl class="frontmatter">');
     expect(html).toContain("<dt>title</dt><dd>T</dd>");
     expect(html).toContain('<a href="https://example.com"');
-    expect(html).toContain("<h1>本文</h1>");
+    expect(html).toContain('<h1 id="本文">本文</h1>');
     // dl が h1 より前
     expect(html.indexOf("<dl")).toBeLessThan(html.indexOf("<h1"));
   });
@@ -41,7 +66,7 @@ describe("renderMarkdown", () => {
   test("フロントマターなしでも本文がレンダリングされる", async () => {
     const html = await renderMarkdown("# Hello");
     expect(html).not.toContain('<dl class="frontmatter">');
-    expect(html).toContain("<h1>Hello</h1>");
+    expect(html).toContain('<h1 id="hello">Hello</h1>');
   });
 
   test("テーブル (GFM) をレンダリング", async () => {
