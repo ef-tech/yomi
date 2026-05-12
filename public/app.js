@@ -15,6 +15,7 @@ import {
   seedNavCounter,
 } from "./navigation.js";
 import { prefs } from "./prefs.js";
+import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 
 const els = {
@@ -270,6 +271,7 @@ function applyFile(data) {
   expandAncestors(data.path);
   enableEditActions(true);
   refreshToc();
+  wireTaskCheckboxes();
 }
 
 /**
@@ -592,6 +594,8 @@ function enterEditMode() {
   state.tocSuspended = state.tocVisible;
   if (state.tocVisible) applyTocVisibility(false, { persist: false });
   els.tocBtn.disabled = true;
+  // 編集中はプレビューのチェックボックスを disabled に
+  wireTaskCheckboxes();
   setTimeout(() => els.editor.focus(), 0);
 }
 
@@ -610,6 +614,8 @@ function exitEditMode() {
     applyTocVisibility(true, { persist: false });
     state.tocSuspended = false;
   }
+  // 編集終了でチェックボックスを再びクリック可能に
+  wireTaskCheckboxes();
 }
 
 function setDirty(dirty) {
@@ -658,6 +664,74 @@ async function saveEdit({ force = false } = {}) {
       setStatus("error", `保存失敗: ${err.message}`);
     }
     return false;
+  }
+}
+
+/* ===== インタラクティブ チェックボックス (Issue #17) ===== */
+
+/**
+ * プレビュー内の `<input type="checkbox">` (GFM タスクリスト) を
+ * クリック可能にし、document order の index を付与する。
+ *
+ * applyFile で innerHTML が書き換わるたびに呼ぶ。listener は DOM 削除と
+ * 同時に消えるので重複 attach はしないが、enter/exit edit からも呼ぶため
+ * 念のため removeEventListener してから addEventListener する。
+ *
+ * 編集モード中は disabled = true でクリック不可（編集モード優先）。
+ */
+function wireTaskCheckboxes() {
+  const boxes = els.preview.querySelectorAll('input[type="checkbox"]');
+  boxes.forEach((box, idx) => {
+    box.dataset.taskIndex = String(idx);
+    box.disabled = state.editing;
+    box.removeEventListener("change", onTaskCheckboxToggle);
+    box.addEventListener("change", onTaskCheckboxToggle);
+  });
+}
+
+async function onTaskCheckboxToggle(ev) {
+  const target = ev.currentTarget;
+  if (!target || !state.currentPath || state.editing) {
+    // 編集モード中は disabled なので通常は届かないが、保険
+    if (target) target.checked = !target.checked;
+    return;
+  }
+
+  const idx = Number(target.dataset.taskIndex);
+  if (!Number.isInteger(idx) || idx < 0) return;
+
+  const { body, newChecked } = toggleTaskInMarkdown(state.currentRaw, idx);
+  if (newChecked === null) {
+    // ソース上に該当タスクなし (markdown と DOM index がズレた)
+    target.checked = !target.checked; // revert
+    setStatus("error", "タスクの位置を特定できませんでした");
+    return;
+  }
+
+  const payload = { path: state.currentPath, body };
+  if (state.currentSha) payload.baseSha = state.currentSha;
+
+  // 再入防止: 連続クリックを 1 回分だけ受け付ける
+  target.disabled = true;
+
+  try {
+    const data = await fetchJson("/api/file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    // applyFile 経由で再描画: state 更新 + DOM + TOC + チェックボックス再 attach を一括
+    applyFile(data);
+    setStatus("ok", `${state.currentPath} を更新 (タスク${newChecked ? "ON" : "OFF"})`);
+  } catch (err) {
+    target.checked = !target.checked; // revert UI
+    target.disabled = state.editing;
+    if (err.status === 409 && err.payload) {
+      showConflict(err.payload);
+      setStatus("error", "競合: ファイルが他で更新されています");
+    } else {
+      setStatus("error", `保存失敗: ${err.message}`);
+    }
   }
 }
 

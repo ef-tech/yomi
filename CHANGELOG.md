@@ -10,6 +10,38 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-13
+
+プレビュー内の GFM タスクリストを編集モードに入らずクリックで ON/OFF できるようになる。チェック状態は md ファイルに書き戻されるので、TODO リストや手順書を「読みながら進捗管理」できる。
+
+### Added
+
+- **インタラクティブ タスクリスト (Issue #17)**: プレビュー内の `<input type="checkbox">` をクリック可能にし、対応する md ソース行の `- [ ]` ⇄ `- [x]` を反転して `POST /api/file` で保存。
+  - 既存の楽観的ロック (`baseSha`) を流用、競合は既存バナーで通知
+  - インデント済みネスト タスク、`*` / `+` の bullet マーカーと **ordered list** (`1. [ ]` / `2) [ ]`)、大文字 `[X]` にも対応
+  - **CRLF 改行 (Windows / 一部エディタ保存)** でも正しくトグルできる（regex で `\r` を保持）
+  - code fence (```、~~~) 内のタスク風文字列は無視
+  - 編集モード中はクリック不可（編集モード優先）
+  - 連続クリック中は disabled で再入防止
+  - 保存後は `applyFile` 経由で TOC / source / preview / Mermaid を一括更新（タスク変更で見出しが変化したケースでも TOC が古くならない）
+
+### Internal
+
+- `public/task-list.js` (新規): `toggleTaskInMarkdown(body, index)` と `countTasksInMarkdown(body)` の純関数モジュール
+- `public/task-list.d.ts` (新規): TypeScript 用型情報
+- `public/app.js` に `wireTaskCheckboxes` / `onTaskCheckboxToggle` を追加、`applyFile` / `enterEditMode` / `exitEditMode` から呼ぶ
+- `public/styles.css` でプレビュー内チェックボックスを `cursor: pointer`、`:disabled` 時は `default`
+
+### Tests
+
+- `tests/util/task-list.test.ts` (新規, 25 cases): `toggleTaskInMarkdown` / `countTasksInMarkdown` の境界条件をカバー（ネスト、bullet 違い、ordered list、CRLF 改行、code fence 無視、空文字、非整数 index など）
+
+### Known Limitations
+
+- 4-space インデントされた code block 内（fence なし）の `- [ ]` は marked が input を出さない一方、`toggleTaskInMarkdown` の正規表現は拾うため、稀なケースで DOM/md index がズレる可能性あり（実装は将来 Issue で対応）
+- blockquote 内 (`> - [ ]`) のタスクは marked が input を出すが、現状の正規表現は `>` を許容していないので index ズレが起きる可能性あり（将来 Issue で対応）
+- 高速な連続クリック（複数チェックボックスを並行で叩く）で 2 番目以降が 409 conflict になる場合がある（baseSha 楽観的ロックの仕様）
+
 ## [0.5.1] - 2026-05-13
 
 URL `?path=foo.md#見出し` 形式の deep-link でスクロール復元するようになる。リンクを共有すれば相手の画面で同じ見出しが見える。
