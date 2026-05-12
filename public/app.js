@@ -321,13 +321,17 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
  * - hash が null / 空文字なら何もしない
  * - 編集モード中は preview が隠れているケースがあるため skip（URL/state は維持）
  * - Mermaid 図ありの md では描画完了前なので位置がズレる可能性あり（将来 Issue）
+ * - behavior: "auto" (instant) を使う：ファイル切替直後は `renderCurrentFile` で
+ *   scrollTop が一旦 0 にリセットされており、そこから "smooth" でスクロールすると
+ *   「一瞬先頭が見えてから見出しまで滑る」という 2 段階の挙動になり違和感が出る。
+ *   即時ジャンプなら初期位置の見え時間が最小化される。
  */
 function scrollIntoHash(hash) {
   if (!hash || state.editing) return;
   requestAnimationFrame(() => {
     const target = document.getElementById(hash);
     if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.scrollIntoView({ behavior: "auto", block: "start" });
     }
   });
 }
