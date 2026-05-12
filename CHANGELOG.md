@@ -32,6 +32,7 @@ yomi の主要な変更点をこのファイルに記録します。
 
 - `public/navigation.js` (新規): `getPathFromUrl` / `buildUrl` / `nextNavIndex` / `currentNavIndex` / `seedNavCounter` の純関数モジュール
 - `public/navigation.d.ts` (新規): TypeScript 用型情報
+- `popstate` キャンセル時の `pendingCancelRestore` フラグに `setTimeout` フォールバックを追加：`history.go` が popstate を発火させなかった場合でも次の tick でフラグを解除し、後続の戻る/進むを取りこぼさない
 - `selectFile` を `loadFile(path)` (fetch のみ) と `applyFile(data)` (state / DOM 反映) に責務分離
 - `wireHistoryNavigation`: `popstate` リスナを 1 箇所に集約。`pendingCancelRestore` フラグで自前 `history.go` の popstate を 1 回飲んで二重 confirm を防ぐ
 - `seedNavCounter(history.state?.navIndex)` を `init()` 冒頭で呼び、リロード時の navIndex を復元（forward 履歴に残る古い entry との衝突回避）

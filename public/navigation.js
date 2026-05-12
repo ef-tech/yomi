@@ -10,20 +10,18 @@
 
 const PARAM = "path";
 
-export function getPathFromUrl(location = window.location) {
-  return new URLSearchParams(location.search).get(PARAM);
+export function getPathFromUrl(location) {
+  const loc = location ?? (typeof window !== "undefined" ? window.location : null);
+  if (!loc) return null;
+  return new URLSearchParams(loc.search).get(PARAM);
 }
 
-export function buildUrl(path, hash) {
+export function buildUrl(path) {
   const params = new URLSearchParams();
   if (path) params.set(PARAM, path);
   const search = params.toString();
-  const base = search
-    ? `?${search}`
-    : typeof window !== "undefined"
-      ? window.location.pathname
-      : "/";
-  return hash ? `${base}#${hash}` : base;
+  if (search) return `?${search}`;
+  return typeof window !== "undefined" ? window.location.pathname : "/";
 }
 
 let navCounter = 0;

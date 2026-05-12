@@ -43,15 +43,6 @@ describe("buildUrl", () => {
     expect(buildUrl(null)).toBe(PATHNAME);
     expect(buildUrl("")).toBe(PATHNAME);
   });
-
-  test("hash を付ければ末尾に #hash が付く", () => {
-    expect(buildUrl("foo.md", "section-1")).toBe("?path=foo.md#section-1");
-  });
-
-  test("hash 空文字 / null は付かない", () => {
-    expect(buildUrl("foo.md", null)).toBe("?path=foo.md");
-    expect(buildUrl("foo.md", "")).toBe("?path=foo.md");
-  });
 });
 
 describe("navCounter (nextNavIndex / currentNavIndex / seedNavCounter)", () => {

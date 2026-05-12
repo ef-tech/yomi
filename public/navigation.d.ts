@@ -5,8 +5,8 @@
  * するための宣言ファイル。
  */
 
-export declare function getPathFromUrl(location?: { search: string }): string | null;
-export declare function buildUrl(path: string | null | undefined, hash?: string | null): string;
+export declare function getPathFromUrl(location?: { search: string } | null): string | null;
+export declare function buildUrl(path: string | null | undefined): string;
 export declare function nextNavIndex(): number;
 export declare function currentNavIndex(): number;
 export declare function seedNavCounter(from: number | null | undefined): void;

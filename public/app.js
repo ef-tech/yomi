@@ -274,7 +274,7 @@ function applyFile(data) {
  *
  * loadFile が失敗した場合は URL も history も触らず status 表示のみ。
  */
-async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
+async function navigateTo(path, { history: mode = "push" } = {}) {
   if (mode === "push" && !confirmLeaveEdit()) return;
 
   let data;
@@ -292,9 +292,9 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
     return;
   }
 
-  const url = buildUrl(data.path, hash);
+  const url = buildUrl(data.path);
   const navIndex = mode === "push" ? nextNavIndex() : currentNavIndex();
-  const entry = { path: data.path, hash, navIndex };
+  const entry = { path: data.path, navIndex };
 
   if (mode === "push") {
     window.history.pushState(entry, "", url);
@@ -323,7 +323,6 @@ function wireHistoryNavigation() {
 
     const target = ev.state ?? {
       path: getPathFromUrl(),
-      hash: null,
       navIndex: currentNavIndex(),
     };
 
@@ -334,6 +333,11 @@ function wireHistoryNavigation() {
         const delta = currentNavIndex() - target.navIndex;
         if (delta !== 0) {
           pendingCancelRestore = true;
+          // history.go が popstate を発火させなかった場合のフォールバック:
+          // 次の tick でフラグを必ず解除し、後続の戻る/進むを 1 回飲んでしまうのを防ぐ
+          setTimeout(() => {
+            pendingCancelRestore = false;
+          }, 0);
           window.history.go(delta);
         }
         return;
