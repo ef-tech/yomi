@@ -44,4 +44,9 @@ export const prefs = {
   currentPath: makePref("yomi:currentPath:v1"),
   viewMode: makePref("yomi:viewMode:v1"),
   themeMode: makePref("yomi:themeMode:v1"),
+  tocVisible: makePref("yomi:tocVisible:v1", {
+    parse: (s) => s === "true",
+    stringify: (v) => (v ? "true" : "false"),
+  }),
+  tocExpandLevel: makePref("yomi:tocExpandLevel:v1"),
 };

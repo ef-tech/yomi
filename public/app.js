@@ -1,5 +1,6 @@
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 import { prefs } from "./prefs.js";
+import { buildTocTree } from "./toc.js";
 
 const els = {
   tree: document.getElementById("tree"),
@@ -18,6 +19,12 @@ const els = {
   conflictDismiss: document.getElementById("conflict-dismiss"),
   toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
   themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
+  // TOC
+  tocBtn: document.getElementById("toc-btn"),
+  tocPanel: document.getElementById("toc-panel"),
+  tocList: document.getElementById("toc-list"),
+  tocClose: document.getElementById("toc-close"),
+  tocExpandToggle: document.getElementById("toc-expand-toggle"),
 };
 
 const VIEW_MODES = ["preview", "split", "md"];
@@ -25,6 +32,9 @@ const DEFAULT_VIEW_MODE = "preview";
 
 const THEME_MODES = ["auto", "light", "dark"];
 const DEFAULT_THEME_MODE = "auto";
+
+const TOC_EXPAND_LEVELS = ["h3", "h6"];
+const DEFAULT_TOC_EXPAND_LEVEL = "h3";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -72,6 +82,18 @@ const state = {
   editing: false,
   /** 編集中で未保存の差分があるかどうか */
   dirty: false,
+  /** TOC パネルが表示中か (localStorage 永続化) */
+  tocVisible: false,
+  /** TOC の展開レベル: "h3" (H1-H3) / "h6" (H1-H6) */
+  tocExpandLevel: DEFAULT_TOC_EXPAND_LEVEL,
+  /** 編集モード進入時に TOC が開いていたら、終了時に復元するためのフラグ */
+  tocSuspended: false,
+  /** md モード時に TOC ボタン押下で一時的に preview 切替したかのフラグ (戻すため) */
+  tocPreviewOverride: false,
+  /** path -> button 要素 (現在地ハイライト用) */
+  tocEntries: new Map(),
+  /** IntersectionObserver (再構築のたびに破棄して作り直す) */
+  tocObserver: null,
 };
 
 restorePreferences();
@@ -81,6 +103,7 @@ initMermaid(state.themeMode);
 wireViewToggle();
 wireThemeToggle();
 wireEditActions();
+wireTocActions();
 wireKeyboard();
 wireBeforeUnload();
 init();
@@ -217,6 +240,7 @@ async function selectFile(path) {
   expandAncestors(data.path);
   setStatus("ok", `${data.path} を表示`);
   enableEditActions(true);
+  refreshToc();
 }
 
 function renderCurrentFile() {
@@ -278,6 +302,12 @@ function restorePreferences() {
 
   const theme = prefs.themeMode.load();
   if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
+
+  const tocVis = prefs.tocVisible.load();
+  if (tocVis === true) state.tocVisible = true;
+
+  const tocLv = prefs.tocExpandLevel.load();
+  if (tocLv && TOC_EXPAND_LEVELS.includes(tocLv)) state.tocExpandLevel = tocLv;
 }
 
 function saveOpenDirs() {
@@ -300,6 +330,9 @@ function wireViewToggle() {
       const mode = btn.dataset.mode;
       if (!mode || !VIEW_MODES.includes(mode)) return;
       if (state.viewMode === mode) return;
+      // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
+      // (後から TOC を閉じても、ユーザの選択を尊重する)
+      state.tocPreviewOverride = false;
       applyViewMode(mode);
       saveViewMode();
       if (state.currentHtml && mode !== "md") {
@@ -399,6 +432,7 @@ function confirmDiscard() {
 
 function enableEditActions(enabled) {
   els.editBtn.disabled = !enabled;
+  els.tocBtn.disabled = !enabled;
 }
 
 function enterEditMode() {
@@ -412,6 +446,10 @@ function enterEditMode() {
   els.editBtn.title = "保存して編集モードを終了 (Ctrl/Cmd+S でも保存可)";
   els.discardBtn.hidden = false;
   setDirty(false);
+  // TOC を一時退避 (編集終了で復元)
+  state.tocSuspended = state.tocVisible;
+  if (state.tocVisible) applyTocVisibility(false, { persist: false });
+  els.tocBtn.disabled = true;
   setTimeout(() => els.editor.focus(), 0);
 }
 
@@ -424,6 +462,12 @@ function exitEditMode() {
   els.editBtn.title = "ブラウザ内で編集する";
   els.discardBtn.hidden = true;
   setDirty(false);
+  // TOC 復元 (編集前に開いていれば再表示)。currentPath がなければ disabled のまま
+  els.tocBtn.disabled = !state.currentPath;
+  if (state.tocSuspended) {
+    applyTocVisibility(true, { persist: false });
+    state.tocSuspended = false;
+  }
 }
 
 function setDirty(dirty) {
@@ -509,6 +553,173 @@ function forceOverwrite() {
   saveEdit({ force: true });
 }
 
+/* ===== TOC (目次) ===== */
+
+function wireTocActions() {
+  els.tocBtn.disabled = true;
+  els.tocBtn.addEventListener("click", () => toggleToc());
+  els.tocClose.addEventListener("click", () => applyTocVisibility(false));
+  els.tocExpandToggle.addEventListener("click", () => {
+    const next = state.tocExpandLevel === "h3" ? "h6" : "h3";
+    state.tocExpandLevel = next;
+    prefs.tocExpandLevel.save(next);
+    updateExpandToggleUi();
+    refreshToc();
+  });
+  updateExpandToggleUi();
+  applyTocVisibility(state.tocVisible, { persist: false });
+}
+
+function toggleToc() {
+  if (state.tocVisible) {
+    applyTocVisibility(false);
+    return;
+  }
+  // md モードで TOC を開いた場合: 一時的に preview に切替 (localStorage は更新しない)
+  if (state.viewMode === "md") {
+    state.tocPreviewOverride = true;
+    applyViewMode("preview");
+  }
+  applyTocVisibility(true);
+}
+
+function applyTocVisibility(visible, { persist = true } = {}) {
+  state.tocVisible = visible;
+  els.tocPanel.hidden = !visible;
+  els.tocBtn.setAttribute("aria-pressed", visible ? "true" : "false");
+  if (persist) prefs.tocVisible.save(visible);
+  // preview override は「ユーザが TOC を明示的に閉じた (persist=true)」時のみ戻す。
+  // persist=false の呼び出し (編集モード進入時の一時退避等) では override 状態を保持する。
+  if (!visible && persist && state.tocPreviewOverride) {
+    const stored = prefs.viewMode.load();
+    if (stored && VIEW_MODES.includes(stored)) {
+      applyViewMode(stored);
+    }
+    state.tocPreviewOverride = false;
+  }
+  if (visible) {
+    refreshToc();
+  } else {
+    teardownTocObserver();
+    state.tocEntries.clear();
+  }
+}
+
+function updateExpandToggleUi() {
+  const isExpanded = state.tocExpandLevel === "h6";
+  els.tocExpandToggle.setAttribute("aria-pressed", isExpanded ? "true" : "false");
+  els.tocExpandToggle.textContent = isExpanded ? "▴ H4- 折りたたみ" : "▾ H4- 展開";
+}
+
+function refreshToc() {
+  if (!state.tocVisible) return;
+  const headings = collectHeadings(els.preview);
+  const maxLevel = state.tocExpandLevel === "h6" ? 6 : 3;
+  const tree = buildTocTree(headings, maxLevel);
+  renderTocTree(tree);
+  setupTocHighlight(headings, maxLevel);
+}
+
+function collectHeadings(previewEl) {
+  return Array.from(previewEl.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((el) => ({
+    level: Number(el.tagName.substring(1)),
+    text: el.textContent ?? "",
+    id: el.id,
+    el,
+  }));
+}
+
+function renderTocTree(tree) {
+  state.tocEntries.clear();
+  els.tocList.innerHTML = "";
+
+  if (tree.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "toc-empty";
+    empty.textContent = "目次がありません";
+    els.tocList.appendChild(empty);
+    return;
+  }
+
+  const ul = document.createElement("ul");
+  for (const node of tree) ul.appendChild(renderTocNode(node));
+  els.tocList.appendChild(ul);
+}
+
+function renderTocNode(node) {
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `toc-entry toc-level-${node.level}`;
+  btn.textContent = node.text;
+  btn.title = node.text;
+  btn.addEventListener("click", () => {
+    const target = document.getElementById(node.id);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  state.tocEntries.set(node.id, btn);
+  li.appendChild(btn);
+
+  if (node.children.length > 0) {
+    const ul = document.createElement("ul");
+    for (const child of node.children) ul.appendChild(renderTocNode(child));
+    li.appendChild(ul);
+  }
+  return li;
+}
+
+function setupTocHighlight(headings, maxLevel) {
+  teardownTocObserver();
+  if (headings.length === 0) return;
+
+  // ビューポート上端 10%-20% の帯に入った heading を current にする。
+  // 同時に複数 entry が intersect する場合は、ビューポート上端に最も近いものを優先。
+  const visible = new Map(); // id -> intersectionTop (boundingClientRect.top)
+
+  state.tocObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        const id = entry.target.id;
+        if (entry.isIntersecting) {
+          visible.set(id, entry.boundingClientRect.top);
+        } else {
+          visible.delete(id);
+        }
+      }
+      // top に最も近い (= |top| が小さい) heading を current に
+      let best = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const [id, top] of visible) {
+        const dist = Math.abs(top);
+        if (dist < bestDist) {
+          best = id;
+          bestDist = dist;
+        }
+      }
+      for (const [id, btn] of state.tocEntries) {
+        btn.classList.toggle("is-active", id === best);
+      }
+    },
+    {
+      root: els.preview,
+      rootMargin: "-10% 0px -80% 0px",
+      threshold: [0, 1],
+    },
+  );
+
+  for (const h of headings) {
+    if (h.level > maxLevel) continue;
+    if (h.el) state.tocObserver.observe(h.el);
+  }
+}
+
+function teardownTocObserver() {
+  if (state.tocObserver) {
+    state.tocObserver.disconnect();
+    state.tocObserver = null;
+  }
+}
+
 /* ===== キーボード ===== */
 
 function wireKeyboard() {
@@ -524,6 +735,21 @@ function wireKeyboard() {
       ev.preventDefault();
       ev.stopPropagation();
       saveEdit().catch((err) => setStatus("error", `保存失敗: ${err.message}`));
+    },
+    { capture: true },
+  );
+
+  // Ctrl/Cmd+Shift+O で TOC トグル
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      const isTocKey = ev.code === "KeyO" || ev.key === "o" || ev.key === "O";
+      const isModifier = ev.metaKey || ev.ctrlKey;
+      if (!isModifier || !isTocKey || !ev.shiftKey || ev.altKey) return;
+      if (!state.currentPath || state.editing) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleToc();
     },
     { capture: true },
   );

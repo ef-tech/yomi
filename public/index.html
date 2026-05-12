@@ -32,6 +32,13 @@
           aria-pressed="false"
         >ダーク</button>
       </div>
+      <button
+        type="button"
+        id="toc-btn"
+        class="toc-btn"
+        aria-pressed="false"
+        title="目次 (Ctrl/Cmd+Shift+O)"
+      >📖 目次</button>
       <div class="status" id="status" aria-live="polite"></div>
     </header>
     <main class="layout">
@@ -115,6 +122,22 @@
           <article id="preview" class="preview markdown-body">
             <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
           </article>
+          <aside id="toc-panel" class="toc-panel" hidden aria-label="目次">
+            <header class="toc-header">
+              <span class="toc-title">目次</span>
+              <button type="button" id="toc-close" class="toc-close" aria-label="目次を閉じる" title="閉じる">✕</button>
+            </header>
+            <nav id="toc-list" class="toc-list" aria-label="見出し一覧"></nav>
+            <footer class="toc-footer">
+              <button
+                type="button"
+                id="toc-expand-toggle"
+                class="toc-expand-toggle"
+                aria-pressed="false"
+                title="H4 以下も表示"
+              >▾ H4- 展開</button>
+            </footer>
+          </aside>
         </div>
       </section>
     </main>
