@@ -229,25 +229,33 @@ function findFirstFile(node) {
   return null;
 }
 
-async function selectFile(path) {
-  const data = await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+async function loadFile(path) {
+  return await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+}
+
+function applyFile(data) {
   state.currentPath = data.path;
   state.currentRaw = data.raw;
   state.currentHtml = data.html;
   state.currentSha = data.sha ?? null;
-  saveCurrentPath();
   els.currentPath.textContent = data.path;
   hideConflict();
   if (state.editing) {
-    // selectFile で別ファイルに切替 = 編集解除
+    // applyFile で別ファイルに切替 = 編集解除
     exitEditMode();
   }
   renderCurrentFile();
   highlightSelected(data.path);
   expandAncestors(data.path);
-  setStatus("ok", `${data.path} を表示`);
   enableEditActions(true);
   refreshToc();
+}
+
+async function selectFile(path) {
+  const data = await loadFile(path);
+  applyFile(data);
+  saveCurrentPath();
+  setStatus("ok", `${data.path} を表示`);
 }
 
 function renderCurrentFile() {
