@@ -335,11 +335,32 @@ body {
   border-color: #cf222e;
 }
 
+.conflict-action.is-primary {
+  background: var(--selected-bg);
+  color: var(--selected-text);
+  border-color: var(--selected-text);
+  font-weight: 600;
+}
+
 @media (prefers-color-scheme: dark) {
   .conflict-action.is-danger {
     color: #ff7b72;
     border-color: #ff7b72;
   }
+}
+
+/* ===== 外部 URL 警告バナー ===== */
+.external-link-banner .external-link-url {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-left: 0.5rem;
+  max-width: 60ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 /* ===== 表示モードトグル ===== */
