@@ -10,6 +10,39 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-12
+
+ブラウザの戻る / 進むがプレビュー内リンクと左ツリー選択にちゃんと効くようになる。URL `?path=foo.md` で「いま読んでるファイル」が表現されるようになり、リロードで復元、URL コピペで再現できる。
+
+### Added
+
+- **ブラウザ履歴対応 (Issue #13)**: `history.pushState` で「ユーザー操作によるファイル切替」を履歴に積み、`popstate` で戻る / 進むに対応。
+  - プレビュー内リンク (`navigateInternal`) と左ツリー選択がどちらも履歴に積まれる
+  - 初期化 (`init`) は `replaceState` で履歴を増やさず、URL を整える
+  - ライブリロード (`handleLiveEvent` の `changed`) は履歴を積まない (`loadFile + applyFile` 直呼び)
+  - アンカーリンク (`#見出し`) は既存挙動を維持、履歴に積まない
+- **URL クエリ `?path=foo.md` で現在ファイルを表現**: リロード復元 / URL コピペで同じ画面の再現 / ブックマーク可能
+- **編集モード中の戻る/進む確認**: `popstate` 時に未保存変更があれば既存の `confirmLeaveEdit` で確認。Cancel すると `history.go(delta)` で編集中エントリへジャンプし戻る (re-push しないため forward 履歴を壊さない)
+
+### Changed
+
+- `prefs.currentPath` (localStorage `yomi:currentPath:v1`) を廃止: 現在ファイルは URL を single source of truth とする。旧 key は次回読まれないため自然消滅 (ブラウザの localStorage に値が残るのみで実害なし)
+- `chooseInitialFile` は `getPathFromUrl()` 優先に変更: URL に `?path=...` があり実在すればそれを開き、なければ tree の先頭ファイル
+- `selectFile` を撤廃: 全ナビゲーション起点は `navigateTo(path, { history: "push" | "replace" | "none" })` に統一
+
+### Internal
+
+- `public/navigation.js` (新規): `getPathFromUrl` / `buildUrl` / `nextNavIndex` / `currentNavIndex` / `seedNavCounter` の純関数モジュール
+- `public/navigation.d.ts` (新規): TypeScript 用型情報
+- `popstate` キャンセル時の `pendingCancelRestore` フラグに `setTimeout` フォールバックを追加：`history.go` が popstate を発火させなかった場合でも次の tick でフラグを解除し、後続の戻る/進むを取りこぼさない
+- `selectFile` を `loadFile(path)` (fetch のみ) と `applyFile(data)` (state / DOM 反映) に責務分離
+- `wireHistoryNavigation`: `popstate` リスナを 1 箇所に集約。`pendingCancelRestore` フラグで自前 `history.go` の popstate を 1 回飲んで二重 confirm を防ぐ
+- `seedNavCounter(history.state?.navIndex)` を `init()` 冒頭で呼び、リロード時の navIndex を復元（forward 履歴に残る古い entry との衝突回避）
+
+### Tests
+
+- `tests/util/navigation.test.ts` (新規, 13 cases): `getPathFromUrl` / `buildUrl` / navCounter API の境界条件をカバー
+
 ## [0.4.0] - 2026-05-12
 
 プレビュー内のリンクが「ちゃんと使える」ようになる。md 内に書いた相対リンクで yomi 内をジャンプできて、外部 URL は警告つきで安全に開ける。`javascript:` リンクは無条件ブロックで信頼できない md の読み込みも安全に。
