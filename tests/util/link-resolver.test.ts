@@ -188,4 +188,17 @@ describe("splitHrefHash", () => {
   test("不正な URL エンコードはそのまま使う", () => {
     expect(splitHrefHash("foo.md#%E5%89")).toEqual({ path: "foo.md", hash: "%E5%89" });
   });
+
+  test("空文字は path も hash も空", () => {
+    expect(splitHrefHash("")).toEqual({ path: "", hash: null });
+  });
+
+  test("hash は NFC に正規化される (NFD 入力でも NFC で返る)", () => {
+    // 'が' の NFC (U+304C) と NFD (U+304B U+3099) は同じ文字列に正規化される
+    const nfd = "が"; // か + 濁点
+    const result = splitHrefHash(`foo.md#${nfd}`);
+    expect(result.path).toBe("foo.md");
+    expect(result.hash).toBe("が"); // NFC
+    expect(result.hash).toBe("が");
+  });
 });

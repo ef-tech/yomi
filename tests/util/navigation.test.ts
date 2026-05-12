@@ -78,6 +78,12 @@ describe("getHashFromUrl", () => {
   test("不正な URL エンコードは生文字列を返す", () => {
     expect(getHashFromUrl({ hash: "#%E5%89" })).toBe("%E5%89");
   });
+
+  test("NFD で encode された hash は NFC に正規化される", () => {
+    // 'が' の NFD = か (U+304B) + 濁点 (U+3099)
+    // URL エンコード: %E3%81%8B%E3%82%99
+    expect(getHashFromUrl({ hash: "#%E3%81%8B%E3%82%99" })).toBe("が");
+  });
 });
 
 describe("navCounter (nextNavIndex / currentNavIndex / seedNavCounter)", () => {

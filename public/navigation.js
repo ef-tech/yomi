@@ -27,10 +27,17 @@ export function getHashFromUrl(location) {
   const loc = location ?? (typeof window !== "undefined" ? window.location : null);
   if (!loc || typeof loc.hash !== "string" || loc.hash.length <= 1) return null;
   const raw = loc.hash.slice(1);
+  let decoded;
   try {
-    return decodeURIComponent(raw);
+    decoded = decodeURIComponent(raw);
   } catch {
-    return raw;
+    decoded = raw;
+  }
+  // NFC 正規化: marked の slugger 出力 (NFC) と揃え、getElementById のミスマッチを防ぐ
+  try {
+    return decoded.normalize("NFC");
+  } catch {
+    return decoded;
   }
 }
 

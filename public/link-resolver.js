@@ -57,6 +57,13 @@ export function splitHrefHash(href) {
     } catch {
       // 不正なエンコードはそのまま使う
     }
+    // NFC 正規化: marked の slugger は NFC 出力なので URL 側を揃える
+    // (macOS Finder 由来の NFD 入力等で getElementById がミスマッチするのを防ぐ)
+    try {
+      hash = hash.normalize("NFC");
+    } catch {
+      // normalize 不可な環境ではそのまま使う
+    }
   }
 
   return { path: rawPath, hash: hash || null };
