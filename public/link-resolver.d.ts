@@ -9,4 +9,5 @@
 export declare function isAnchor(href: string): boolean;
 export declare function isExternalUrl(href: string): boolean;
 export declare function isJavascriptUrl(href: string): boolean;
+export declare function splitHrefHash(href: string): { path: string; hash: string | null };
 export declare function resolveRelativePath(currentPath: string, href: string): string;

@@ -1,8 +1,15 @@
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-import { isAnchor, isExternalUrl, isJavascriptUrl, resolveRelativePath } from "./link-resolver.js";
+import {
+  isAnchor,
+  isExternalUrl,
+  isJavascriptUrl,
+  resolveRelativePath,
+  splitHrefHash,
+} from "./link-resolver.js";
 import {
   buildUrl,
   currentNavIndex,
+  getHashFromUrl,
   getPathFromUrl,
   nextNavIndex,
   seedNavCounter,
@@ -136,7 +143,9 @@ async function init() {
 
     const initial = chooseInitialFile(tree);
     if (initial) {
-      await navigateTo(initial, { history: "replace" });
+      // URL に `#見出し` があれば scroll 対象として渡す（deep-link 復元）
+      const hash = getHashFromUrl();
+      await navigateTo(initial, { history: "replace", hash });
     } else {
       els.preview.innerHTML =
         '<p class="placeholder">このディレクトリには Markdown ファイルが見つかりませんでした。</p>';
@@ -274,7 +283,7 @@ function applyFile(data) {
  *
  * loadFile が失敗した場合は URL も history も触らず status 表示のみ。
  */
-async function navigateTo(path, { history: mode = "push" } = {}) {
+async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
   if (mode === "push" && !confirmLeaveEdit()) return;
 
   let data;
@@ -286,15 +295,16 @@ async function navigateTo(path, { history: mode = "push" } = {}) {
   }
 
   applyFile(data);
+  scrollIntoHash(hash);
 
   if (mode === "none") {
     setStatus("ok", `${data.path} を表示`);
     return;
   }
 
-  const url = buildUrl(data.path);
+  const url = buildUrl(data.path, hash);
   const navIndex = mode === "push" ? nextNavIndex() : currentNavIndex();
-  const entry = { path: data.path, navIndex };
+  const entry = { path: data.path, hash, navIndex };
 
   if (mode === "push") {
     window.history.pushState(entry, "", url);
@@ -303,6 +313,27 @@ async function navigateTo(path, { history: mode = "push" } = {}) {
   }
 
   setStatus("ok", `${data.path} を表示`);
+}
+
+/**
+ * hash が指定されていれば、次フレームで該当 ID 要素までスクロールする。
+ *
+ * - hash が null / 空文字なら何もしない
+ * - 編集モード中は preview が隠れているケースがあるため skip（URL/state は維持）
+ * - Mermaid 図ありの md では描画完了前なので位置がズレる可能性あり（将来 Issue）
+ * - behavior: "auto" (instant) を使う：ファイル切替直後は `renderCurrentFile` で
+ *   scrollTop が一旦 0 にリセットされており、そこから "smooth" でスクロールすると
+ *   「一瞬先頭が見えてから見出しまで滑る」という 2 段階の挙動になり違和感が出る。
+ *   即時ジャンプなら初期位置の見え時間が最小化される。
+ */
+function scrollIntoHash(hash) {
+  if (!hash || state.editing) return;
+  requestAnimationFrame(() => {
+    const target = document.getElementById(hash);
+    if (target) {
+      target.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+  });
 }
 
 /**
@@ -323,6 +354,7 @@ function wireHistoryNavigation() {
 
     const target = ev.state ?? {
       path: getPathFromUrl(),
+      hash: getHashFromUrl(),
       navIndex: currentNavIndex(),
     };
 
@@ -352,6 +384,7 @@ function wireHistoryNavigation() {
     try {
       const data = await loadFile(target.path);
       applyFile(data);
+      scrollIntoHash(target.hash);
       setStatus("ok", `${data.path} を表示`);
     } catch (err) {
       setStatus("error", `${target.path} を開けませんでした: ${err.message}`);
@@ -704,7 +737,9 @@ function wireLinkNavigation() {
 function navigateInternal(href) {
   if (!state.currentPath) return;
 
-  const resolved = resolveRelativePath(state.currentPath, href);
+  // `[X](other.md#見出し)` の hash 部分を分離して navigateTo に渡す
+  const { path: hrefPath, hash } = splitHrefHash(href);
+  const resolved = resolveRelativePath(state.currentPath, hrefPath);
   if (!resolved) {
     setStatus("error", `ファイルが見つかりません: ${href}`);
     return;
@@ -721,7 +756,7 @@ function navigateInternal(href) {
     return;
   }
 
-  navigateTo(hit, { history: "push" }).catch((err) => setStatus("error", err.message));
+  navigateTo(hit, { history: "push", hash }).catch((err) => setStatus("error", err.message));
 }
 
 function showExternalLinkBanner(url) {

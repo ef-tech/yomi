@@ -10,6 +10,35 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-13
+
+URL `?path=foo.md#見出し` 形式の deep-link でスクロール復元するようになる。リンクを共有すれば相手の画面で同じ見出しが見える。
+
+### Fixed
+
+- **アンカー deep-link が効かない問題 (Issue #15)**: v0.5.0 で URL クエリ `?path=foo.md` を導入したとき、`#見出し` 部分が捨てられスクロールしない問題を修正。
+  - URL `?path=foo.md#見出し` を直接開くと該当見出しまでスクロールする
+  - プレビュー内リンク `[X](other.md#見出し)` クリックでも遷移先ファイルの見出しまでスクロール
+  - ブラウザの戻る / 進むでもスクロール位置を含めて復元（`history.state` に hash を保存）
+  - 編集モード中は scroll を skip（URL の hash は維持）
+
+### Added
+
+- `splitHrefHash(href)` 純関数を `public/link-resolver.js` に追加: href を `{ path, hash }` に分解。URL エンコードされた日本語見出しも `decodeURIComponent` で復号、さらに NFC 正規化で `getElementById` のミスマッチを防ぐ
+- `getHashFromUrl(location)` と `buildUrl(path, hash)` を `public/navigation.js` に追加: URL の hash 部分を安全に取得・構築（取得時に NFC 正規化）
+- `scrollIntoHash(hash)` を `public/app.js` に追加: `requestAnimationFrame` 経由で `document.getElementById(hash).scrollIntoView({ behavior: "auto", block: "start" })`（ファイル切替直後は instant スクロールで違和感を回避）
+
+### Tests
+
+- `tests/util/link-resolver.test.ts`: `splitHrefHash` の境界テスト 10 ケース追加（NFC 正規化と空文字含む、合計 38 cases）
+- `tests/util/navigation.test.ts`: `buildUrl(path, hash)` / `getHashFromUrl` の境界テスト 5 ケース追加（NFD 入力の NFC 復号含む、合計 18 cases）
+
+### Known Limitations
+
+- Mermaid 図ありの md では描画完了前に scrollIntoView するため、位置がズレる可能性あり（将来 Issue で対応）
+- TOC クリック時の URL 同期、`IntersectionObserver` スクロールでの URL 更新は別 Issue として扱う
+- `navigateTo` 進行中に popstate が同期発火するレース、対象 ID 要素が見つからないケースの通知などは別 Issue で対応予定
+
 ## [0.5.0] - 2026-05-12
 
 ブラウザの戻る / 進むがプレビュー内リンクと左ツリー選択にちゃんと効くようになる。URL `?path=foo.md` で「いま読んでるファイル」が表現されるようになり、リロードで復元、URL コピペで再現できる。

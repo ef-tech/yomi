@@ -3,6 +3,7 @@ import {
   __resetNavCounterForTest,
   buildUrl,
   currentNavIndex,
+  getHashFromUrl,
   getPathFromUrl,
   nextNavIndex,
   seedNavCounter,
@@ -42,6 +43,46 @@ describe("buildUrl", () => {
   test("path が null / 空なら pathname を返す", () => {
     expect(buildUrl(null)).toBe(PATHNAME);
     expect(buildUrl("")).toBe(PATHNAME);
+  });
+
+  test("hash を付ければ末尾に encodeURIComponent されて付く", () => {
+    expect(buildUrl("foo.md", "section-1")).toBe("?path=foo.md#section-1");
+    expect(buildUrl("foo.md", "削除戦略")).toBe(
+      "?path=foo.md#%E5%89%8A%E9%99%A4%E6%88%A6%E7%95%A5",
+    );
+  });
+
+  test("hash が null / 空文字 / undefined は付かない", () => {
+    expect(buildUrl("foo.md", null)).toBe("?path=foo.md");
+    expect(buildUrl("foo.md", "")).toBe("?path=foo.md");
+    expect(buildUrl("foo.md", undefined)).toBe("?path=foo.md");
+  });
+
+  test("path なし + hash あり: pathname + #hash", () => {
+    expect(buildUrl(null, "sec")).toBe(`${PATHNAME}#sec`);
+  });
+});
+
+describe("getHashFromUrl", () => {
+  test("location.hash から見出し ID を取得 (decodeURIComponent 込み)", () => {
+    expect(getHashFromUrl({ hash: "#%E5%89%8A%E9%99%A4%E6%88%A6%E7%95%A5" })).toBe("削除戦略");
+    expect(getHashFromUrl({ hash: "#section-1" })).toBe("section-1");
+  });
+
+  test("hash が空 / # のみ / 未定義なら null", () => {
+    expect(getHashFromUrl({ hash: "" })).toBeNull();
+    expect(getHashFromUrl({ hash: "#" })).toBeNull();
+    expect(getHashFromUrl(null)).toBeNull();
+  });
+
+  test("不正な URL エンコードは生文字列を返す", () => {
+    expect(getHashFromUrl({ hash: "#%E5%89" })).toBe("%E5%89");
+  });
+
+  test("NFD で encode された hash は NFC に正規化される", () => {
+    // 'が' の NFD = か (U+304B) + 濁点 (U+3099)
+    // URL エンコード: %E3%81%8B%E3%82%99
+    expect(getHashFromUrl({ hash: "#%E3%81%8B%E3%82%99" })).toBe("が");
   });
 });
 

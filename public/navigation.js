@@ -16,12 +16,42 @@ export function getPathFromUrl(location) {
   return new URLSearchParams(loc.search).get(PARAM);
 }
 
-export function buildUrl(path) {
+/**
+ * URL の hash (location.hash) から見出し ID を取得する。
+ * 戻り値は先頭の "#" を除き decodeURIComponent 済みの文字列、空なら null。
+ *
+ * 例: location.hash = "#%E5%89%8A%E9%99%A4%E6%88%A6%E7%95%A5"
+ *     -> "削除戦略"
+ */
+export function getHashFromUrl(location) {
+  const loc = location ?? (typeof window !== "undefined" ? window.location : null);
+  if (!loc || typeof loc.hash !== "string" || loc.hash.length <= 1) return null;
+  const raw = loc.hash.slice(1);
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    decoded = raw;
+  }
+  // NFC 正規化: marked の slugger 出力 (NFC) と揃え、getElementById のミスマッチを防ぐ
+  try {
+    return decoded.normalize("NFC");
+  } catch {
+    return decoded;
+  }
+}
+
+export function buildUrl(path, hash) {
   const params = new URLSearchParams();
   if (path) params.set(PARAM, path);
   const search = params.toString();
-  if (search) return `?${search}`;
-  return typeof window !== "undefined" ? window.location.pathname : "/";
+  const base = search
+    ? `?${search}`
+    : typeof window !== "undefined"
+      ? window.location.pathname
+      : "/";
+  if (!hash) return base;
+  return `${base}#${encodeURIComponent(hash)}`;
 }
 
 let navCounter = 0;

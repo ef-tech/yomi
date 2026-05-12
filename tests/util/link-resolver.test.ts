@@ -4,6 +4,7 @@ import {
   isExternalUrl,
   isJavascriptUrl,
   resolveRelativePath,
+  splitHrefHash,
 } from "../../public/link-resolver.js";
 
 describe("isAnchor", () => {
@@ -139,5 +140,65 @@ describe("resolveRelativePath", () => {
 
   test("連続スラッシュは空セグメントとして無視", () => {
     expect(resolveRelativePath("docs/guide.md", "sub//foo.md")).toBe("docs/sub/foo.md");
+  });
+});
+
+describe("splitHrefHash", () => {
+  test("hash なし: path のみ返す", () => {
+    expect(splitHrefHash("foo.md")).toEqual({ path: "foo.md", hash: null });
+    expect(splitHrefHash("../api.md")).toEqual({ path: "../api.md", hash: null });
+    expect(splitHrefHash("./sub/foo.md")).toEqual({ path: "./sub/foo.md", hash: null });
+  });
+
+  test("hash あり: path と hash に分解する", () => {
+    expect(splitHrefHash("foo.md#sec1")).toEqual({ path: "foo.md", hash: "sec1" });
+    expect(splitHrefHash("../api.md#endpoints")).toEqual({
+      path: "../api.md",
+      hash: "endpoints",
+    });
+  });
+
+  test("アンカー単独: path は空文字、hash のみ", () => {
+    expect(splitHrefHash("#sec1")).toEqual({ path: "", hash: "sec1" });
+    expect(splitHrefHash("#見出し")).toEqual({ path: "", hash: "見出し" });
+  });
+
+  test("URL エンコードされた日本語 hash は decode される", () => {
+    expect(splitHrefHash("database.md#%E5%89%8A%E9%99%A4%E6%88%A6%E7%95%A5")).toEqual({
+      path: "database.md",
+      hash: "削除戦略",
+    });
+  });
+
+  test("空文字 hash (`foo.md#`) は hash: null として扱う", () => {
+    expect(splitHrefHash("foo.md#")).toEqual({ path: "foo.md", hash: null });
+  });
+
+  test("複数 # は最初の # で分割 (それ以降は hash に含む)", () => {
+    expect(splitHrefHash("foo.md#a#b")).toEqual({ path: "foo.md", hash: "a#b" });
+  });
+
+  test("string でない入力は空のオブジェクト", () => {
+    // @ts-expect-error 非 string を渡して空が返ることを確認
+    expect(splitHrefHash(null)).toEqual({ path: "", hash: null });
+    // @ts-expect-error
+    expect(splitHrefHash(undefined)).toEqual({ path: "", hash: null });
+  });
+
+  test("不正な URL エンコードはそのまま使う", () => {
+    expect(splitHrefHash("foo.md#%E5%89")).toEqual({ path: "foo.md", hash: "%E5%89" });
+  });
+
+  test("空文字は path も hash も空", () => {
+    expect(splitHrefHash("")).toEqual({ path: "", hash: null });
+  });
+
+  test("hash は NFC に正規化される (NFD 入力でも NFC で返る)", () => {
+    // 'が' の NFC (U+304C) と NFD (U+304B U+3099) は同じ文字列に正規化される
+    const nfd = "が"; // か + 濁点
+    const result = splitHrefHash(`foo.md#${nfd}`);
+    expect(result.path).toBe("foo.md");
+    expect(result.hash).toBe("が"); // NFC
+    expect(result.hash).toBe("が");
   });
 });

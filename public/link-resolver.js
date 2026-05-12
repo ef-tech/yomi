@@ -30,6 +30,46 @@ export function isJavascriptUrl(href) {
 }
 
 /**
+ * href から `#hash` 部分を分離する純関数。
+ *
+ * - "other.md#sec1"  -> { path: "other.md", hash: "sec1" }
+ * - "../api.md"      -> { path: "../api.md", hash: null }
+ * - "#sec1"          -> { path: "", hash: "sec1" }  (アンカー単独)
+ * - "foo%20bar.md#%E8%A6%8B%E5%87%BA%E3%81%97"
+ *                    -> { path: "foo bar.md", hash: "見出し" }
+ *
+ * クエリ (`?...`) は path 側に残す。yomi の resolveRelativePath はクエリも
+ * 切り落とすため、現状クエリ付き内部リンクは想定外。
+ */
+export function splitHrefHash(href) {
+  if (typeof href !== "string") return { path: "", hash: null };
+
+  const idx = href.indexOf("#");
+  if (idx === -1) return { path: href, hash: null };
+
+  const rawPath = href.slice(0, idx);
+  const rawHash = href.slice(idx + 1);
+
+  let hash = rawHash;
+  if (rawHash) {
+    try {
+      hash = decodeURIComponent(rawHash);
+    } catch {
+      // 不正なエンコードはそのまま使う
+    }
+    // NFC 正規化: marked の slugger は NFC 出力なので URL 側を揃える
+    // (macOS Finder 由来の NFD 入力等で getElementById がミスマッチするのを防ぐ)
+    try {
+      hash = hash.normalize("NFC");
+    } catch {
+      // normalize 不可な環境ではそのまま使う
+    }
+  }
+
+  return { path: rawPath, hash: hash || null };
+}
+
+/**
  * 現在のファイル path と相対 href から、リンク先の path を解決する。
  * POSIX 風の path 正規化 (`.`, `..` を解決)。
  *
