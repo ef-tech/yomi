@@ -109,6 +109,24 @@
             閉じる
           </button>
         </div>
+        <div
+          id="external-link-banner"
+          class="conflict-banner external-link-banner"
+          role="alertdialog"
+          aria-labelledby="external-link-title"
+          hidden
+        >
+          <span id="external-link-title" class="conflict-message">
+            外部 URL を開きますか?
+            <span id="external-link-url" class="external-link-url"></span>
+          </span>
+          <button type="button" id="external-link-cancel" class="conflict-action">
+            閉じる
+          </button>
+          <button type="button" id="external-link-open" class="conflict-action is-primary">
+            開く
+          </button>
+        </div>
         <div id="content-body" class="content-body" data-mode="preview">
           <pre id="source" class="source"></pre>
           <textarea

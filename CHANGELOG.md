@@ -10,6 +10,30 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-12
+
+プレビュー内のリンクが「ちゃんと使える」ようになる。md 内に書いた相対リンクで yomi 内をジャンプできて、外部 URL は警告つきで安全に開ける。`javascript:` リンクは無条件ブロックで信頼できない md の読み込みも安全に。
+
+### Added
+
+- **プレビュー内リンク遷移 (Issue #11)**: プレビューの `<a>` リンクをクリックした際の挙動を整備。
+  - 相対 md パス (`[X](other.md)` / `[Y](../bar.md)` / `[Z](sub/foo.md)`) は yomi 内で遷移 (404 にならない)
+  - 拡張子なしリンク (`[X](foo)`) は `foo.md` → `.markdown` → `.mdx` の順に fallback
+  - 外部 URL (`http(s)://`, `mailto:`, `tel:` 等) は inline 警告バナー → 「閉じる」/「開く」(`window.open` with `noopener,noreferrer`)
+  - 警告バナーは Esc キーで閉じる。デフォルトフォーカスは「閉じる」 (誤発火防止)
+  - `javascript:` スキームは難読化対策込み (`/^\s*javascript\s*:/i`) で **無条件ブロック**
+  - 編集モード中の内部リンクは `confirmLeaveEdit` で未保存変更を確認してから遷移
+  - アンカーリンク (`#fragment`) は既存の見出しジャンプ動作を維持
+
+### Internal
+
+- `public/link-resolver.js` (新規): `slugify` パターンと同じく純関数モジュール。`resolveRelativePath` / `isExternalUrl` / `isJavascriptUrl` / `isAnchor` を提供
+- `public/link-resolver.d.ts` (新規): TypeScript 用型情報。bun test から型安全に import 可能
+
+### Tests
+
+- `tests/util/link-resolver.test.ts` (新規, 28 cases): 純関数 4 つの境界条件を完全カバー (英数字 / 日本語 / 記号 / URL エンコード / フラグメント / クエリ / 絶対パス / null fallback)
+
 ## [0.3.0] - 2026-05-12
 
 長文 Markdown の読みやすさを底上げする目次 (TOC) パネルを追加。見出しからジャンプでき、スクロールに合わせて現在地もハイライトされるので、CHANGELOG / PR レビュー / 技術メモのような長い md でも「今どこ」を見失わない。

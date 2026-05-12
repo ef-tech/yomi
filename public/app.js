@@ -1,4 +1,5 @@
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+import { isAnchor, isExternalUrl, isJavascriptUrl, resolveRelativePath } from "./link-resolver.js";
 import { prefs } from "./prefs.js";
 import { buildTocTree } from "./toc.js";
 
@@ -25,6 +26,11 @@ const els = {
   tocList: document.getElementById("toc-list"),
   tocClose: document.getElementById("toc-close"),
   tocExpandToggle: document.getElementById("toc-expand-toggle"),
+  // 外部 URL 警告バナー
+  externalLinkBanner: document.getElementById("external-link-banner"),
+  externalLinkUrl: document.getElementById("external-link-url"),
+  externalLinkCancel: document.getElementById("external-link-cancel"),
+  externalLinkOpen: document.getElementById("external-link-open"),
 };
 
 const VIEW_MODES = ["preview", "split", "md"];
@@ -104,6 +110,7 @@ wireViewToggle();
 wireThemeToggle();
 wireEditActions();
 wireTocActions();
+wireLinkNavigation();
 wireKeyboard();
 wireBeforeUnload();
 init();
@@ -553,6 +560,85 @@ function forceOverwrite() {
   saveEdit({ force: true });
 }
 
+/* ===== リンクナビゲーション ===== */
+
+let pendingExternalUrl = null;
+
+function wireLinkNavigation() {
+  els.preview.addEventListener("click", (ev) => {
+    const a = ev.target.closest("a");
+    if (!a || !els.preview.contains(a)) return;
+    const href = a.getAttribute("href");
+    if (!href) return;
+
+    // ページ内アンカーは既存挙動 (見出しジャンプ) に任せる
+    if (isAnchor(href)) return;
+
+    ev.preventDefault();
+
+    if (isJavascriptUrl(href)) {
+      setStatus("error", "不正なリンクをブロックしました");
+      return;
+    }
+
+    if (isExternalUrl(href)) {
+      showExternalLinkBanner(href);
+      return;
+    }
+
+    navigateInternal(href);
+  });
+
+  els.externalLinkCancel.addEventListener("click", () => hideExternalLinkBanner());
+  els.externalLinkOpen.addEventListener("click", () => {
+    const url = pendingExternalUrl;
+    hideExternalLinkBanner();
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  });
+}
+
+function navigateInternal(href) {
+  if (!state.currentPath) return;
+  if (!confirmLeaveEdit()) return;
+
+  const resolved = resolveRelativePath(state.currentPath, href);
+  if (!resolved) {
+    setStatus("error", `ファイルが見つかりません: ${href}`);
+    return;
+  }
+
+  // 拡張子なし fallback: foo → foo.md → foo.markdown → foo.mdx
+  const candidates = state.fileButtons.has(resolved)
+    ? [resolved]
+    : [`${resolved}.md`, `${resolved}.markdown`, `${resolved}.mdx`];
+
+  const hit = candidates.find((c) => state.fileButtons.has(c));
+  if (!hit) {
+    setStatus("error", `ファイルが見つかりません: ${href}`);
+    return;
+  }
+
+  if (state.editing) exitEditMode();
+  selectFile(hit).catch((err) => setStatus("error", err.message));
+}
+
+function showExternalLinkBanner(url) {
+  pendingExternalUrl = url;
+  els.externalLinkUrl.textContent = url;
+  els.externalLinkUrl.title = url;
+  els.externalLinkBanner.hidden = false;
+  // 誤クリックで Enter 連打で開いてしまわないように、デフォルトは「閉じる」にフォーカス
+  setTimeout(() => els.externalLinkCancel.focus(), 0);
+}
+
+function hideExternalLinkBanner() {
+  pendingExternalUrl = null;
+  els.externalLinkBanner.hidden = true;
+  els.externalLinkUrl.textContent = "";
+}
+
 /* ===== TOC (目次) ===== */
 
 function wireTocActions() {
@@ -753,6 +839,14 @@ function wireKeyboard() {
     },
     { capture: true },
   );
+
+  // Esc で外部 URL バナーを閉じる
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (els.externalLinkBanner.hidden) return;
+    ev.preventDefault();
+    hideExternalLinkBanner();
+  });
 
   // textarea で Tab を押したら 2 スペース挿入
   els.editor.addEventListener("keydown", (ev) => {
