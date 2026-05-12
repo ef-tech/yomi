@@ -720,16 +720,8 @@ async function onTaskCheckboxToggle(ev) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    state.currentRaw = data.raw;
-    state.currentHtml = data.html;
-    state.currentSha = data.sha;
-    // preview / source を再描画 (チェック状態を含む全体を最新化)
-    els.preview.innerHTML = data.html;
-    els.source.textContent = data.raw;
-    if (state.viewMode !== "md") {
-      renderMermaid().catch(() => {});
-    }
-    wireTaskCheckboxes(); // 新しい DOM に再 attach
+    // applyFile 経由で再描画: state 更新 + DOM + TOC + チェックボックス再 attach を一括
+    applyFile(data);
     setStatus("ok", `${state.currentPath} を更新 (タスク${newChecked ? "ON" : "OFF"})`);
   } catch (err) {
     target.checked = !target.checked; // revert UI

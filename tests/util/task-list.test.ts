@@ -132,6 +132,40 @@ describe("toggleTaskInMarkdown", () => {
       newChecked: true,
     });
   });
+
+  test("ordered list `1.` / `2)` もタスクとして扱う (marked は ol checkbox も render する)", () => {
+    expect(toggleTaskInMarkdown("1. [ ] ordered", 0)).toEqual({
+      body: "1. [x] ordered",
+      newChecked: true,
+    });
+    expect(toggleTaskInMarkdown("2) [ ] paren", 0)).toEqual({
+      body: "2) [x] paren",
+      newChecked: true,
+    });
+  });
+
+  test("ordered と unordered が混在しても document order でカウント", () => {
+    const body = "1. [ ] ordered\n- [ ] unordered\n2. [ ] ordered2";
+    expect(toggleTaskInMarkdown(body, 1)).toEqual({
+      body: "1. [ ] ordered\n- [x] unordered\n2. [ ] ordered2",
+      newChecked: true,
+    });
+    expect(toggleTaskInMarkdown(body, 2)).toEqual({
+      body: "1. [ ] ordered\n- [ ] unordered\n2. [x] ordered2",
+      newChecked: true,
+    });
+  });
+
+  test("CRLF 改行でも toggle できる (Windows / 一部エディタ保存対応)", () => {
+    expect(toggleTaskInMarkdown("- [ ] foo\r\n- [ ] bar\r\n", 0)).toEqual({
+      body: "- [x] foo\r\n- [ ] bar\r\n",
+      newChecked: true,
+    });
+    expect(toggleTaskInMarkdown("- [ ] foo\r\n- [ ] bar\r\n", 1)).toEqual({
+      body: "- [ ] foo\r\n- [x] bar\r\n",
+      newChecked: true,
+    });
+  });
 });
 
 describe("countTasksInMarkdown", () => {
@@ -145,6 +179,10 @@ describe("countTasksInMarkdown", () => {
 
   test("複数タスク: 全部数える (チェック状態によらず)", () => {
     expect(countTasksInMarkdown("- [ ] a\n- [x] b\n- [X] c")).toBe(3);
+  });
+
+  test("ordered list / CRLF も数える", () => {
+    expect(countTasksInMarkdown("1. [ ] a\n- [x] b\r\n+ [ ] c\r\n")).toBe(3);
   });
 
   test("code fence 内は除外", () => {

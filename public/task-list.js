@@ -4,11 +4,14 @@
  * bun test からも import 可能 (.js モジュール)。
  */
 
-/** 行頭インデント + bullet + `[ ]` または `[x]` */
-const TASK_LINE_RE = /^(\s*[-*+]\s+)\[([ xX])\](.*)$/;
+/**
+ * 行頭インデント + bullet (unordered `-*+` または ordered `1.` / `1)`) + `[ ]` または `[x]`.
+ * 末尾 CR (`\r`) は別キャプチャで保持し、再構成時に CRLF 改行を保つ。
+ */
+const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])\](.*?)(\r?)$/;
 
 /** code fence の開始/終了マーカー (``` または ~~~) */
-const FENCE_RE = /^(\s*)(```+|~~~+)\s*(.*)?$/;
+const FENCE_RE = /^(\s*)(```+|~~~+)\s*(.*?)\r?$/;
 
 /**
  * body 内の N 番目 (0-indexed) のタスクリスト行をトグルする。
@@ -60,7 +63,8 @@ export function toggleTaskInMarkdown(body, index) {
     if (taskNo === index) {
       const checked = m[2].toLowerCase() === "x";
       newChecked = !checked;
-      lines[i] = `${m[1]}[${newChecked ? "x" : " "}]${m[3]}`;
+      // m[4] で末尾 CR (`\r`) を保持し CRLF 改行を維持
+      lines[i] = `${m[1]}[${newChecked ? "x" : " "}]${m[3]}${m[4]}`;
       return { body: lines.join("\n"), newChecked };
     }
     taskNo++;
