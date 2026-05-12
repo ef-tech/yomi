@@ -1,5 +1,12 @@
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 import { isAnchor, isExternalUrl, isJavascriptUrl, resolveRelativePath } from "./link-resolver.js";
+import {
+  buildUrl,
+  currentNavIndex,
+  getPathFromUrl,
+  nextNavIndex,
+  seedNavCounter,
+} from "./navigation.js";
 import { prefs } from "./prefs.js";
 import { buildTocTree } from "./toc.js";
 
@@ -113,10 +120,15 @@ wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
 wireBeforeUnload();
+wireHistoryNavigation();
 init();
 connectLiveReload();
 
 async function init() {
+  // リロード時に history.state.navIndex が残っていれば、それ以上の値で再開
+  // （forward 履歴に残る古い entry と衝突しないため）
+  seedNavCounter(window.history.state?.navIndex);
+
   try {
     const tree = await fetchJson("/api/tree");
     renderTree(tree);
@@ -124,7 +136,7 @@ async function init() {
 
     const initial = chooseInitialFile(tree);
     if (initial) {
-      await selectFile(initial);
+      await navigateTo(initial, { history: "replace" });
     } else {
       els.preview.innerHTML =
         '<p class="placeholder">このディレクトリには Markdown ファイルが見つかりませんでした。</p>';
@@ -198,8 +210,7 @@ function renderNode(node) {
   } else {
     state.fileButtons.set(node.path, button);
     button.addEventListener("click", () => {
-      if (!confirmLeaveEdit()) return;
-      selectFile(node.path).catch((err) => {
+      navigateTo(node.path, { history: "push" }).catch((err) => {
         setStatus("error", err.message);
       });
     });
@@ -214,8 +225,9 @@ function setDirOpen(button, ul, open) {
 }
 
 function chooseInitialFile(tree) {
-  if (state.currentPath && state.fileButtons.has(state.currentPath)) {
-    return state.currentPath;
+  const fromUrl = getPathFromUrl();
+  if (fromUrl && state.fileButtons.has(fromUrl)) {
+    return fromUrl;
   }
   return findFirstFile(tree);
 }
@@ -251,11 +263,96 @@ function applyFile(data) {
   refreshToc();
 }
 
-async function selectFile(path) {
-  const data = await loadFile(path);
+/**
+ * 全てのファイル遷移の起点。
+ *
+ * mode:
+ *   "push"    ユーザー操作によるファイル切替（tree クリック / リンククリック）。
+ *             history.pushState で履歴を積む
+ *   "replace" 初期化・URL からの復元。history.replaceState で履歴は増やさない
+ *   "none"    ライブリロード等、履歴も URL も触らない
+ *
+ * loadFile が失敗した場合は URL も history も触らず status 表示のみ。
+ */
+async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
+  if (mode === "push" && !confirmLeaveEdit()) return;
+
+  let data;
+  try {
+    data = await loadFile(path);
+  } catch (err) {
+    setStatus("error", `${path} を開けませんでした: ${err.message}`);
+    return;
+  }
+
   applyFile(data);
-  saveCurrentPath();
+
+  if (mode === "none") {
+    setStatus("ok", `${data.path} を表示`);
+    return;
+  }
+
+  const url = buildUrl(data.path, hash);
+  const navIndex = mode === "push" ? nextNavIndex() : currentNavIndex();
+  const entry = { path: data.path, hash, navIndex };
+
+  if (mode === "push") {
+    window.history.pushState(entry, "", url);
+  } else {
+    window.history.replaceState(entry, "", url);
+  }
+
   setStatus("ok", `${data.path} を表示`);
+}
+
+/**
+ * popstate（戻る/進む）に対応する。
+ *
+ * 編集モード中に popstate が発火し、未保存変更があれば確認ダイアログを出す。
+ * Cancel された場合は history.go(delta) で元のエントリにジャンプし戻す。
+ * その re-navigation も popstate を発火させるが、`pendingCancelRestore` フラグで
+ * 1 回だけ無視して二重 confirm ループを防ぐ。
+ */
+let pendingCancelRestore = false;
+function wireHistoryNavigation() {
+  window.addEventListener("popstate", async (ev) => {
+    if (pendingCancelRestore) {
+      pendingCancelRestore = false;
+      return;
+    }
+
+    const target = ev.state ?? {
+      path: getPathFromUrl(),
+      hash: null,
+      navIndex: currentNavIndex(),
+    };
+
+    if (state.editing) {
+      if (!confirmLeaveEdit()) {
+        // キャンセル: history.go(delta) で編集中のエントリへ戻す
+        // re-push しない（forward 履歴と scroll restoration を壊さないため）
+        const delta = currentNavIndex() - target.navIndex;
+        if (delta !== 0) {
+          pendingCancelRestore = true;
+          window.history.go(delta);
+        }
+        return;
+      }
+      exitEditMode();
+    }
+
+    // 到達先 navIndex まで進めておく。次の push は target.navIndex+1 から
+    seedNavCounter(target.navIndex);
+
+    if (!target.path) return;
+    try {
+      const data = await loadFile(target.path);
+      applyFile(data);
+      setStatus("ok", `${data.path} を表示`);
+    } catch (err) {
+      setStatus("error", `${target.path} を開けませんでした: ${err.message}`);
+    }
+  });
 }
 
 function renderCurrentFile() {
@@ -309,9 +406,6 @@ function restorePreferences() {
   const open = prefs.openDirs.load();
   if (open) state.openDirs = new Set([...open, ""]);
 
-  const cur = prefs.currentPath.load();
-  if (cur) state.currentPath = cur;
-
   const view = prefs.viewMode.load();
   if (view && VIEW_MODES.includes(view)) state.viewMode = view;
 
@@ -327,10 +421,6 @@ function restorePreferences() {
 
 function saveOpenDirs() {
   prefs.openDirs.save([...state.openDirs]);
-}
-
-function saveCurrentPath() {
-  if (state.currentPath) prefs.currentPath.save(state.currentPath);
 }
 
 function saveViewMode() {
@@ -609,7 +699,6 @@ function wireLinkNavigation() {
 
 function navigateInternal(href) {
   if (!state.currentPath) return;
-  if (!confirmLeaveEdit()) return;
 
   const resolved = resolveRelativePath(state.currentPath, href);
   if (!resolved) {
@@ -628,8 +717,7 @@ function navigateInternal(href) {
     return;
   }
 
-  if (state.editing) exitEditMode();
-  selectFile(hit).catch((err) => setStatus("error", err.message));
+  navigateTo(hit, { history: "push" }).catch((err) => setStatus("error", err.message));
 }
 
 function showExternalLinkBanner(url) {
@@ -932,8 +1020,9 @@ async function handleLiveEvent(msg) {
       return;
     }
     try {
-      await selectFile(state.currentPath);
-      setStatus("ok", `${state.currentPath} を再読込`);
+      const data = await loadFile(state.currentPath);
+      applyFile(data);
+      setStatus("ok", `${data.path} を再読込`);
     } catch (err) {
       setStatus("error", err.message);
     }

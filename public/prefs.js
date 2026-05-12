@@ -41,7 +41,7 @@ export const prefs = {
     },
     stringify: (arr) => JSON.stringify(arr),
   }),
-  currentPath: makePref("yomi:currentPath:v1"),
+  // 旧 "yomi:currentPath:v1" は廃止: 現在ファイルは URL ?path= で表現する
   viewMode: makePref("yomi:viewMode:v1"),
   themeMode: makePref("yomi:themeMode:v1"),
   tocVisible: makePref("yomi:tocVisible:v1", {
