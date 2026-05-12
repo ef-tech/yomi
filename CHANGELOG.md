@@ -10,6 +10,28 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+プレビュー内の GFM タスクリストを編集モードに入らずクリックで ON/OFF できるようになる。チェック状態は md ファイルに書き戻されるので、TODO リストや手順書を「読みながら進捗管理」できる。
+
+### Added
+
+- **インタラクティブ タスクリスト (Issue #17)**: プレビュー内の `<input type="checkbox">` をクリック可能にし、対応する md ソース行の `- [ ]` ⇄ `- [x]` を反転して `POST /api/file` で保存。
+  - 既存の楽観的ロック (`baseSha`) を流用、競合は既存バナーで通知
+  - インデント済みネスト タスク、`*` / `+` 等の bullet マーカー、大文字 `[X]` にも対応
+  - code fence (```、~~~) 内のタスク風文字列は無視
+  - 編集モード中はクリック不可（編集モード優先）
+  - 連続クリック中は disabled で再入防止
+
+### Internal
+
+- `public/task-list.js` (新規): `toggleTaskInMarkdown(body, index)` と `countTasksInMarkdown(body)` の純関数モジュール
+- `public/task-list.d.ts` (新規): TypeScript 用型情報
+- `public/app.js` に `wireTaskCheckboxes` / `onTaskCheckboxToggle` を追加、`applyFile` / `enterEditMode` / `exitEditMode` から呼ぶ
+- `public/styles.css` でプレビュー内チェックボックスを `cursor: pointer`、`:disabled` 時は `default`
+
+### Tests
+
+- `tests/util/task-list.test.ts` (新規, 21 cases): `toggleTaskInMarkdown` / `countTasksInMarkdown` の境界条件をカバー（ネスト、bullet 違い、code fence 無視、空文字、非整数 index など）
+
 ## [0.5.1] - 2026-05-13
 
 URL `?path=foo.md#見出し` 形式の deep-link でスクロール復元するようになる。リンクを共有すれば相手の画面で同じ見出しが見える。
