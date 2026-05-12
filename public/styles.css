@@ -541,6 +541,15 @@ body {
   min-width: 0;
 }
 
+/* GFM タスクリストのチェックボックス (Issue #17): プレビュー内でクリック可能 */
+.preview input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.preview input[type="checkbox"]:disabled {
+  cursor: default;
+}
+
 .source,
 .editor {
   margin: 0;
