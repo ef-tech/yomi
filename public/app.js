@@ -330,6 +330,9 @@ function wireViewToggle() {
       const mode = btn.dataset.mode;
       if (!mode || !VIEW_MODES.includes(mode)) return;
       if (state.viewMode === mode) return;
+      // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
+      // (後から TOC を閉じても、ユーザの選択を尊重する)
+      state.tocPreviewOverride = false;
       applyViewMode(mode);
       saveViewMode();
       if (state.currentHtml && mode !== "md") {
@@ -459,8 +462,8 @@ function exitEditMode() {
   els.editBtn.title = "ブラウザ内で編集する";
   els.discardBtn.hidden = true;
   setDirty(false);
-  // TOC 復元 (編集前に開いていれば再表示)
-  els.tocBtn.disabled = false;
+  // TOC 復元 (編集前に開いていれば再表示)。currentPath がなければ disabled のまま
+  els.tocBtn.disabled = !state.currentPath;
   if (state.tocSuspended) {
     applyTocVisibility(true, { persist: false });
     state.tocSuspended = false;
@@ -585,16 +588,21 @@ function applyTocVisibility(visible, { persist = true } = {}) {
   els.tocPanel.hidden = !visible;
   els.tocBtn.setAttribute("aria-pressed", visible ? "true" : "false");
   if (persist) prefs.tocVisible.save(visible);
-  if (!visible && state.tocPreviewOverride) {
-    // 開いていた preview override を戻す (localStorage 永続化済みの viewMode に戻る)
+  // preview override は「ユーザが TOC を明示的に閉じた (persist=true)」時のみ戻す。
+  // persist=false の呼び出し (編集モード進入時の一時退避等) では override 状態を保持する。
+  if (!visible && persist && state.tocPreviewOverride) {
     const stored = prefs.viewMode.load();
     if (stored && VIEW_MODES.includes(stored)) {
       applyViewMode(stored);
     }
     state.tocPreviewOverride = false;
   }
-  if (visible) refreshToc();
-  else teardownTocObserver();
+  if (visible) {
+    refreshToc();
+  } else {
+    teardownTocObserver();
+    state.tocEntries.clear();
+  }
 }
 
 function updateExpandToggleUi() {
