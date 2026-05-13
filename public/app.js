@@ -1,3 +1,4 @@
+import DOMPurify from "https://cdn.jsdelivr.net/npm/dompurify@3/+esm";
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 import {
   isAnchor,
@@ -47,6 +48,31 @@ const els = {
   externalLinkCancel: document.getElementById("external-link-cancel"),
   externalLinkOpen: document.getElementById("external-link-open"),
 };
+
+/**
+ * DOMPurify による innerHTML サニタイズ設定 (Issue #21)。
+ *
+ * marked 出力の標準 HTML + GFM 拡張 (table / task list / code) + Mermaid 用
+ * `<pre class="mermaid">` を保持しつつ、悪意ある md に含まれ得る:
+ *   - <script> / <object> / <iframe> / <embed> / <frame> 系
+ *   - inline event handler (onerror / onload / onclick 等)
+ *   - <a href="javascript:..."> / <a href="vbscript:..."> 等の危険スキーム
+ *   - <svg> 内の <script> や <foreignObject> 経由の script
+ * を除去する。
+ *
+ * Mermaid 図は `<pre class="mermaid">` のテキストを mermaid.run() が後から
+ * SVG に変換する。Mermaid 側は securityLevel: "strict" で初期化されており、
+ * Mermaid 自身のサニタイズ層に依存する (DOMPurify はテキスト段階のみ通過)。
+ */
+const SANITIZE_CONFIG = {
+  USE_PROFILES: { html: true },
+  ADD_ATTR: ["target", "rel"],
+  // data-* 属性 (data-task-index 等) は DOMPurify デフォルトで保持
+};
+
+function sanitize(html) {
+  return DOMPurify.sanitize(html ?? "", SANITIZE_CONFIG);
+}
 
 const VIEW_MODES = ["preview", "split", "md"];
 const DEFAULT_VIEW_MODE = "preview";
@@ -258,7 +284,7 @@ async function loadFile(path) {
 function applyFile(data) {
   state.currentPath = data.path;
   state.currentRaw = data.raw;
-  state.currentHtml = data.html;
+  state.currentHtml = sanitize(data.html);
   state.currentSha = data.sha ?? null;
   els.currentPath.textContent = data.path;
   hideConflict();
@@ -645,12 +671,12 @@ async function saveEdit({ force = false } = {}) {
       body: JSON.stringify(payload),
     });
     state.currentRaw = data.raw;
-    state.currentHtml = data.html;
+    state.currentHtml = sanitize(data.html);
     state.currentSha = data.sha;
     setDirty(false);
     hideConflict();
     if (state.viewMode !== "md") {
-      els.preview.innerHTML = data.html;
+      els.preview.innerHTML = state.currentHtml;
       renderMermaid().catch(() => {});
     }
     els.source.textContent = data.raw;
@@ -753,7 +779,7 @@ function takeServerVersion() {
   if (!conflictServerSnapshot) return;
   const snap = conflictServerSnapshot;
   state.currentRaw = snap.raw ?? "";
-  state.currentHtml = snap.html ?? "";
+  state.currentHtml = sanitize(snap.html);
   state.currentSha = snap.sha ?? null;
   els.editor.value = state.currentRaw;
   setDirty(false);

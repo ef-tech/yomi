@@ -10,6 +10,16 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Security
+
+- **raw HTML / SVG-XSS 対策 (Issue #21)**: プレビュー preview への innerHTML 書き換え前に [DOMPurify](https://github.com/cure53/DOMPurify) (CDN ESM) で sanitize するように変更。
+  - `<script>` / `<object>` / `<iframe>` / `<embed>` 系を除去
+  - inline event handler (`onerror` / `onload` / `onclick` 等) を除去
+  - `<a href="javascript:...">` / `<a href="vbscript:...">` / `<svg>` 内の `<script>` を除去
+  - `<pre class="mermaid">` や GFM タスクリスト `<input type="checkbox">` は保持
+  - Mermaid 描画後の SVG は DOMPurify を通らないが、Mermaid 自身の `securityLevel: "strict"` に委任
+  - 対策箇所: `applyFile` / `saveEdit` / `takeServerVersion` で `state.currentHtml` 格納時に sanitize 済み
+
 ## [0.7.0] - 2026-05-13
 
 プレビュー内の画像 (相対パス) が表示できるようになる。md の隣に置いた `screenshot.png` や `../images/logo.svg` のような参照が、これまで 404 だったのが正しく表示される。
