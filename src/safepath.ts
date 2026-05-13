@@ -25,6 +25,11 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   if (!requested) {
     throw new UnsafePathError(requested, "path が空です");
   }
+  // NUL byte は Node の fs API で例外になり、その例外文字列がレスポンスに漏れる。
+  // ここで早期に reject して 400 で揃える
+  if (requested.includes("\0")) {
+    throw new UnsafePathError(requested, "path に NUL byte が含まれます");
+  }
   if (isAbsolute(requested)) {
     throw new UnsafePathError(requested, "絶対パスは指定できません");
   }
