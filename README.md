@@ -22,6 +22,7 @@
 - プレビュー内リンクの遷移対応：相対 md は yomi 内ジャンプ、外部 URL は警告付き
 - ブラウザの戻る/進むに対応、URL `?path=foo.md` でリロード復元・URL コピペで再現
 - GFM タスクリスト `- [ ] xxx` をプレビュー上でクリックして ON/OFF、md ファイルにも反映
+- Markdown 内の画像 `![](foo.png)` を相対パス解決して表示（同階層・`../`・サブディレクトリ対応）
 
 ## スクリーンショット
 
@@ -116,6 +117,21 @@ yomi [options]
 | 存在しない相対 path | `[X](missing.md)` | 「ファイルが見つかりません」を表示、遷移なし |
 
 外部 URL の警告バナーは Esc キーで閉じられ、新規タブは `noopener,noreferrer` で開かれる (tabnabbing 防止)。編集モード中の内部リンククリックは未保存変更がある場合に確認ダイアログが出る。
+
+### 画像のプレビュー
+
+Markdown 内の `![alt](foo.png)` の相対パスは、yomi が `GET /api/asset?path=...` 経由で配信してプレビューに表示します。md の隣に置いた `screenshot.png` や `../images/logo.svg` のような参照がそのまま見えます。
+
+| 種類 | 例 | 動作 |
+|---|---|---|
+| 相対パス画像 | `![X](foo.png)` `![Y](../img/logo.svg)` | カレント md のディレクトリから解決して表示 |
+| 外部 URL | `![X](https://example.com/x.png)` `![Y](data:image/png;base64,...)` | そのまま `<img src>` に渡す |
+| `javascript:` スキーム | `![X](javascript:...)` | **無条件ブロック**（空 src に書き換え） |
+| 画像以外の拡張子 | `![X](note.md)` | `/api/asset` 側で 400（読み取り拒否） |
+| ルート外への `..` / 絶対パス | `![X](/etc/passwd)` `![X](../../../etc/passwd)` | `resolveSafe` で 400 |
+| サイズ超過 (>50 MB) | 大きな画像 | 413 |
+
+対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`。SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制しています。弱 ETag (`W/"mtime-size"`) + `Cache-Control: no-cache` を返すので、ブラウザは `If-None-Match` 304 でキャッシュを使いつつ、画像を編集すれば次のリクエストで再フェッチされます。
 
 ### ナビゲーション / 履歴
 
