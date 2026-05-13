@@ -58,6 +58,11 @@ describe("resolveSafe", () => {
     await expect(resolveSafe(root, "sub/..")).rejects.toThrow(/\.\./);
   });
 
+  test("NUL byte 入りパスは拒否 (内部例外メッセージ漏れ防止)", async () => {
+    await expect(resolveSafe(root, "a\0.md")).rejects.toThrow(/NUL/);
+    await expect(resolveSafe(root, "sub/\0evil")).rejects.toThrow(/NUL/);
+  });
+
   test("UnsafePathError は requestedPath プロパティを持つ", async () => {
     try {
       await resolveSafe(root, "../x");

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderMarkdown } from "../src/renderer.ts";
+import { renderMarkdown, rewriteImageHref } from "../src/renderer.ts";
 
 describe("renderMarkdown", () => {
   test("見出しと段落をレンダリング (h1 に id 付与)", async () => {
@@ -86,5 +86,107 @@ describe("renderMarkdown", () => {
     const html = await renderMarkdown('```mermaid\ngraph TD\nA["<script>"]-->B\n```');
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
+  });
+
+  describe("画像 (Issue #19)", () => {
+    test("currentPath 未指定なら href はそのまま", async () => {
+      const html = await renderMarkdown("![alt](foo.png)");
+      expect(html).toContain('<img src="foo.png" alt="alt">');
+    });
+
+    test("相対 path は /api/asset?path=... に書き換え (同階層)", async () => {
+      const html = await renderMarkdown("![alt](foo.png)", { currentPath: "guide.md" });
+      expect(html).toContain('<img src="/api/asset?path=foo.png" alt="alt">');
+    });
+
+    test("相対 path は currentPath のディレクトリから解決", async () => {
+      const html = await renderMarkdown("![alt](foo.png)", { currentPath: "docs/guide.md" });
+      expect(html).toContain('<img src="/api/asset?path=docs/foo.png" alt="alt">');
+    });
+
+    test("`../` を含む相対 path も解決", async () => {
+      const html = await renderMarkdown("![alt](../images/foo.png)", {
+        currentPath: "docs/sub/guide.md",
+      });
+      expect(html).toContain('<img src="/api/asset?path=docs/images/foo.png" alt="alt">');
+    });
+
+    test("絶対 path (/foo.png) は root 起点で解決", async () => {
+      const html = await renderMarkdown("![alt](/static/foo.png)", { currentPath: "docs/a.md" });
+      expect(html).toContain('<img src="/api/asset?path=static/foo.png" alt="alt">');
+    });
+
+    test("http(s) URL はそのまま", async () => {
+      const html = await renderMarkdown("![alt](https://example.com/x.png)", {
+        currentPath: "a.md",
+      });
+      expect(html).toContain('<img src="https://example.com/x.png" alt="alt">');
+    });
+
+    test("data: URL はそのまま", async () => {
+      const html = await renderMarkdown("![alt](data:image/png;base64,AAA)", {
+        currentPath: "a.md",
+      });
+      expect(html).toContain('<img src="data:image/png;base64,AAA" alt="alt">');
+    });
+
+    test("javascript: スキームは空 href にされる", async () => {
+      const html = await renderMarkdown("![alt](javascript:alert(1))", { currentPath: "a.md" });
+      expect(html).toContain('<img src="" alt="alt">');
+      expect(html).not.toContain("javascript:");
+    });
+
+    test("画像拡張子でない場合は書き換えない", async () => {
+      const html = await renderMarkdown("![alt](foo.txt)", { currentPath: "a.md" });
+      expect(html).toContain('<img src="foo.txt" alt="alt">');
+      expect(html).not.toContain("/api/asset");
+    });
+
+    test("URL エンコード済みの相対 path もデコードして再構築", async () => {
+      const html = await renderMarkdown("![alt](hello%20world.png)", { currentPath: "a.md" });
+      expect(html).toContain('<img src="/api/asset?path=hello%20world.png" alt="alt">');
+    });
+
+    test("title 属性は保持", async () => {
+      const html = await renderMarkdown('![alt](foo.png "T")', { currentPath: "a.md" });
+      expect(html).toContain('<img src="/api/asset?path=foo.png" alt="alt" title="T">');
+    });
+
+    test("日本語ファイル名は URL エンコードされる", async () => {
+      const html = await renderMarkdown("![alt](画像.png)", { currentPath: "a.md" });
+      expect(html).toContain(`src="/api/asset?path=${encodeURIComponent("画像.png")}"`);
+    });
+
+    test("画像 href のクエリ/フラグメントは現状落ちる (仕様)", async () => {
+      // resolveRelativePath が末尾のクエリ/フラグメントを切り落とすため、
+      // /api/asset?path=... には反映されない。キャッシュバスター付き画像が必要なら
+      // 別途設計が必要 (現状はサーバ側の no-cache + ETag で十分と判断)
+      const h1 = await renderMarkdown("![a](foo.png?v=1)", { currentPath: "a.md" });
+      expect(h1).toContain('src="/api/asset?path=foo.png"');
+      const h2 = await renderMarkdown("![a](foo.png#x)", { currentPath: "a.md" });
+      expect(h2).toContain('src="/api/asset?path=foo.png"');
+    });
+  });
+});
+
+describe("rewriteImageHref (unit)", () => {
+  test("currentPath 未指定なら何もしない", () => {
+    expect(rewriteImageHref("foo.png")).toBe("foo.png");
+  });
+
+  test("空文字は空文字", () => {
+    expect(rewriteImageHref("", "a.md")).toBe("");
+  });
+
+  test("外部 URL はそのまま", () => {
+    expect(rewriteImageHref("https://example.com/x.png", "a.md")).toBe("https://example.com/x.png");
+  });
+
+  test("javascript: は空", () => {
+    expect(rewriteImageHref("javascript:alert(1)", "a.md")).toBe("");
+  });
+
+  test("相対画像は /api/asset URL", () => {
+    expect(rewriteImageHref("foo.png", "docs/a.md")).toBe("/api/asset?path=docs/foo.png");
   });
 });

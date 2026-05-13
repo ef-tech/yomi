@@ -2,6 +2,9 @@
  * リンクの種類判定と相対パス解決の純関数群。
  * ブラウザから直接 import される (yomi はビルドステップなしの哲学)。
  * bun test からも import 可能 (.js モジュール)。
+ *
+ * サーバ側 (src/renderer.ts) からも import される共有モジュール。
+ * 純関数のみで、DOM や window / location には依存しないこと。
  */
 
 /** `#fragment` だけのリンク (ページ内アンカー)。`foo.md#bar` 等は false */

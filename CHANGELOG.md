@@ -10,6 +10,39 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-13
+
+プレビュー内の画像 (相対パス) が表示できるようになる。md の隣に置いた `screenshot.png` や `../images/logo.svg` のような参照が、これまで 404 だったのが正しく表示される。
+
+### Added
+
+- **プレビュー内画像配信 (Issue #19)**: Markdown の `![](foo.png)` の相対 src を、新エンドポイント `GET /api/asset?path=...` 経由で配信。
+  - 対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`
+  - `resolveSafe` で path traversal を遮断（絶対パス・`..`・root 外は 400）
+  - 画像以外の拡張子は 400
+  - SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制
+  - サイズ上限 50 MB を超える画像は 413
+  - 弱 ETag (`W/"mtime-size"`) + `Cache-Control: no-cache` で `If-None-Match` 304 をサポート（編集後の即時更新と再フェッチ抑制の両立）
+- **renderer の image トークン書き換え**: 外部 URL (`http(s)://`, `data:`) はそのまま、`javascript:` は空 src に、相対パスは `currentPath` のディレクトリから解決して `/api/asset?path=...` に変換
+
+### Internal
+
+- `src/util/image-ext.ts` (新規): 画像拡張子ホワイトリストと Content-Type マッピング
+- `src/renderer.ts`: `renderMarkdown(source, options?: { currentPath?: string })` にシグネチャ拡張、`public/link-resolver.js` の `resolveRelativePath` / `isExternalUrl` / `isJavascriptUrl` を再利用
+- `src/server.ts`: `handleFileRead` / `handleFileWrite` (競合時の HTML 再生成含む) で `renderMarkdown` に `currentPath` を渡す
+
+### Tests
+
+- `tests/util/image-ext.test.ts` (新規, 4 cases): 拡張子判定 / Content-Type
+- `tests/renderer.test.ts` (+13 cases): 画像 src の書き換え（同階層 / サブディレクトリ / `../` / 絶対 path / 外部 URL / data: / javascript: / 非画像 / URL エンコード / title 属性 / 日本語ファイル名 / クエリ・フラグメント仕様）と `rewriteImageHref` 単体
+- `tests/server.test.ts` (+16 cases): `/api/asset` の Content-Type / ETag / 304 / HEAD / SVG / 拡張子拒否 / path 未指定 / `..` / 絶対 path / 404 / 405 / If-None-Match 不一致 / ディレクトリ 400 / ETag 更新 / symlink / サイズ上限、`/api/file` の HTML 内 src 書き換え
+- `tests/safepath.test.ts` (+1 case): NUL byte 入り path の reject
+
+### Security
+
+- `resolveSafe` で path に NUL byte が含まれる場合を早期 reject（内部例外文字列の 500 漏洩を防止）
+- `/api/asset` の ETag 計算で `mtimeMs` が NaN になる環境（一部 NFS / Docker）でも ETag が衝突しないよう `Number.isFinite` でガード
+
 ## [0.6.0] - 2026-05-13
 
 プレビュー内の GFM タスクリストを編集モードに入らずクリックで ON/OFF できるようになる。チェック状態は md ファイルに書き戻されるので、TODO リストや手順書を「読みながら進捗管理」できる。
