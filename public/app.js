@@ -81,6 +81,12 @@ function sanitize(html) {
 const VIEW_MODES = ["preview", "split", "md"];
 const DEFAULT_VIEW_MODE = "preview";
 
+/**
+ * スマホ判定 (Issue #25)。767px 以下を sidebar overlay モードとする。
+ * 初期化順序の関係で wireSidebar より前に評価したいため、ここで宣言。
+ */
+const MOBILE_QUERY = window.matchMedia("(max-width: 767px)");
+
 const THEME_MODES = ["auto", "light", "dark"];
 const DEFAULT_THEME_MODE = "auto";
 
@@ -624,7 +630,7 @@ function wireCopyPath() {
   els.copyPathBtn.addEventListener("click", async () => {
     if (!state.currentPath) return;
     try {
-      await navigator.clipboard.writeText(state.currentPath);
+      await copyTextToClipboard(state.currentPath);
       flashCopied();
       setStatus("ok", `パスをコピー: ${state.currentPath}`);
     } catch (err) {
@@ -633,9 +639,44 @@ function wireCopyPath() {
   });
 }
 
-/* ===== Sidebar overlay (Issue #25, スマホ専用) ===== */
+/**
+ * クリップボードにテキストをコピーする。
+ *
+ * モダンブラウザでは `navigator.clipboard.writeText` を使うが、これは
+ * Secure Context (HTTPS / localhost) でのみ公開される。yomi は LAN 越しに
+ * HTTP で公開されるため (例: http://192.168.0.100:3944)、その経路では
+ * `navigator.clipboard` が undefined になる。
+ *
+ * フォールバックとして、非表示 textarea を作って select → execCommand("copy")
+ * を使う古典的手法を採用。`execCommand` は deprecated だが、現状すべての
+ * 主要ブラウザで動作する (HTTP context でも OK)。将来 execCommand が消えた
+ * 場合は、別途 modal でテキスト選択 UI を提供する形に切り替える。
+ */
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  ta.style.top = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } finally {
+    document.body.removeChild(ta);
+  }
+  if (!ok) throw new Error("execCommand copy が失敗しました");
+}
 
-const MOBILE_QUERY = window.matchMedia("(max-width: 767px)");
+/* ===== Sidebar overlay (Issue #25, スマホ専用) ===== */
 
 function wireSidebar() {
   els.menuBtn.addEventListener("click", () => {

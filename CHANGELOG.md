@@ -10,6 +10,15 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-14
+
+v0.8.0 のブラウザ QA で見つかった 2 件のバグ修正。
+
+### Fixed
+
+- **`Uncaught ReferenceError: Cannot access 'MOBILE_QUERY' before initialization`**: `wireSidebar()` 呼び出し時点で `const MOBILE_QUERY` が temporal dead zone にあり初期化前に参照していた問題。`MOBILE_QUERY` 宣言をファイル早期に移動して解消。
+- **LAN 越し HTTP アクセス時にパスコピーボタンが動かない問題**: `navigator.clipboard.writeText` は Secure Context (HTTPS / localhost) のみで公開されるため、`http://192.168.0.100:3944` のような LAN 越しアクセスでは undefined になっていた。`copyTextToClipboard()` ヘルパーで Secure Context の場合は modern API、それ以外は非表示 textarea + `document.execCommand("copy")` のフォールバックに切り替えるよう変更。これで実機 (iPhone / Android) からの LAN 越しアクセスでもコピーボタンが動作するようになる。
+
 ## [0.8.0] - 2026-05-14
 
 スマホ / タブレットでも実用的に使えるレスポンシブ対応を追加。プレビュー XSS の同オリジン script 実行リスクを DOMPurify で塞ぐ。右ペインのファイルパスをワンクリックでコピー可能に。
