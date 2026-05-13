@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
@@ -6,6 +6,7 @@ import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
+import { imageContentType, isImageExtension } from "./util/image-ext.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
@@ -66,6 +67,13 @@ export function createServer(config: ServerConfig): ServerHandle {
         if (req.method === "POST") {
           if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
           return handleFileWrite(config.rootDir, req, saveMark);
+        }
+        return new Response("Method Not Allowed", { status: 405 });
+      }
+
+      if (url.pathname === "/api/asset") {
+        if (req.method === "GET" || req.method === "HEAD") {
+          return handleAssetRead(config.rootDir, url.searchParams.get("path"), req);
         }
         return new Response("Method Not Allowed", { status: 405 });
       }
@@ -178,7 +186,7 @@ async function handleFileRead(rootDir: string, requested: string | null): Promis
     const safe = await resolveSafe(rootDir, requested);
     const buf = await readFile(safe.abs);
     const raw = buf.toString("utf-8");
-    const html = await renderMarkdown(raw);
+    const html = await renderMarkdown(raw, { currentPath: safe.rel });
     return Response.json({ path: safe.rel, raw, html, sha: sha256(buf) });
   } catch (err) {
     if (err instanceof UnsafePathError) {
@@ -261,7 +269,8 @@ async function handleFileWrite(
       }
     }
     if (currentSha !== baseSha) {
-      const currentHtml = currentRaw === null ? "" : await renderMarkdown(currentRaw);
+      const currentHtml =
+        currentRaw === null ? "" : await renderMarkdown(currentRaw, { currentPath: safe.rel });
       return Response.json(
         {
           error: "ファイルが他で更新されています",
@@ -285,6 +294,78 @@ async function handleFileWrite(
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }
 
-  const html = await renderMarkdown(body);
+  const html = await renderMarkdown(body, { currentPath: safe.rel });
   return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
+}
+
+/** /api/asset 配信サイズ上限 (50 MB)。DoS / 誤配信抑制のため。 */
+export const MAX_ASSET_BYTES = 50 * 1024 * 1024;
+
+async function handleAssetRead(
+  rootDir: string,
+  requested: string | null,
+  req: Request,
+): Promise<Response> {
+  if (!requested) {
+    return Response.json({ error: "path クエリが必要です" }, { status: 400 });
+  }
+  if (!isImageExtension(requested)) {
+    return Response.json({ error: "画像ファイル以外は読み取れません" }, { status: 400 });
+  }
+
+  let safe: { rel: string; abs: string };
+  try {
+    safe = await resolveSafe(rootDir, requested);
+  } catch (err) {
+    if (err instanceof UnsafePathError) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  let info: { size: number; mtimeMs: number };
+  try {
+    const st = await stat(safe.abs);
+    if (!st.isFile()) {
+      return Response.json({ error: "ファイルではありません" }, { status: 400 });
+    }
+    info = { size: st.size, mtimeMs: st.mtimeMs };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return Response.json({ error: `ファイルが見つかりません: ${requested}` }, { status: 404 });
+    }
+    return Response.json({ error: (err as Error).message }, { status: 500 });
+  }
+
+  if (info.size > MAX_ASSET_BYTES) {
+    return Response.json({ error: "画像サイズが大きすぎます" }, { status: 413 });
+  }
+
+  const contentType = imageContentType(safe.rel) ?? "application/octet-stream";
+  // mtime と size から弱 ETag を組み立てる (ファイル更新で値が変わる)。
+  // NFS / Docker の一部環境では mtimeMs が NaN を返すことがあるため、有限値のみ採用する
+  // (NaN.toString(16) === "NaN" となり全ファイルで ETag が衝突する不具合を回避)
+  const mtimeHex = Number.isFinite(info.mtimeMs) ? Math.floor(info.mtimeMs).toString(16) : "0";
+  const etag = `W/"${mtimeHex}-${info.size.toString(16)}"`;
+
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    "Cache-Control": "no-cache",
+    ETag: etag,
+    // MIME sniff 経由の XSS を抑制 (特に SVG)
+    "X-Content-Type-Options": "nosniff",
+    // <img src> から参照されたときに download にならないよう inline を明示
+    "Content-Disposition": "inline",
+  };
+
+  if (req.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers });
+  }
+
+  if (req.method === "HEAD") {
+    headers["Content-Length"] = String(info.size);
+    return new Response(null, { status: 200, headers });
+  }
+
+  return new Response(Bun.file(safe.abs), { status: 200, headers });
 }
