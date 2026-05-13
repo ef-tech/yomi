@@ -10,13 +10,27 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-14
+
+スマホ / タブレットでも実用的に使えるレスポンシブ対応を追加。プレビュー XSS の同オリジン script 実行リスクを DOMPurify で塞ぐ。右ペインのファイルパスをワンクリックでコピー可能に。
+
 ### Added
 
-- **パスコピーボタン (Issue #24)**: 右ペインヘッダーのファイルパス右隣に 📋 ボタンを追加。クリックで `state.currentPath` (root 起点の相対パス) を `navigator.clipboard.writeText` でコピー。成功時は 1.5 秒間アイコンが ✓ に切り替わり、status バーに通知。失敗時は status バーにエラー、アイコン即復帰。ファイル未選択時は disabled。
+- **レスポンシブ対応 (Issue #25)**: スマホ・タブレットでも見やすい UI に。
+  - **ブレイクポイント**: `≥ 1024px` デスクトップ (現行 2 ペイン固定) / `768〜1023px` タブレット (sidebar 幅縮小) / `< 768px` スマホ (1 ペイン + sidebar overlay drawer)
+  - **ハンバーガーボタン** (`☰`) を topbar に追加。タップで sidebar を overlay 表示、backdrop タップ / `Esc` / ファイル選択で自動 close
+  - **タップターゲット 44×44px 以上**: edit / discard / view-toggle / theme / TOC / copy / menu の全ボタンと tree-item を拡大
+  - **スマホでは split モードを非表示**: 狭くて使いにくいため `display: none` + `[data-mode="split"]` でも preview のみ表示
+  - **iOS Safari 自動ズーム回避**: editor の `font-size: 16px` を保証
+  - **TOC フルスクリーン modal**: スマホでは floating panel → 全画面 modal
+  - **テーブル・コードブロック横スクロール**: `overflow-x: auto` で長い表 / コードもはみ出さない
+  - **タスクリストのタップ拡大**: スマホで `transform: scale(1.3)`
+  - **`prefers-reduced-motion`** 配慮で sidebar transition を 0 に
+- **パスコピーボタン (Issue #24)**: 右ペインヘッダーのファイルパス右隣に 📋 ボタンを追加。クリックで `state.currentPath` (root 起点の相対パス) を `navigator.clipboard.writeText` でコピー。成功時は 1.5 秒間アイコンが ✓ に切り替わり、status バーに通知。ファイル未選択時は disabled。
 
 ### Security
 
-- **raw HTML / SVG-XSS 対策 (Issue #21)**: プレビュー preview への innerHTML 書き換え前に [DOMPurify](https://github.com/cure53/DOMPurify) (CDN ESM) で sanitize するように変更。
+- **raw HTML / SVG-XSS 対策 (Issue #21)**: プレビュー preview への innerHTML 書き換え前に [DOMPurify](https://github.com/cure53/DOMPurify) (CDN ESM, v3) で sanitize するように変更。
   - `<script>` / `<object>` / `<iframe>` / `<embed>` 系を除去
   - inline event handler (`onerror` / `onload` / `onclick` 等) を除去
   - `<a href="javascript:...">` / `<a href="vbscript:...">` / `<svg>` 内の `<script>` を除去
