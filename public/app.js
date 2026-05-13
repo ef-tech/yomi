@@ -20,6 +20,9 @@ import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 
 const els = {
+  sidebar: document.getElementById("sidebar"),
+  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
+  menuBtn: document.getElementById("menu-btn"),
   tree: document.getElementById("tree"),
   preview: document.getElementById("preview"),
   source: document.getElementById("source"),
@@ -152,6 +155,7 @@ wireViewToggle();
 wireThemeToggle();
 wireEditActions();
 wireCopyPath();
+wireSidebar();
 wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
@@ -326,6 +330,8 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
 
   applyFile(data);
   scrollIntoHash(hash);
+  // スマホ表示ではファイル選択後に sidebar overlay を自動で閉じる
+  if (mode === "push") closeSidebarIfMobile();
 
   if (mode === "none") {
     setStatus("ok", `${data.path} を表示`);
@@ -625,6 +631,40 @@ function wireCopyPath() {
       setStatus("error", `コピー失敗: ${err.message}`);
     }
   });
+}
+
+/* ===== Sidebar overlay (Issue #25, スマホ専用) ===== */
+
+const MOBILE_QUERY = window.matchMedia("(max-width: 767px)");
+
+function wireSidebar() {
+  els.menuBtn.addEventListener("click", () => {
+    const isOpen = els.sidebar.classList.contains("is-open");
+    setSidebarOpen(!isOpen);
+  });
+  els.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (!els.sidebar.classList.contains("is-open")) return;
+    // 外部 URL バナーが開いている時は banner 側の Esc ハンドラを優先
+    if (!els.externalLinkBanner.hidden) return;
+    setSidebarOpen(false);
+  });
+  // viewport がデスクトップ幅に戻ったら自動で閉じる (overlay 状態が残ると視覚的に変)
+  MOBILE_QUERY.addEventListener("change", (ev) => {
+    if (!ev.matches) setSidebarOpen(false);
+  });
+}
+
+function setSidebarOpen(open) {
+  els.sidebar.classList.toggle("is-open", open);
+  els.sidebarBackdrop.hidden = !open;
+  els.menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+/** スマホ表示でファイルを選んだら自動で sidebar を閉じる */
+function closeSidebarIfMobile() {
+  if (MOBILE_QUERY.matches) setSidebarOpen(false);
 }
 
 let copyResetTimer = null;

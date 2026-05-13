@@ -877,3 +877,201 @@ body {
 .markdown-body .frontmatter .fm-k {
   color: var(--text-muted);
 }
+
+/* ============================================================
+ * レスポンシブ対応 (Issue #25)
+ *
+ * ≥ 1024px : デスクトップ (現行 2 ペイン固定)
+ * 768〜1023px : タブレット (2 ペイン、sidebar 幅縮小)
+ * < 768px : スマホ (1 ペイン + sidebar overlay drawer)
+ * ============================================================ */
+
+/* ハンバーガーボタン (スマホ専用、PC では非表示) */
+.menu-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  font-size: 1.2rem;
+  line-height: 1;
+  min-width: 44px;
+  min-height: 44px;
+  display: none;
+}
+.menu-btn:hover {
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+/* sidebar overlay backdrop (スマホ専用) */
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 40;
+}
+.sidebar-backdrop[hidden] {
+  display: none;
+}
+
+/* ===== タブレット (768〜1023px) ===== */
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(200px, 240px) 1fr;
+  }
+  .content-header {
+    padding: 0.4rem 1rem;
+    gap: 0.6rem;
+  }
+  .preview {
+    padding-inline: max(1.5rem, calc((100% - 1024px) / 2));
+  }
+}
+
+/* ===== スマホ (<768px) ===== */
+@media (max-width: 767px) {
+  /* ハンバーガー表示 */
+  .menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* topbar をコンパクト化 */
+  .topbar {
+    padding: 0.4rem 0.6rem;
+    gap: 0.4rem;
+  }
+  .brand {
+    font-size: 0.95rem;
+  }
+  .status {
+    font-size: 0.7rem;
+  }
+  .theme-toggle-btn {
+    min-height: 44px;
+    padding: 0.4rem 0.6rem;
+  }
+  .toc-btn {
+    min-height: 44px;
+    padding: 0.5rem 0.7rem;
+  }
+
+  /* sidebar を overlay drawer に */
+  .layout {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(80vw, 320px);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 50;
+    box-shadow: var(--shadow);
+  }
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar {
+      transition: none;
+    }
+  }
+
+  /* tree-item タップ領域拡大 */
+  .tree-item {
+    min-height: 44px;
+    padding-block: 0.5rem;
+  }
+
+  /* content-header をコンパクト化 */
+  .content-header {
+    padding: 0.4rem 0.6rem;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+  }
+  .current-path {
+    font-size: 0.75rem;
+  }
+  .copy-path-btn {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 1rem;
+  }
+  .edit-btn,
+  .discard-btn {
+    min-height: 44px;
+    padding: 0.4rem 0.7rem;
+  }
+  .view-toggle-btn {
+    min-height: 44px;
+    padding: 0.4rem 0.6rem;
+  }
+  /* split は狭くて意味がないので非表示 */
+  .view-toggle-btn[data-mode="split"] {
+    display: none;
+  }
+  /* split モード時は preview と同じレイアウトに強制 */
+  .content-body[data-mode="split"] .source {
+    display: none;
+  }
+  .content-body[data-mode="split"] .preview {
+    display: block;
+  }
+
+  /* preview 余白を縮小 */
+  .preview {
+    padding-inline: 1rem;
+    padding-block: 1rem;
+  }
+
+  /* テーブル / pre は横スクロール許可 */
+  .markdown-body table {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .markdown-body pre {
+    overflow-x: auto;
+  }
+
+  /* preview 内チェックボックスのタップターゲット拡大 */
+  .preview input[type="checkbox"] {
+    transform: scale(1.3);
+    margin-right: 0.4em;
+  }
+
+  /* editor: iOS Safari 自動ズーム回避 (font-size >= 16px) */
+  .editor {
+    font-size: 16px;
+  }
+
+  /* TOC: フルスクリーン modal */
+  .toc-panel {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    z-index: 60;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* バナー: ボタン縦並び + width 100% */
+  .conflict-banner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+  }
+  .conflict-action {
+    min-height: 44px;
+  }
+}

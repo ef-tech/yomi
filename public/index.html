@@ -8,6 +8,14 @@
   </head>
   <body>
     <header class="topbar">
+      <button
+        type="button"
+        id="menu-btn"
+        class="menu-btn"
+        aria-label="ファイルツリーを開く"
+        aria-expanded="false"
+        title="ファイルツリー"
+      >☰</button>
       <h1 class="brand">yomi</h1>
       <div class="theme-toggle" role="group" aria-label="テーマ">
         <button
@@ -42,7 +50,8 @@
       <div class="status" id="status" aria-live="polite"></div>
     </header>
     <main class="layout">
-      <aside class="sidebar" aria-label="ファイルツリー">
+      <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+      <aside id="sidebar" class="sidebar" aria-label="ファイルツリー">
         <nav id="tree" class="tree" aria-busy="true">読み込み中…</nav>
       </aside>
       <section class="content">
