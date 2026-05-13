@@ -27,6 +27,7 @@ const els = {
   contentBody: document.getElementById("content-body"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
+  copyPathBtn: document.getElementById("copy-path-btn"),
   dirtyIndicator: document.getElementById("dirty-indicator"),
   editBtn: document.getElementById("edit-btn"),
   discardBtn: document.getElementById("discard-btn"),
@@ -150,6 +151,7 @@ initMermaid(state.themeMode);
 wireViewToggle();
 wireThemeToggle();
 wireEditActions();
+wireCopyPath();
 wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
@@ -603,6 +605,38 @@ function confirmDiscard() {
 function enableEditActions(enabled) {
   els.editBtn.disabled = !enabled;
   els.tocBtn.disabled = !enabled;
+  els.copyPathBtn.disabled = !enabled;
+}
+
+/* ===== パスコピー (Issue #24) ===== */
+
+const COPY_ICON = "📋";
+const COPY_ICON_DONE = "✓";
+const COPY_FEEDBACK_MS = 1500;
+
+function wireCopyPath() {
+  els.copyPathBtn.addEventListener("click", async () => {
+    if (!state.currentPath) return;
+    try {
+      await navigator.clipboard.writeText(state.currentPath);
+      flashCopied();
+      setStatus("ok", `パスをコピー: ${state.currentPath}`);
+    } catch (err) {
+      setStatus("error", `コピー失敗: ${err.message}`);
+    }
+  });
+}
+
+let copyResetTimer = null;
+function flashCopied() {
+  els.copyPathBtn.classList.add("is-copied");
+  els.copyPathBtn.textContent = COPY_ICON_DONE;
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+  copyResetTimer = setTimeout(() => {
+    els.copyPathBtn.classList.remove("is-copied");
+    els.copyPathBtn.textContent = COPY_ICON;
+    copyResetTimer = null;
+  }, COPY_FEEDBACK_MS);
 }
 
 function enterEditMode() {

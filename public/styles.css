@@ -230,6 +230,42 @@ body {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* ===== パスコピーボタン (Issue #24) ===== */
+.copy-path-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.copy-path-btn:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+.copy-path-btn:focus-visible {
+  outline: 2px solid var(--accent, #0969da);
+  outline-offset: 1px;
+}
+.copy-path-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.copy-path-btn.is-copied {
+  color: #1a7f37;
+  border-color: #1a7f3733;
+  background: #1a7f3711;
+}
+
 /* ===== 編集アクション ===== */
 .edit-actions {
   display: inline-flex;

@@ -10,6 +10,10 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added
+
+- **パスコピーボタン (Issue #24)**: 右ペインヘッダーのファイルパス右隣に 📋 ボタンを追加。クリックで `state.currentPath` (root 起点の相対パス) を `navigator.clipboard.writeText` でコピー。成功時は 1.5 秒間アイコンが ✓ に切り替わり、status バーに通知。失敗時は status バーにエラー、アイコン即復帰。ファイル未選択時は disabled。
+
 ### Security
 
 - **raw HTML / SVG-XSS 対策 (Issue #21)**: プレビュー preview への innerHTML 書き換え前に [DOMPurify](https://github.com/cure53/DOMPurify) (CDN ESM) で sanitize するように変更。
