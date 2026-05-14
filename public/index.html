@@ -48,7 +48,35 @@
         title="目次 (Ctrl/Cmd+Shift+O)"
       >📖 目次</button>
       <div class="status" id="status" aria-live="polite"></div>
+      <button
+        type="button"
+        id="overflow-btn"
+        class="overflow-btn"
+        aria-label="メニュー"
+        aria-expanded="false"
+        title="メニュー"
+      >⋮</button>
     </header>
+    <div id="overflow-menu" class="overflow-menu" role="menu" aria-label="メニュー" hidden>
+      <div class="overflow-section">
+        <div class="overflow-label">テーマ</div>
+        <div class="overflow-theme">
+          <button type="button" class="overflow-theme-btn" data-theme-mode="auto">自動</button>
+          <button type="button" class="overflow-theme-btn" data-theme-mode="light">ライト</button>
+          <button type="button" class="overflow-theme-btn" data-theme-mode="dark">ダーク</button>
+        </div>
+      </div>
+      <div class="overflow-section">
+        <div class="overflow-label">表示モード</div>
+        <div class="overflow-view">
+          <button type="button" class="overflow-view-btn" data-mode="preview">プレビュー</button>
+          <button type="button" class="overflow-view-btn" data-mode="md">MD</button>
+        </div>
+      </div>
+      <div class="overflow-section">
+        <button type="button" id="overflow-edit" class="overflow-action">✏️ 編集モード</button>
+      </div>
+    </div>
     <main class="layout">
       <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
       <aside id="sidebar" class="sidebar" aria-label="ファイルツリー">
@@ -56,15 +84,14 @@
       </aside>
       <section class="content">
         <div class="content-header">
-          <span id="current-path" class="current-path" aria-live="polite"></span>
           <button
             type="button"
-            id="copy-path-btn"
-            class="copy-path-btn"
-            title="パスをコピー"
-            aria-label="パスをコピー"
+            id="current-path"
+            class="current-path"
+            aria-label="表示中のファイルパス。タップでコピー"
+            title="タップでパスをコピー"
             disabled
-          >📋</button>
+          ></button>
           <span id="dirty-indicator" class="dirty-indicator" aria-live="polite" hidden>● 未保存</span>
           <div class="edit-actions">
             <button
@@ -173,6 +200,14 @@
               >▾ H4- 展開</button>
             </footer>
           </aside>
+          <button
+            type="button"
+            id="toc-fab"
+            class="toc-fab"
+            aria-label="目次"
+            title="目次"
+            disabled
+          >📖</button>
         </div>
       </section>
     </main>
