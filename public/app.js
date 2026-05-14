@@ -30,8 +30,15 @@ const els = {
   contentBody: document.getElementById("content-body"),
   status: document.getElementById("status"),
   currentPath: document.getElementById("current-path"),
-  copyPathBtn: document.getElementById("copy-path-btn"),
   dirtyIndicator: document.getElementById("dirty-indicator"),
+  // ⋮ overflow menu (Issue #30, スマホ専用)
+  overflowBtn: document.getElementById("overflow-btn"),
+  overflowMenu: document.getElementById("overflow-menu"),
+  overflowEdit: document.getElementById("overflow-edit"),
+  overflowThemeBtns: Array.from(document.querySelectorAll(".overflow-theme-btn")),
+  overflowViewBtns: Array.from(document.querySelectorAll(".overflow-view-btn")),
+  // FAB 目次 (Issue #30, スマホ専用)
+  tocFab: document.getElementById("toc-fab"),
   editBtn: document.getElementById("edit-btn"),
   discardBtn: document.getElementById("discard-btn"),
   conflictBanner: document.getElementById("conflict-banner"),
@@ -162,6 +169,10 @@ wireThemeToggle();
 wireEditActions();
 wireCopyPath();
 wireSidebar();
+wireOverflowMenu();
+wireTocFab();
+wireTopbarAutohide();
+wireSidebarSwipe();
 wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
@@ -474,11 +485,21 @@ function expandAncestors(path) {
   saveOpenDirs();
 }
 
+let statusToastTimer = null;
 function setStatus(kind, text) {
   els.status.textContent = text;
-  els.status.classList.remove("is-ok", "is-error");
+  els.status.classList.remove("is-ok", "is-error", "is-toast");
   if (kind === "ok") els.status.classList.add("is-ok");
   else if (kind === "error") els.status.classList.add("is-error");
+  // スマホでは toast 表示 (Issue #30): CSS animation 完了後に class を除去
+  if (MOBILE_QUERY.matches && text) {
+    els.status.classList.add("is-toast");
+    if (statusToastTimer) clearTimeout(statusToastTimer);
+    statusToastTimer = setTimeout(() => {
+      els.status.classList.remove("is-toast");
+      statusToastTimer = null;
+    }, 3000);
+  }
 }
 
 function restorePreferences() {
@@ -533,6 +554,11 @@ function applyViewMode(mode) {
     const active = btn.dataset.mode === mode;
     btn.setAttribute("aria-selected", active ? "true" : "false");
   }
+  // Issue #30: スマホ用 overflow menu 内の表示モードボタンも同期
+  for (const btn of els.overflowViewBtns) {
+    const active = btn.dataset.mode === mode;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
 }
 
 /* ===== テーマ切替 ===== */
@@ -561,6 +587,11 @@ function applyThemeMode(mode) {
     document.documentElement.setAttribute("data-theme", mode);
   }
   for (const btn of els.themeButtons) {
+    const active = btn.dataset.themeMode === mode;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  // Issue #30: スマホ用 overflow menu 内のテーマボタンも同期
+  for (const btn of els.overflowThemeBtns) {
     const active = btn.dataset.themeMode === mode;
     btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
@@ -617,17 +648,17 @@ function confirmDiscard() {
 function enableEditActions(enabled) {
   els.editBtn.disabled = !enabled;
   els.tocBtn.disabled = !enabled;
-  els.copyPathBtn.disabled = !enabled;
+  els.tocFab.disabled = !enabled;
+  els.currentPath.disabled = !enabled;
+  if (els.overflowEdit) els.overflowEdit.disabled = !enabled;
 }
 
-/* ===== パスコピー (Issue #24) ===== */
+/* ===== パスコピー (Issue #24, パス自体タップ — Issue #30) ===== */
 
-const COPY_ICON = "📋";
-const COPY_ICON_DONE = "✓";
 const COPY_FEEDBACK_MS = 1500;
 
 function wireCopyPath() {
-  els.copyPathBtn.addEventListener("click", async () => {
+  els.currentPath.addEventListener("click", async () => {
     if (!state.currentPath) return;
     try {
       await copyTextToClipboard(state.currentPath);
@@ -708,14 +739,170 @@ function closeSidebarIfMobile() {
   if (MOBILE_QUERY.matches) setSidebarOpen(false);
 }
 
+/* ===== ⋮ Overflow menu (Issue #30, スマホ専用) ===== */
+
+function wireOverflowMenu() {
+  els.overflowBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    setOverflowOpen(els.overflowMenu.hidden);
+  });
+  // 外クリックで閉じる
+  document.addEventListener("click", (ev) => {
+    if (els.overflowMenu.hidden) return;
+    if (els.overflowMenu.contains(ev.target)) return;
+    if (els.overflowBtn.contains(ev.target)) return;
+    setOverflowOpen(false);
+  });
+  // Esc で閉じる (外部 URL バナー優先は既存 keydown リスナーと衝突しないよう個別判定)
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (els.overflowMenu.hidden) return;
+    if (!els.externalLinkBanner.hidden) return;
+    setOverflowOpen(false);
+  });
+
+  // overflow-theme-btn → applyThemeMode (PC 側 wireThemeToggle と同じロジックを再利用)
+  for (const btn of els.overflowThemeBtns) {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.themeMode;
+      if (!mode || !THEME_MODES.includes(mode)) return;
+      if (state.themeMode === mode) return;
+      applyThemeMode(mode);
+      saveThemeMode();
+      initMermaid(mode);
+      if (state.currentHtml && state.viewMode !== "md") {
+        renderCurrentFile();
+      }
+    });
+  }
+
+  // overflow-view-btn → applyViewMode
+  for (const btn of els.overflowViewBtns) {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      if (!mode || !VIEW_MODES.includes(mode)) return;
+      if (state.viewMode === mode) return;
+      state.tocPreviewOverride = false;
+      applyViewMode(mode);
+      saveViewMode();
+      if (state.currentHtml && mode !== "md") {
+        renderMermaid().catch(() => {});
+      }
+    });
+  }
+
+  // overflow-edit → 編集モード toggle (既存 editBtn と同じ動作)
+  els.overflowEdit.addEventListener("click", () => {
+    setOverflowOpen(false);
+    if (state.editing) {
+      handleFinishEdit().catch((err) => setStatus("error", err.message));
+    } else {
+      enterEditMode();
+    }
+  });
+}
+
+function setOverflowOpen(open) {
+  els.overflowMenu.hidden = !open;
+  els.overflowBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+/* ===== FAB 目次 (Issue #30, スマホ専用) ===== */
+
+function wireTocFab() {
+  els.tocFab.addEventListener("click", () => {
+    if (state.editing) return;
+    toggleToc();
+  });
+}
+
+/* ===== sticky topbar 自動 hide/show on scroll (Issue #30, スマホ専用) ===== */
+
+const TOPBAR_HIDE_THRESHOLD = 5; // この px 以上下スクロールで hide
+const TOPBAR_TOP_GUARD = 30; // 上端 30px 以内では常に show
+
+function wireTopbarAutohide() {
+  const topbar = document.querySelector(".topbar");
+  if (!topbar) return;
+  const targets = [els.preview, els.source];
+  const lastY = new WeakMap();
+  const onScroll = (target) => {
+    if (!MOBILE_QUERY.matches) return;
+    const y = target.scrollTop;
+    const prev = lastY.get(target) ?? 0;
+    const dy = y - prev;
+    if (y < TOPBAR_TOP_GUARD) {
+      topbar.classList.remove("is-hidden");
+    } else if (dy > TOPBAR_HIDE_THRESHOLD) {
+      topbar.classList.add("is-hidden");
+      // overflow menu が開いていたら一緒に閉じる (見た目上違和感を避ける)
+      if (!els.overflowMenu.hidden) setOverflowOpen(false);
+    } else if (dy < -TOPBAR_HIDE_THRESHOLD) {
+      topbar.classList.remove("is-hidden");
+    }
+    lastY.set(target, y);
+  };
+  for (const t of targets) {
+    if (t) t.addEventListener("scroll", () => onScroll(t), { passive: true });
+  }
+}
+
+/* ===== 端スワイプで drawer 開閉 (Issue #30, スマホ専用) ===== */
+
+const SWIPE_EDGE_PX = 24;
+const SWIPE_MIN_DX = 60;
+const SWIPE_MAX_DY = 50;
+
+function wireSidebarSwipe() {
+  let startX = null;
+  let startY = null;
+  let startedFromEdge = false;
+  let startedInDrawer = false;
+
+  document.addEventListener(
+    "touchstart",
+    (ev) => {
+      if (!MOBILE_QUERY.matches) return;
+      if (ev.touches.length !== 1) return;
+      const t = ev.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      const open = els.sidebar.classList.contains("is-open");
+      startedFromEdge = !open && t.clientX <= SWIPE_EDGE_PX;
+      startedInDrawer = open && els.sidebar.contains(ev.target);
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchend",
+    (ev) => {
+      if (!MOBILE_QUERY.matches) return;
+      if (startX === null) return;
+      const t = ev.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = Math.abs(t.clientY - startY);
+      const fromEdge = startedFromEdge;
+      const inDrawer = startedInDrawer;
+      startX = startY = null;
+      startedFromEdge = startedInDrawer = false;
+      if (dy > SWIPE_MAX_DY) return;
+      if (fromEdge && dx > SWIPE_MIN_DX) {
+        setSidebarOpen(true);
+      } else if (inDrawer && dx < -SWIPE_MIN_DX) {
+        setSidebarOpen(false);
+      }
+    },
+    { passive: true },
+  );
+}
+
 let copyResetTimer = null;
 function flashCopied() {
-  els.copyPathBtn.classList.add("is-copied");
-  els.copyPathBtn.textContent = COPY_ICON_DONE;
+  els.currentPath.classList.add("is-copied");
   if (copyResetTimer) clearTimeout(copyResetTimer);
   copyResetTimer = setTimeout(() => {
-    els.copyPathBtn.classList.remove("is-copied");
-    els.copyPathBtn.textContent = COPY_ICON;
+    els.currentPath.classList.remove("is-copied");
     copyResetTimer = null;
   }, COPY_FEEDBACK_MS);
 }
@@ -729,12 +916,18 @@ function enterEditMode() {
   els.editBtn.setAttribute("aria-pressed", "true");
   els.editBtn.textContent = "保存して閉じる";
   els.editBtn.title = "保存して編集モードを終了 (Ctrl/Cmd+S でも保存可)";
+  // Issue #30: スマホ用 overflow menu の編集ボタンも同期
+  if (els.overflowEdit) {
+    els.overflowEdit.setAttribute("aria-pressed", "true");
+    els.overflowEdit.textContent = "💾 保存して閉じる";
+  }
   els.discardBtn.hidden = false;
   setDirty(false);
   // TOC を一時退避 (編集終了で復元)
   state.tocSuspended = state.tocVisible;
   if (state.tocVisible) applyTocVisibility(false, { persist: false });
   els.tocBtn.disabled = true;
+  els.tocFab.disabled = true;
   // 編集中はプレビューのチェックボックスを disabled に
   wireTaskCheckboxes();
   setTimeout(() => els.editor.focus(), 0);
@@ -747,10 +940,16 @@ function exitEditMode() {
   els.editBtn.setAttribute("aria-pressed", "false");
   els.editBtn.textContent = "編集";
   els.editBtn.title = "ブラウザ内で編集する";
+  // Issue #30: スマホ用 overflow menu の編集ボタンも同期
+  if (els.overflowEdit) {
+    els.overflowEdit.setAttribute("aria-pressed", "false");
+    els.overflowEdit.textContent = "✏️ 編集モード";
+  }
   els.discardBtn.hidden = true;
   setDirty(false);
   // TOC 復元 (編集前に開いていれば再表示)。currentPath がなければ disabled のまま
   els.tocBtn.disabled = !state.currentPath;
+  els.tocFab.disabled = !state.currentPath;
   if (state.tocSuspended) {
     applyTocVisibility(true, { persist: false });
     state.tocSuspended = false;

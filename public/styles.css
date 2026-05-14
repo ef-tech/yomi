@@ -228,6 +228,15 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* button 化してもブラウザデフォルトのスタイルを出さない (Issue #30, スマホで tap target に) */
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: default;
 }
 
 /* ===== パスコピーボタン (Issue #24) ===== */
@@ -931,7 +940,24 @@ body {
   }
 }
 
-/* ===== スマホ (<768px) ===== */
+/* ===== スマホ (<768px) — Issue #30 抜本リファクタ =====
+ *
+ * 目標: topbar を {☰ パス ⋮} の 3 要素のみに圧縮。
+ * テーマ・表示モード・編集モードは ⋮ overflow menu に格納、目次は FAB (右下) に独立。
+ * dirty / yomi ロゴ / 📋 コピーボタン / status 常時表示は隠す (status は toast 化)。
+ */
+
+/* PC では overflow-btn / overflow-menu / FAB を非表示 (スマホ専用 UI) */
+.overflow-btn {
+  display: none;
+}
+.overflow-menu[hidden] {
+  display: none;
+}
+.toc-fab {
+  display: none;
+}
+
 @media (max-width: 767px) {
   /* ハンバーガー表示 */
   .menu-btn {
@@ -940,27 +966,170 @@ body {
     justify-content: center;
   }
 
-  /* topbar をコンパクト化 */
+  /* === topbar: スマホでは {☰ ロゴ⊥隠 テーマ⊥隠 目次⊥隠 status⊥隠 ⋮} ===
+   * sticky で scroll-down 時に hide
+   */
   .topbar {
     padding: 0.4rem 0.6rem;
     gap: 0.4rem;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    transition: transform 0.2s ease;
   }
-  .brand {
-    font-size: 0.95rem;
+  .topbar.is-hidden {
+    transform: translateY(-100%);
   }
+  @media (prefers-reduced-motion: reduce) {
+    .topbar {
+      transition: none;
+    }
+  }
+  /* スマホで隠す要素 (overflow menu か FAB に移動) */
+  .brand,
+  .topbar > .theme-toggle,
+  .topbar > .toc-btn {
+    display: none;
+  }
+  /* status は toast 化: デフォルト非表示、 .is-toast クラスで一時表示 */
   .status {
-    font-size: 0.7rem;
+    display: none;
   }
-  .theme-toggle-btn {
-    min-height: 44px;
-    padding: 0.4rem 0.6rem;
+  .status.is-toast {
+    display: block;
+    position: fixed;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom, 0) + 1rem);
+    transform: translateX(-50%);
+    background: var(--text);
+    color: var(--bg);
+    padding: 0.5rem 1rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    z-index: 70;
+    max-width: calc(100vw - 2rem);
+    text-align: center;
+    box-shadow: var(--shadow);
+    animation: yomi-toast-fade 3s ease forwards;
+    margin: 0;
   }
-  .toc-btn {
-    min-height: 44px;
-    padding: 0.5rem 0.7rem;
+  .status.is-toast.is-error {
+    background: #cf222e;
+    color: #fff;
+  }
+  .status.is-toast.is-ok {
+    background: #1a7f37;
+    color: #fff;
   }
 
-  /* sidebar を overlay drawer に */
+  /* ⋮ overflow ボタン */
+  .overflow-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    font-size: 1.4rem;
+    line-height: 1;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: auto;
+  }
+  .overflow-btn:hover {
+    background: var(--bg);
+    border-color: var(--border);
+  }
+  .overflow-btn[aria-expanded="true"] {
+    background: var(--selected-bg);
+    color: var(--selected-text);
+  }
+
+  /* overflow menu (popover) */
+  .overflow-menu {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0) + 3.2rem);
+    right: 0.5rem;
+    width: min(80vw, 280px);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 0.5rem 0;
+    z-index: 55;
+  }
+  .overflow-section {
+    padding: 0.4rem 0.8rem;
+  }
+  .overflow-section + .overflow-section {
+    border-top: 1px solid var(--border);
+  }
+  .overflow-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+  }
+  .overflow-theme,
+  .overflow-view {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-subtle);
+  }
+  .overflow-theme-btn,
+  .overflow-view-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+    border-left: 1px solid var(--border);
+    min-height: 44px;
+  }
+  .overflow-theme-btn:first-child,
+  .overflow-view-btn:first-child {
+    border-left: 0;
+  }
+  .overflow-theme-btn[aria-pressed="true"],
+  .overflow-view-btn[aria-pressed="true"] {
+    background: var(--selected-bg);
+    color: var(--selected-text);
+    font-weight: 600;
+  }
+  .overflow-action {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 8px;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    min-height: 44px;
+  }
+  .overflow-action[aria-pressed="true"] {
+    background: var(--selected-bg);
+    color: var(--selected-text);
+    border-color: var(--selected-text);
+    font-weight: 600;
+  }
+  .overflow-action:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  /* === sidebar を overlay drawer に === */
   .layout {
     grid-template-columns: 1fr;
     position: relative;
@@ -991,34 +1160,72 @@ body {
     padding-block: 0.5rem;
   }
 
-  /* content-header をコンパクト化 */
+  /* === content-header: パス (tap to copy) のみ === */
   .content-header {
     padding: 0.4rem 0.6rem;
     gap: 0.4rem;
     font-size: 0.8rem;
   }
   .current-path {
-    font-size: 0.75rem;
-  }
-  .copy-path-btn {
-    min-width: 44px;
+    font-size: 0.8rem;
+    /* button にしたので transparent 化 */
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px;
     min-height: 44px;
-    font-size: 1rem;
   }
-  .edit-btn,
-  .discard-btn {
-    min-height: 44px;
-    padding: 0.4rem 0.7rem;
+  .current-path:hover:not(:disabled) {
+    background: var(--bg);
+    border-color: var(--border);
   }
-  .view-toggle-btn {
-    min-height: 44px;
-    padding: 0.4rem 0.6rem;
+  .current-path:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
-  /* split は狭くて意味がないので非表示 */
-  .view-toggle-btn[data-mode="split"] {
+  .current-path.is-copied {
+    background: rgba(26, 127, 55, 0.12);
+    border-color: rgba(26, 127, 55, 0.4);
+  }
+  /* スマホでは dirty / 編集 / view-toggle はすべて overflow menu に移動するので非表示 */
+  .content-header > .dirty-indicator,
+  .content-header > .edit-actions,
+  .content-header > .view-toggle {
     display: none;
   }
-  /* split モード時は preview と同じレイアウトに強制 */
+
+  /* === FAB (右下、目次トリガー) === */
+  .toc-fab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: 1rem;
+    bottom: calc(env(safe-area-inset-bottom, 0) + 1rem);
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1.5rem;
+    box-shadow: var(--shadow);
+    z-index: 35;
+  }
+  .toc-fab:hover {
+    background: var(--bg-emphasis);
+  }
+  .toc-fab:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  /* split モード時は preview に強制 */
   .content-body[data-mode="split"] .source {
     display: none;
   }
@@ -1073,5 +1280,22 @@ body {
   }
   .conflict-action {
     min-height: 44px;
+  }
+}
+
+/* toast の fade out アニメーション (スマホのみ使用) */
+@keyframes yomi-toast-fade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0.5rem);
+  }
+  10%,
+  80% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 0.5rem);
   }
 }
