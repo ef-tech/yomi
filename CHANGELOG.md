@@ -10,6 +10,42 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-14
+
+スマホ UI を抜本リファクタ。topbar に詰まっていた **9 要素を 3 要素 + FAB に削減**して、読む体験を最優先に整理。PC レイアウト (≥1024px) は完全現状維持。
+
+### Added (Issue #30)
+
+- **⋮ Overflow menu (スマホ < 768px)**: テーマ / 表示モード / 編集モードを一つの popover に集約。topbar から個別ボタンを撤去。
+  - 外クリック / Esc / scroll で自動 close
+  - 既存 PC 用 theme-toggle / view-toggle と aria-pressed が同期
+- **📖 FAB 目次 (スマホ < 768px)**: 右下 floating button から目次フルスクリーン modal を起動。長文 md でスクロールしても親指で届く。
+- **Sticky topbar 自動 hide/show (スマホ < 768px)**: 下スクロールで topbar が一時非表示、上スクロールで再表示、最上端では常に表示。preview / source 両方のスクロールに反応。
+- **端スワイプで drawer 開閉 (スマホ < 768px)**: 画面左端 24px 以内から右へスワイプで sidebar を開く、drawer 内で左へスワイプで閉じる。`prefers-reduced-motion` 配慮。
+- **パス自体タップでコピー**: 📋 ボタンを廃止し、`#current-path` を `<button>` 化。タップで `state.currentPath` をコピー (HTTP / HTTPS 両対応の `copyTextToClipboard` 経由)。フィードバックは緑系の背景 1.5 秒。
+
+### Changed
+
+- `setStatus()` がスマホ表示時に **toast 化** (`.is-toast` クラス + 3 秒 fade)。常時表示の status バーが画面を圧迫しなくなる。
+- `applyThemeMode` / `applyViewMode` が overflow menu 内のボタンも同時に aria-pressed 同期。
+- `enterEditMode` / `exitEditMode` が overflow menu の編集ボタン text/aria-pressed と FAB disabled も同期。
+
+### Removed (スマホ < 768px のみ)
+
+- yomi ロゴ (brand) の表示
+- topbar 上のテーマ切替 (3 ボタン) と 📖 目次ボタンの常時表示
+- content-header 上の 📋 コピーボタン (パス自体に統合)
+- content-header 上の 編集 / プレビュー・並列・MD ボタン (overflow menu に集約)
+- dirty indicator (●) の常時表示 (`confirmLeaveEdit` 等の警告は健在)
+- 常時 status テキスト (toast 化)
+
+### スマホ要素数 Before vs After
+
+| 領域 | Before (v0.8.1) | After (v0.9.0) |
+|---|---|---|
+| topbar 常時表示 | 9 (折り返し) | **3** (☰ / パス / ⋮) |
+| 全画面合計 | 13 | **4** (drawer / overflow は折りたたみ時 0) |
+
 ## [0.8.1] - 2026-05-14
 
 v0.8.0 のブラウザ QA で見つかった 2 件のバグ修正。
