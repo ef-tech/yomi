@@ -16,6 +16,7 @@ import {
   seedNavCounter,
 } from "./navigation.js";
 import { prefs } from "./prefs.js";
+import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 
@@ -158,6 +159,8 @@ const state = {
   tocEntries: new Map(),
   /** IntersectionObserver (再構築のたびに破棄して作り直す) */
   tocObserver: null,
+  /** Issue #9: split mode のスクロール同期 ON/OFF (デフォルト ON) */
+  scrollSyncEnabled: true,
 };
 
 restorePreferences();
@@ -178,6 +181,7 @@ wireLinkNavigation();
 wireKeyboard();
 wireBeforeUnload();
 wireHistoryNavigation();
+wireScrollSync();
 init();
 connectLiveReload();
 
@@ -451,7 +455,11 @@ function renderCurrentFile() {
   els.preview.scrollTop = 0;
   els.source.scrollTop = 0;
   if (state.viewMode !== "md") {
-    renderMermaid().catch(() => {});
+    renderMermaid()
+      .catch(() => {})
+      .finally(() => rebuildScrollSyncPairs());
+  } else {
+    rebuildScrollSyncPairs();
   }
 }
 
@@ -464,6 +472,73 @@ async function renderMermaid() {
     console.error("Mermaid render error:", err);
     setStatus("error", `Mermaid 描画エラー: ${err.message ?? err}`);
   }
+}
+
+/* ===== Issue #9: split mode スクロール同期 ===== */
+
+// pair: { sourceY: number, previewY: number } の配列 (sourceY 昇順)
+let scrollSyncPairs = [];
+let scrollSyncing = false;
+
+function rebuildScrollSyncPairs() {
+  scrollSyncPairs = [];
+  if (!state.currentRaw) return;
+  const headingLines = findHeadingLines(state.currentRaw);
+  if (headingLines.length === 0) return;
+  // preview 側の data-line 付き要素を line→Y で索引化
+  const previewHeadings = els.preview.querySelectorAll("[data-line]");
+  const previewLineToY = new Map();
+  for (const el of previewHeadings) {
+    const line = Number(el.dataset.line);
+    if (Number.isFinite(line)) previewLineToY.set(line, el.offsetTop);
+  }
+  // source 側の行 → Y の換算 (scrollHeight / 全行数 で line 高さを推定)
+  const totalLines = state.currentRaw.split("\n").length;
+  if (totalLines <= 0 || els.source.scrollHeight <= 0) return;
+  const lineHeightPx = els.source.scrollHeight / totalLines;
+
+  const pairs = [];
+  for (const line of headingLines) {
+    const previewY = previewLineToY.get(line);
+    if (previewY === undefined) continue;
+    const sourceY = (line - 1) * lineHeightPx;
+    pairs.push({ sourceY, previewY });
+  }
+  pairs.sort((a, b) => a.sourceY - b.sourceY);
+  scrollSyncPairs = pairs;
+}
+
+function isScrollSyncActive() {
+  return state.viewMode === "split" && !state.editing && state.scrollSyncEnabled;
+}
+
+function onSourceScroll() {
+  if (scrollSyncing || !isScrollSyncActive()) return;
+  if (scrollSyncPairs.length === 0) return;
+  scrollSyncing = true;
+  const pairs = scrollSyncPairs.map((p) => ({ from: p.sourceY, to: p.previewY }));
+  els.preview.scrollTop = mapScrollTop(els.source.scrollTop, pairs);
+  requestAnimationFrame(() => {
+    scrollSyncing = false;
+  });
+}
+
+function onPreviewScroll() {
+  if (scrollSyncing || !isScrollSyncActive()) return;
+  if (scrollSyncPairs.length === 0) return;
+  scrollSyncing = true;
+  const pairs = scrollSyncPairs
+    .map((p) => ({ from: p.previewY, to: p.sourceY }))
+    .sort((a, b) => a.from - b.from);
+  els.source.scrollTop = mapScrollTop(els.preview.scrollTop, pairs);
+  requestAnimationFrame(() => {
+    scrollSyncing = false;
+  });
+}
+
+function wireScrollSync() {
+  els.source.addEventListener("scroll", onSourceScroll, { passive: true });
+  els.preview.addEventListener("scroll", onPreviewScroll, { passive: true });
 }
 
 function highlightSelected(path) {
@@ -517,6 +592,10 @@ function restorePreferences() {
 
   const tocLv = prefs.tocExpandLevel.load();
   if (tocLv && TOC_EXPAND_LEVELS.includes(tocLv)) state.tocExpandLevel = tocLv;
+
+  // Issue #9: scrollSync は load 値が null (未保存) ならデフォルト true を維持
+  const ss = prefs.scrollSync.load();
+  if (ss === false) state.scrollSyncEnabled = false;
 }
 
 function saveOpenDirs() {
@@ -558,6 +637,11 @@ function applyViewMode(mode) {
   for (const btn of els.overflowViewBtns) {
     const active = btn.dataset.mode === mode;
     btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  // Issue #9: split に切り替わる/中身が再レイアウトされるタイミングで pair を再構築
+  // (DOM 反映待ちのため次フレーム)
+  if (mode === "split") {
+    requestAnimationFrame(() => rebuildScrollSyncPairs());
   }
 }
 
@@ -956,6 +1040,10 @@ function exitEditMode() {
   }
   // 編集終了でチェックボックスを再びクリック可能に
   wireTaskCheckboxes();
+  // Issue #9: 編集モード中は同期 OFF だったので、出た時に pair を再構築して復活させる
+  if (state.viewMode === "split") {
+    requestAnimationFrame(() => rebuildScrollSyncPairs());
+  }
 }
 
 function setDirty(dirty) {
