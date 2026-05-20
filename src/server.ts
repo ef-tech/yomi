@@ -6,23 +6,24 @@ import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
+import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
-import { imageContentType, isImageExtension } from "./util/image-ext.ts";
+import { IMAGE_CONTENT_TYPES, imageContentType, isImageExtension } from "./util/image-ext.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
 
 const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 
+// Issue #23: 画像 MIME は IMAGE_CONTENT_TYPES (全 9 拡張子) を single source of truth として spread。
+// ここでは public/ 配下の静的アセット固有 (テキスト系) のみ追加する。
 const ASSET_TYPES: Record<string, string> = {
+  ...IMAGE_CONTENT_TYPES,
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".mjs": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
 };
 
 /** 書き込み API の body サイズ上限 (bytes) */
@@ -348,10 +349,11 @@ async function handleAssetRead(
     }
 
     const buffer = await fh.readFile();
-    const hasher = new Bun.CryptoHasher("sha256");
-    hasher.update(buffer);
-    const etag = `"${hasher.digest("hex").slice(0, 32)}"`;
+    const etag = computeStrongEtag(buffer);
 
+    // safety net: handleAssetRead は前段で isImageExtension をチェック済みなので、
+    // safe.rel の拡張子は必ず IMAGE_CONTENT_TYPES に存在する。
+    // この `?? "application/octet-stream"` は事実上到達しないが、型安全のため残す。
     const contentType = imageContentType(safe.rel) ?? "application/octet-stream";
     const headers: Record<string, string> = {
       "Content-Type": contentType,
