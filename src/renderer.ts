@@ -66,9 +66,18 @@ export function rewriteImageHref(href: string, currentPath?: string): string {
  * 単一の marked を使い回すと、過去のレンダリングで作った id 集合が
  * 残り続けて新しい文書でも `id-1`, `id-2`... と無駄にカウントが進む。
  */
-function createMarked(opts: RenderOptions): Marked {
+function createMarked(opts: RenderOptions, source: string, body: string): Marked {
   const usedIds = new Set<string>();
   const imageInsideLink = new WeakSet<Tokens.Image>();
+  // Issue #9: heading に source 上の絶対行番号を付与する。split mode のスクロール同期で参照
+  const headingLines = new WeakMap<Tokens.Heading, number>();
+
+  // frontmatter が消費した行数 (source 内の \n 数)
+  const fmChunkLen = source.length - body.length;
+  const fmLines = fmChunkLen > 0 ? (source.slice(0, fmChunkLen).match(/\n/g)?.length ?? 0) : 0;
+
+  // walkTokens は token tree を順走するので、body 内を前方検索しながら cursor を進める
+  let cursor = 0;
 
   const marked = new Marked({
     gfm: true,
@@ -79,6 +88,14 @@ function createMarked(opts: RenderOptions): Marked {
           if (child.type === "image") {
             imageInsideLink.add(child as Tokens.Image);
           }
+        }
+      }
+      if (token.type === "heading") {
+        const idx = body.indexOf(token.raw, cursor);
+        if (idx >= 0) {
+          const lineInBody = (body.slice(0, idx).match(/\n/g)?.length ?? 0) + 1;
+          headingLines.set(token as Tokens.Heading, fmLines + lineInBody);
+          cursor = idx + token.raw.length;
         }
       }
     },
@@ -99,7 +116,9 @@ function createMarked(opts: RenderOptions): Marked {
         const inner = this.parser.parseInline(token.tokens);
         const baseSlug = slugify(token.text);
         const id = uniqueSlug(baseSlug || `section-${usedIds.size + 1}`, usedIds);
-        return `<h${depth} id="${escapeHtml(id)}">${inner}</h${depth}>\n`;
+        const line = headingLines.get(token as Tokens.Heading);
+        const lineAttr = typeof line === "number" ? ` data-line="${line}"` : "";
+        return `<h${depth} id="${escapeHtml(id)}"${lineAttr}>${inner}</h${depth}>\n`;
       },
       image(token) {
         const href = rewriteImageHref(token.href ?? "", opts.currentPath);
@@ -128,7 +147,7 @@ function createMarked(opts: RenderOptions): Marked {
 export async function renderMarkdown(source: string, options: RenderOptions = {}): Promise<string> {
   const { body, entries } = parseFrontmatter(source);
   const fmHtml = renderFrontmatter(entries);
-  const marked = createMarked(options);
+  const marked = createMarked(options, source, body);
   const bodyHtml = await marked.parse(body);
   return fmHtml + bodyHtml;
 }
