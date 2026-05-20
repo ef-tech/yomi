@@ -10,6 +10,19 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-20
+
+`/api/asset` 画像配信エンドポイントの defense-in-depth 強化 (Issue #22)。PR #20 (v0.7.0) の adversarial review で見つかった MEDIUM / LOW 指摘をまとめて follow-up。
+
+### Security (Issue #22)
+
+- **`/api/asset` の TOCTOU 対策**: `stat → Bun.file()` の間で symlink がすり替えられる経路を塞ぐため、ファイル取得を `fs.open` で取得した fd 経由に変更。`fstat` → `readFile` を同一 fd で行うので、resolveSafe 後にディスク上の inode が swap されてもサーバが意図しないファイルを返さない。
+- **画像 / リンクのスキーム制限を allowlist 化**: 旧 `isExternalUrl` は RFC 3986 全スキーム (`ftp:` / `sms:` / `vbscript:` / `file:` / `chrome-extension:` 等) を一律 true にしていた。
+  - リンクは `https / http / mailto / tel` のみを「外部リンク」と認識し、`javascript:` / `vbscript:` / `file:` / `chrome-extension:` / `intent:` / `view-source:` / `wyciwyg:` / `jar:` / `data:` は新規 `isUnsafeScheme` で明示拒否してエラー表示。
+  - 画像 src は `http(s)://` と `data:image/(png|jpeg|jpg|gif|webp|avif|bmp|svg+xml|x-icon);base64,...` 形式の data URI のみ許可 (新規 `isSafeImageHref`)。それ以外の scheme は空 href に書き換えて拒否。
+- **ETag を内容ベース (sha256) に変更**: 旧 `W/"mtime-size"` 弱 ETag は `cp -a` 等で mtime + size を維持して内容を書き換えると stale 304 を返していた。現在は読み込んだ内容の sha256 先頭 16 byte (32 hex 文字) を強 ETag (`"<hex>"`) として返すので、内容変更を確実に検出できる。
+- **405 レスポンスに `Allow` ヘッダ追加**: `/api/file` には `Allow: GET, POST`、`/api/asset` には `Allow: GET, HEAD` を付加 (RFC 9110 §15.5.6 準拠)。
+
 ## [0.10.0] - 2026-05-20
 
 プレビュー内の画像をクリックしたら、その画像 URL を新しいタブで開けるようになりました。md ドキュメントから画像の詳細をブラウザネイティブのズーム / パン / 保存で確認できます。

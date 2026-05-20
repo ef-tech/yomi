@@ -131,7 +131,7 @@ Markdown 内の `![alt](foo.png)` の相対パスは、yomi が `GET /api/asset?
 | ルート外への `..` / 絶対パス | `![X](/etc/passwd)` `![X](../../../etc/passwd)` | `resolveSafe` で 400 |
 | サイズ超過 (>50 MB) | 大きな画像 | 413 |
 
-対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`。SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制しています。弱 ETag (`W/"mtime-size"`) + `Cache-Control: no-cache` を返すので、ブラウザは `If-None-Match` 304 でキャッシュを使いつつ、画像を編集すれば次のリクエストで再フェッチされます。
+対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`。SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制しています。強 ETag (`"<sha256-prefix>"`) + `Cache-Control: no-cache` を返すので、ブラウザは `If-None-Match` 304 でキャッシュを使いつつ、画像を編集すれば次のリクエストで再フェッチされます (Issue #22 で内容ベース ETag に変更、`cp -a` 等で mtime + size を保ったまま書き換えても確実に検出)。ファイル取得は `fs.open` で取った fd 経由で stat + read を行うので、resolveSafe 後の symlink swap (TOCTOU) でも意図しないファイルが配信される経路は塞いでいます。
 
 プレビュー内の画像をクリックすると、その画像 URL が新しいタブで開きます（`<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap）。ブラウザネイティブの画像表示で原寸 / ズーム / 保存ができます。hover で `cursor: zoom-in` を表示。markdown で `[![](foo.png)](url)` のようにリンクで囲んだ画像はリンク先が優先され、画像ジャンプは発火しません。
 

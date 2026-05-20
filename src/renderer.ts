@@ -1,5 +1,10 @@
 import { Marked, type Tokens } from "marked";
-import { isExternalUrl, isJavascriptUrl, resolveRelativePath } from "../public/link-resolver.js";
+import {
+  hasScheme,
+  isJavascriptUrl,
+  isSafeImageHref,
+  resolveRelativePath,
+} from "../public/link-resolver.js";
 import { parseFrontmatter, renderFrontmatter } from "./frontmatter.ts";
 import { escapeHtml } from "./util/html.ts";
 import { isImageExtension } from "./util/image-ext.ts";
@@ -26,16 +31,25 @@ function encodePathForUrl(p: string): string {
  * Markdown の image href を、画像配信エンドポイント `/api/asset?path=...` に
  * 書き換えるための解決ロジック。
  *
- * - 空文字 / 危険スキーム (`javascript:`) → 空文字
- * - 外部 URL (`http(s)://`, `data:`, `mailto:` 等) → そのまま
+ * - 空文字 / 危険スキーム (`javascript:` / `vbscript:` / `file:` / `chrome-extension:` 等) → 空文字
+ * - スキーム付き URL: 画像として安全 (`http(s)://` または `data:image/*;base64,`) のみ通過、それ以外は空文字
  * - currentPath が未指定 → そのまま (フォールバック)
  * - 画像拡張子以外 → そのまま (`/api/asset` は弾くので壊れリンクになるだけ)
  * - 上記以外 (相対 / 絶対パス) → `/api/asset?path=<resolved>` に変換
+ *
+ * Issue #22: スキーム allowlist 化。以前は RFC 3986 スキーム全部を `<img src>` に
+ * そのまま出していたため `vbscript:` や `data:text/html` 等が src に乗る余地があった。
  */
 export function rewriteImageHref(href: string, currentPath?: string): string {
   if (!href) return "";
+  // 先頭空白を含む `\tjavascript :` 等の難読化に対応するため明示判定を残す
   if (isJavascriptUrl(href)) return "";
-  if (isExternalUrl(href)) return href;
+
+  // スキーム付き URL は画像として安全な scheme のみ通過 (http(s) / data:image/*;base64,)
+  if (hasScheme(href)) {
+    return isSafeImageHref(href) ? href : "";
+  }
+
   if (!currentPath) return href;
   if (!isImageExtension(href.split(/[?#]/)[0] ?? "")) return href;
 
