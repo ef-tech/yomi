@@ -1,6 +1,6 @@
 {
   "name": "yomi",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "ローカル Markdown ビューア — 2 ペイン UI + Mermaid + ライブリロード",
   "type": "module",
   "bin": {

@@ -1,4 +1,4 @@
-import { Marked } from "marked";
+import { Marked, type Tokens } from "marked";
 import { isExternalUrl, isJavascriptUrl, resolveRelativePath } from "../public/link-resolver.js";
 import { parseFrontmatter, renderFrontmatter } from "./frontmatter.ts";
 import { escapeHtml } from "./util/html.ts";
@@ -54,10 +54,20 @@ export function rewriteImageHref(href: string, currentPath?: string): string {
  */
 function createMarked(opts: RenderOptions): Marked {
   const usedIds = new Set<string>();
+  const imageInsideLink = new WeakSet<Tokens.Image>();
 
   const marked = new Marked({
     gfm: true,
     breaks: true,
+    walkTokens(token) {
+      if (token.type === "link" && Array.isArray(token.tokens)) {
+        for (const child of token.tokens) {
+          if (child.type === "image") {
+            imageInsideLink.add(child as Tokens.Image);
+          }
+        }
+      }
+    },
   });
 
   marked.use({
@@ -82,7 +92,9 @@ function createMarked(opts: RenderOptions): Marked {
         const title = token.title ?? "";
         const text = token.text ?? "";
         const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-        return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttr}>`;
+        const img = `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttr}>`;
+        if (!href || imageInsideLink.has(token)) return img;
+        return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${img}</a>`;
       },
     },
   });

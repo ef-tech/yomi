@@ -167,6 +167,40 @@ describe("renderMarkdown", () => {
       expect(h2).toContain('src="/api/asset?path=foo.png"');
     });
   });
+
+  describe("画像クリックで別タブ (Issue #32)", () => {
+    test('単独画像は <a target="_blank" rel="noopener noreferrer"> で wrap される', async () => {
+      const html = await renderMarkdown("![alt](foo.png)", { currentPath: "a.md" });
+      expect(html).toContain(
+        '<a href="/api/asset?path=foo.png" target="_blank" rel="noopener noreferrer"><img src="/api/asset?path=foo.png" alt="alt"></a>',
+      );
+    });
+
+    test("外部 URL の画像も wrap される", async () => {
+      const html = await renderMarkdown("![alt](https://example.com/x.png)");
+      expect(html).toContain(
+        '<a href="https://example.com/x.png" target="_blank" rel="noopener noreferrer"><img src="https://example.com/x.png" alt="alt"></a>',
+      );
+    });
+
+    test("リンクで囲まれた画像 [![](img)](url) は二重 wrap されない (リンク優先)", async () => {
+      const html = await renderMarkdown("[![alt](foo.png)](https://example.com/)", {
+        currentPath: "a.md",
+      });
+      // 親 link の <a href="https://example.com/"> はそのまま、<img> は再 wrap されない
+      expect(html).toContain('<a href="https://example.com/">');
+      expect(html).toContain('<img src="/api/asset?path=foo.png" alt="alt">');
+      // <a ...><a ...> のような二重 wrap がないこと
+      expect(html).not.toMatch(/<a [^>]*><a /);
+    });
+
+    test("javascript: で空 href になった画像は wrap されない", async () => {
+      const html = await renderMarkdown("![alt](javascript:alert(1))", { currentPath: "a.md" });
+      expect(html).toContain('<img src="" alt="alt">');
+      // 空 href の <a> wrap で自ページリロード etc を避けるため wrap しない
+      expect(html).not.toMatch(/<a [^>]*href=""[^>]*>/);
+    });
+  });
 });
 
 describe("rewriteImageHref (unit)", () => {

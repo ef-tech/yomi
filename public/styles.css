@@ -830,6 +830,10 @@ body {
   height: auto;
 }
 
+.markdown-body a[target="_blank"] > img {
+  cursor: zoom-in;
+}
+
 .markdown-body hr {
   border: none;
   border-top: 1px solid var(--border);

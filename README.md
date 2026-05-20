@@ -133,6 +133,8 @@ Markdown 内の `![alt](foo.png)` の相対パスは、yomi が `GET /api/asset?
 
 対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`。SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制しています。弱 ETag (`W/"mtime-size"`) + `Cache-Control: no-cache` を返すので、ブラウザは `If-None-Match` 304 でキャッシュを使いつつ、画像を編集すれば次のリクエストで再フェッチされます。
 
+プレビュー内の画像をクリックすると、その画像 URL が新しいタブで開きます（`<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap）。ブラウザネイティブの画像表示で原寸 / ズーム / 保存ができます。hover で `cursor: zoom-in` を表示。markdown で `[![](foo.png)](url)` のようにリンクで囲んだ画像はリンク先が優先され、画像ジャンプは発火しません。
+
 ### ナビゲーション / 履歴
 
 - 「現在開いているファイル」は URL クエリ `?path=foo.md` に反映される
