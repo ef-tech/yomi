@@ -3,7 +3,7 @@ import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.mi
 import {
   isAnchor,
   isExternalUrl,
-  isJavascriptUrl,
+  isUnsafeScheme,
   resolveRelativePath,
   splitHrefHash,
 } from "./link-resolver.js";
@@ -1135,7 +1135,8 @@ function wireLinkNavigation() {
 
     ev.preventDefault();
 
-    if (isJavascriptUrl(href)) {
+    // Issue #22: javascript: 以外の危険スキーム (vbscript / file / chrome-extension / data 等) も同じ扱い
+    if (isUnsafeScheme(href)) {
       setStatus("error", "不正なリンクをブロックしました");
       return;
     }
