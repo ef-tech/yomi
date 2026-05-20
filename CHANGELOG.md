@@ -10,12 +10,20 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-20
+
+プレビュー内の画像をクリックしたら、その画像 URL を新しいタブで開けるようになりました。md ドキュメントから画像の詳細をブラウザネイティブのズーム / パン / 保存で確認できます。
+
 ### Added (Issue #32)
 
 - **プレビュー内画像クリックで新しいタブに表示**: markdown 由来の `<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap し、クリックで画像 URL を新タブで開く。ブラウザネイティブのズーム / パン / 保存をそのまま使える。hover で `cursor: zoom-in` を表示。
   - `[![](img)](url)` のようにリンクで囲まれた画像は markdown の意図を尊重してリンク先が優先（二重 wrap しない）
   - `javascript:` で空 href になった画像は wrap せず、誤クリックで何も起きないようにしている
   - Mermaid 図 / raw HTML の `<img>` は対象外
+
+### Fixed
+
+- **プレビュー内画像クリックが「ファイルが見つかりません」エラーになる問題** (QA で発見): `wireLinkNavigation` が preview pane の全 `<a>` クリックを横取りしていたため、Issue #32 の image-wrap `<a target="_blank">` が新タブを開けなかった。`target="_blank"` + 単一 `<img>` child の wrap はブラウザネイティブの新タブ動作に任せるよう bypass を追加。
 
 ## [0.9.0] - 2026-05-14
 
