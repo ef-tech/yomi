@@ -10,6 +10,13 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #32)
+
+- **プレビュー内画像クリックで新しいタブに表示**: markdown 由来の `<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap し、クリックで画像 URL を新タブで開く。ブラウザネイティブのズーム / パン / 保存をそのまま使える。hover で `cursor: zoom-in` を表示。
+  - `[![](img)](url)` のようにリンクで囲まれた画像は markdown の意図を尊重してリンク先が優先（二重 wrap しない）
+  - `javascript:` で空 href になった画像は wrap せず、誤クリックで何も起きないようにしている
+  - Mermaid 図 / raw HTML の `<img>` は対象外
+
 ## [0.9.0] - 2026-05-14
 
 スマホ UI を抜本リファクタ。topbar に詰まっていた **9 要素を 3 要素 + FAB に削減**して、読む体験を最優先に整理。PC レイアウト (≥1024px) は完全現状維持。
