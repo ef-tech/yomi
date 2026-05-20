@@ -1,4 +1,5 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { open, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
@@ -68,14 +69,20 @@ export function createServer(config: ServerConfig): ServerHandle {
           if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
           return handleFileWrite(config.rootDir, req, saveMark);
         }
-        return new Response("Method Not Allowed", { status: 405 });
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, POST" },
+        });
       }
 
       if (url.pathname === "/api/asset") {
         if (req.method === "GET" || req.method === "HEAD") {
           return handleAssetRead(config.rootDir, url.searchParams.get("path"), req);
         }
-        return new Response("Method Not Allowed", { status: 405 });
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, HEAD" },
+        });
       }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -323,49 +330,60 @@ async function handleAssetRead(
     throw err;
   }
 
-  let info: { size: number; mtimeMs: number };
+  // Issue #22: TOCTOU 対策 + 強 ETag (sha256 ベース)。
+  // fd を先に取得して fstat → readFile を **同一 fd** から行うことで、
+  // resolveSafe → stat → open の間に symlink swap されてもアクセス先は固定される。
+  // また内容を読み終えた buffer から sha256 を取って ETag にするので、`cp -a` 等で
+  // mtime+size を維持して書き換えても 304 stale を返さない (内容ベース判定)。
+  let fh: FileHandle | null = null;
   try {
-    const st = await stat(safe.abs);
+    fh = await open(safe.abs, "r");
+    const st = await fh.stat();
+
     if (!st.isFile()) {
       return Response.json({ error: "ファイルではありません" }, { status: 400 });
     }
-    info = { size: st.size, mtimeMs: st.mtimeMs };
+    if (st.size > MAX_ASSET_BYTES) {
+      return Response.json({ error: "画像サイズが大きすぎます" }, { status: 413 });
+    }
+
+    const buffer = await fh.readFile();
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(buffer);
+    const etag = `"${hasher.digest("hex").slice(0, 32)}"`;
+
+    const contentType = imageContentType(safe.rel) ?? "application/octet-stream";
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Cache-Control": "no-cache",
+      ETag: etag,
+      // MIME sniff 経由の XSS を抑制 (特に SVG)
+      "X-Content-Type-Options": "nosniff",
+      // <img src> から参照されたときに download にならないよう inline を明示
+      "Content-Disposition": "inline",
+    };
+
+    if (req.headers.get("if-none-match") === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+
+    if (req.method === "HEAD") {
+      headers["Content-Length"] = String(st.size);
+      return new Response(null, { status: 200, headers });
+    }
+
+    headers["Content-Length"] = String(buffer.byteLength);
+    return new Response(buffer, { status: 200, headers });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
       return Response.json({ error: `ファイルが見つかりません: ${requested}` }, { status: 404 });
     }
+    if (code === "EISDIR") {
+      return Response.json({ error: "ファイルではありません" }, { status: 400 });
+    }
     return Response.json({ error: (err as Error).message }, { status: 500 });
+  } finally {
+    await fh?.close();
   }
-
-  if (info.size > MAX_ASSET_BYTES) {
-    return Response.json({ error: "画像サイズが大きすぎます" }, { status: 413 });
-  }
-
-  const contentType = imageContentType(safe.rel) ?? "application/octet-stream";
-  // mtime と size から弱 ETag を組み立てる (ファイル更新で値が変わる)。
-  // NFS / Docker の一部環境では mtimeMs が NaN を返すことがあるため、有限値のみ採用する
-  // (NaN.toString(16) === "NaN" となり全ファイルで ETag が衝突する不具合を回避)
-  const mtimeHex = Number.isFinite(info.mtimeMs) ? Math.floor(info.mtimeMs).toString(16) : "0";
-  const etag = `W/"${mtimeHex}-${info.size.toString(16)}"`;
-
-  const headers: Record<string, string> = {
-    "Content-Type": contentType,
-    "Cache-Control": "no-cache",
-    ETag: etag,
-    // MIME sniff 経由の XSS を抑制 (特に SVG)
-    "X-Content-Type-Options": "nosniff",
-    // <img src> から参照されたときに download にならないよう inline を明示
-    "Content-Disposition": "inline",
-  };
-
-  if (req.headers.get("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers });
-  }
-
-  if (req.method === "HEAD") {
-    headers["Content-Length"] = String(info.size);
-    return new Response(null, { status: 200, headers });
-  }
-
-  return new Response(Bun.file(safe.abs), { status: 200, headers });
 }

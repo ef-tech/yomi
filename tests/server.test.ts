@@ -242,9 +242,10 @@ describe("server", () => {
   });
 
   describe("HTTP method", () => {
-    test("PUT /api/file は 405", async () => {
+    test("PUT /api/file は 405 + Allow: GET, POST (Issue #22)", async () => {
       const res = await fetch(`${ctx.url}/api/file`, { method: "PUT" });
       expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("GET, POST");
     });
   });
 });
@@ -286,7 +287,8 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toBe("no-cache");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(res.headers.get("etag")).toMatch(/^W\/"[0-9a-f]+-[0-9a-f]+"$/);
+    // Issue #22: 強 ETag (sha256 prefix 16 byte = 32 hex 文字)
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
     const buf = Buffer.from(await res.arrayBuffer());
     expect(buf.equals(PNG_BYTES)).toBe(true);
   });
@@ -346,9 +348,10 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.status).toBe(404);
   });
 
-  test("POST /api/asset は 405", async () => {
+  test("POST /api/asset は 405 + Allow: GET, HEAD (Issue #22)", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=pic.png`, { method: "POST" });
     expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
   });
 
   test("GET /api/file は html 内の img を /api/asset?path=... に書き換える", async () => {
@@ -381,6 +384,32 @@ describe("server - /api/asset (Issue #19)", () => {
     await writeFile(join(root, "images", "x.png"), bigger);
     const r2 = await fetch(`${ctx.url}/api/asset?path=${target}`);
     const e2 = r2.headers.get("etag");
+    expect(e2).not.toBe(e1);
+  });
+
+  test("ETag は内容ベース (Issue #22): 同 mtime + 同 size でも内容が違えば別 ETag", async () => {
+    const { utimes } = await import("node:fs/promises");
+    const target = join(root, "images", "x.png");
+    // 同サイズの 2 種類のバッファを用意
+    const sameSize = PNG_BYTES.length;
+    const bufA = Buffer.alloc(sameSize, 0xaa);
+    const bufB = Buffer.alloc(sameSize, 0xbb);
+    // 固定タイムスタンプ
+    const fixedTime = new Date("2026-01-01T00:00:00Z");
+
+    await writeFile(target, bufA);
+    await utimes(target, fixedTime, fixedTime);
+    const r1 = await fetch(`${ctx.url}/api/asset?path=images/x.png`);
+    const e1 = r1.headers.get("etag");
+
+    await writeFile(target, bufB);
+    await utimes(target, fixedTime, fixedTime); // 同 mtime に強制
+    const r2 = await fetch(`${ctx.url}/api/asset?path=images/x.png`);
+    const e2 = r2.headers.get("etag");
+
+    // mtime + size が同じでも内容が違えば sha256 が違うので別 ETag
+    expect(e1).toBeTruthy();
+    expect(e2).toBeTruthy();
     expect(e2).not.toBe(e1);
   });
 
