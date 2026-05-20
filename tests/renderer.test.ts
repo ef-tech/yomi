@@ -212,12 +212,33 @@ describe("rewriteImageHref (unit)", () => {
     expect(rewriteImageHref("", "a.md")).toBe("");
   });
 
-  test("外部 URL はそのまま", () => {
+  test("http(s) はそのまま", () => {
     expect(rewriteImageHref("https://example.com/x.png", "a.md")).toBe("https://example.com/x.png");
+    expect(rewriteImageHref("http://example.com/x.png", "a.md")).toBe("http://example.com/x.png");
   });
 
-  test("javascript: は空", () => {
+  test("data:image/<type>;base64,... はそのまま (Issue #22 で MIME 限定)", () => {
+    expect(rewriteImageHref("data:image/png;base64,AAA", "a.md")).toBe("data:image/png;base64,AAA");
+    expect(rewriteImageHref("data:image/svg+xml;base64,PHN2Zw==", "a.md")).toBe(
+      "data:image/svg+xml;base64,PHN2Zw==",
+    );
+  });
+
+  test("data:text/html;base64,... は空 (Issue #22: 画像以外 MIME 拒否)", () => {
+    expect(rewriteImageHref("data:text/html;base64,PHNjcmlwdD4=", "a.md")).toBe("");
+  });
+
+  test("javascript: / vbscript: / file: は空 (Issue #22: 危険スキーム)", () => {
     expect(rewriteImageHref("javascript:alert(1)", "a.md")).toBe("");
+    expect(rewriteImageHref("vbscript:msgbox(1)", "a.md")).toBe("");
+    expect(rewriteImageHref("file:///etc/passwd", "a.md")).toBe("");
+  });
+
+  test("mailto: / tel: / sms: / ftp: は空 (Issue #22: 画像 src として無意味なスキーム拒否)", () => {
+    expect(rewriteImageHref("mailto:foo@bar.com", "a.md")).toBe("");
+    expect(rewriteImageHref("tel:+819012345678", "a.md")).toBe("");
+    expect(rewriteImageHref("sms:+819012345678", "a.md")).toBe("");
+    expect(rewriteImageHref("ftp://example.com/x.png", "a.md")).toBe("");
   });
 
   test("相対画像は /api/asset URL", () => {
