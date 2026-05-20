@@ -10,6 +10,10 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-20
+
+`/api/asset` 画像配信エンドポイントの defense-in-depth 強化 (Issue #22)。PR #20 (v0.7.0) の adversarial review で見つかった MEDIUM / LOW 指摘をまとめて follow-up。
+
 ### Security (Issue #22)
 
 - **`/api/asset` の TOCTOU 対策**: `stat → Bun.file()` の間で symlink がすり替えられる経路を塞ぐため、ファイル取得を `fs.open` で取得した fd 経由に変更。`fstat` → `readFile` を同一 fd で行うので、resolveSafe 後にディスク上の inode が swap されてもサーバが意図しないファイルを返さない。
