@@ -384,6 +384,7 @@ async function handleAssetRead(
     }
     return Response.json({ error: (err as Error).message }, { status: 500 });
   } finally {
-    await fh?.close();
+    // fd close 失敗 (極稀な EBADF 等) は response に影響させない
+    await fh?.close().catch(() => {});
   }
 }

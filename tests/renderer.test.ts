@@ -241,6 +241,13 @@ describe("rewriteImageHref (unit)", () => {
     expect(rewriteImageHref("ftp://example.com/x.png", "a.md")).toBe("");
   });
 
+  test("先頭空白 + 危険スキーム は空 (Issue #22: 難読化対策)", () => {
+    // hasScheme に \s* prefix を追加して `\tvbscript:` 等が image src として通らないことを保証
+    expect(rewriteImageHref("\tvbscript:msgbox(1)", "a.md")).toBe("");
+    expect(rewriteImageHref(" file:///etc/passwd", "a.md")).toBe("");
+    expect(rewriteImageHref("  data:text/html;base64,PHN2Zw==", "a.md")).toBe("");
+  });
+
   test("相対画像は /api/asset URL", () => {
     expect(rewriteImageHref("foo.png", "docs/a.md")).toBe("/api/asset?path=docs/foo.png");
   });

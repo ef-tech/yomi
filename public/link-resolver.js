@@ -37,7 +37,9 @@ const DANGEROUS_SCHEME =
 const SAFE_IMAGE_DATA_URL =
   /^data:image\/(png|jpeg|jpg|gif|webp|avif|bmp|svg\+xml|x-icon);base64,[a-zA-Z0-9+/=]+$/i;
 
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+// `^\s*` で `\tvbscript:` 等の leading whitespace 難読化も scheme として認識する
+// (image src 用の安全判定で必ず allowlist を通る、未許可なら空文字にされる)
+const HAS_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
 
 /**
  * 外部リンクとして開いてよい URL か (https/mailto/tel)。

@@ -147,6 +147,12 @@ describe("hasScheme (Issue #22)", () => {
     expect(hasScheme("javascript:")).toBe(true);
   });
 
+  test("先頭空白 (\\t / \\u00a0 等) を含む scheme も true (難読化検出)", () => {
+    expect(hasScheme("\tvbscript:msgbox(1)")).toBe(true);
+    expect(hasScheme(" file:///etc/passwd")).toBe(true);
+    expect(hasScheme("  javascript:alert(1)")).toBe(true);
+  });
+
   test("scheme なしは false", () => {
     expect(hasScheme("foo.md")).toBe(false);
     expect(hasScheme("./foo.md")).toBe(false);
