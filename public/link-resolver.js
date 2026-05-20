@@ -13,23 +13,89 @@ export function isAnchor(href) {
 }
 
 /**
- * スキーム付き URL かどうか。
- * 例: http(s)://, mailto:, tel:, ftp:, sms: 等の RFC 3986 風スキーム。
- * 相対パスや anchor は false。
+ * 安全な外部リンクのスキーム allowlist。
+ * top-level navigation で安全に扱える https/mailto/tel に限定する
+ * (data: は top-level data URI XSS の歴史があるため除外)。
+ */
+const SAFE_LINK_SCHEME = /^(https?|mailto|tel):/i;
+
+/**
+ * 危険スキームの blocklist。先頭空白や大文字の難読化に対応。
+ * - javascript / vbscript: legacy scripting
+ * - file: ローカル file system 参照
+ * - chrome-extension / chrome / chrome-search / view-source / wyciwyg / jar: ブラウザ内部スキーム
+ * - intent: Android intent URL (file リーク等の事例あり)
+ * - data: top-level navigation での data URI XSS を防ぐ
+ */
+const DANGEROUS_SCHEME =
+  /^\s*(javascript|vbscript|file|chrome-extension|chrome|chrome-search|intent|wyciwyg|view-source|jar|data)\s*:/i;
+
+/**
+ * 安全な data:image URL かどうか (renderer の image src 用)。
+ * 一般的な画像 MIME + base64 のみ許可、`data:text/html;base64,...` 等は拒否。
+ */
+const SAFE_IMAGE_DATA_URL =
+  /^data:image\/(png|jpeg|jpg|gif|webp|avif|bmp|svg\+xml|x-icon);base64,[a-zA-Z0-9+/=]+$/i;
+
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * 外部リンクとして開いてよい URL か (https/mailto/tel)。
+ *
+ * Issue #22 で allowlist 化。それ以前は RFC 3986 スキーム全部 (`ftp:`, `sms:`,
+ * `vbscript:` 含む) を true にしていた。現在は app.js の外部リンクバナーで
+ * 安全に新タブを開ける https/mailto/tel に限定する。
  */
 export function isExternalUrl(href) {
   if (typeof href !== "string") return false;
-  // RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-  return /^[a-z][a-z0-9+.-]*:/i.test(href);
+  return SAFE_LINK_SCHEME.test(href);
 }
 
 /**
  * `javascript:` スキームかどうか。空白や大文字の難読化に対応。
  * 例: " JavaScript : alert(1)" でも true
+ *
+ * Issue #22 以降、より広く危険スキームを判定する [[isUnsafeScheme]] も追加した。
+ * 既存呼び出しの後方互換のためこの関数は javascript: のみマッチに維持する。
  */
 export function isJavascriptUrl(href) {
   if (typeof href !== "string") return false;
   return /^\s*javascript\s*:/i.test(href);
+}
+
+/**
+ * Issue #22: 危険スキームの拡張判定。
+ * javascript / vbscript / file / chrome-extension / intent / view-source / wyciwyg / jar / data
+ * のいずれかをマッチする。link click / image src 両方で実行・表示・遷移を阻止する。
+ */
+export function isUnsafeScheme(href) {
+  if (typeof href !== "string") return false;
+  return DANGEROUS_SCHEME.test(href);
+}
+
+/**
+ * Issue #22: image src として安全な href か。
+ * - `http(s)://` で始まる絶対 URL: true
+ * - `data:image/(png|jpeg|gif|webp|avif|bmp|svg+xml|x-icon);base64,` 形式の data URI: true
+ * - それ以外 (mailto:, tel:, ftp:, file:, javascript:, スキームなしの相対パス) は false
+ *
+ * スキームなし (相対パス) は呼び出し側 ([[rewriteImageHref]]) で別途解決する。
+ */
+export function isSafeImageHref(href) {
+  if (typeof href !== "string") return false;
+  if (/^https?:/i.test(href)) return true;
+  if (SAFE_IMAGE_DATA_URL.test(href)) return true;
+  return false;
+}
+
+/**
+ * RFC 3986 風のスキーム接頭辞 (`http:`, `mailto:`, `foo+bar.baz:`, ...) を持つかの判定。
+ * 安全性とは無関係の純粋な構文判定。`isSafeImageHref` / `isExternalUrl` / `isUnsafeScheme` の
+ * 前段フィルタとして使う。
+ */
+export function hasScheme(href) {
+  if (typeof href !== "string") return false;
+  return HAS_SCHEME.test(href);
 }
 
 /**

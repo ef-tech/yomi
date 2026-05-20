@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  hasScheme,
   isAnchor,
   isExternalUrl,
   isJavascriptUrl,
+  isSafeImageHref,
+  isUnsafeScheme,
   resolveRelativePath,
   splitHrefHash,
 } from "../../public/link-resolver.js";
@@ -27,21 +30,25 @@ describe("isAnchor", () => {
   });
 });
 
-describe("isExternalUrl", () => {
-  test("http / https は true", () => {
+describe("isExternalUrl (Issue #22: allowlist 化)", () => {
+  test("http / https / mailto / tel は true", () => {
     expect(isExternalUrl("http://example.com")).toBe(true);
     expect(isExternalUrl("https://example.com")).toBe(true);
-  });
-
-  test("mailto / tel / sms / ftp は true", () => {
     expect(isExternalUrl("mailto:x@y.com")).toBe(true);
     expect(isExternalUrl("tel:+819012345678")).toBe(true);
-    expect(isExternalUrl("sms:+819012345678")).toBe(true);
-    expect(isExternalUrl("ftp://example.com/file")).toBe(true);
   });
 
-  test("javascript: スキームも true (スキーム判定としては正しい)", () => {
-    expect(isExternalUrl("javascript:alert(1)")).toBe(true);
+  test("allowlist 外のスキームは false (sms / ftp / data / vbscript / file 等)", () => {
+    expect(isExternalUrl("sms:+819012345678")).toBe(false);
+    expect(isExternalUrl("ftp://example.com/file")).toBe(false);
+    expect(isExternalUrl("data:image/png;base64,AAA")).toBe(false);
+    expect(isExternalUrl("vbscript:msgbox(1)")).toBe(false);
+    expect(isExternalUrl("file:///etc/passwd")).toBe(false);
+    expect(isExternalUrl("chrome-extension://abc")).toBe(false);
+  });
+
+  test("javascript: は false (allowlist 外)", () => {
+    expect(isExternalUrl("javascript:alert(1)")).toBe(false);
   });
 
   test("相対パスは false", () => {
@@ -56,6 +63,95 @@ describe("isExternalUrl", () => {
 
   test("ルート絶対パス (/foo) は false", () => {
     expect(isExternalUrl("/foo.md")).toBe(false);
+  });
+});
+
+describe("isUnsafeScheme (Issue #22)", () => {
+  test("javascript: / vbscript: / file: / chrome-extension: は true", () => {
+    expect(isUnsafeScheme("javascript:alert(1)")).toBe(true);
+    expect(isUnsafeScheme("vbscript:msgbox(1)")).toBe(true);
+    expect(isUnsafeScheme("file:///etc/passwd")).toBe(true);
+    expect(isUnsafeScheme("chrome-extension://abc")).toBe(true);
+  });
+
+  test("data: / intent: / view-source: / wyciwyg: も true", () => {
+    expect(isUnsafeScheme("data:text/html,<script>alert(1)</script>")).toBe(true);
+    expect(isUnsafeScheme("intent://example.com")).toBe(true);
+    expect(isUnsafeScheme("view-source:http://example.com")).toBe(true);
+    expect(isUnsafeScheme("wyciwyg://foo")).toBe(true);
+  });
+
+  test("空白や大文字の難読化に対応", () => {
+    expect(isUnsafeScheme(" javascript:alert(1)")).toBe(true);
+    expect(isUnsafeScheme("JavaScript:alert(1)")).toBe(true);
+    expect(isUnsafeScheme(" VBScript:foo")).toBe(true);
+    expect(isUnsafeScheme("FILE:///etc")).toBe(true);
+  });
+
+  test("https / mailto / tel は false (安全な link scheme)", () => {
+    expect(isUnsafeScheme("https://example.com")).toBe(false);
+    expect(isUnsafeScheme("mailto:x@y.com")).toBe(false);
+    expect(isUnsafeScheme("tel:+819012345678")).toBe(false);
+  });
+
+  test("相対パス・アンカー・絶対パスは false", () => {
+    expect(isUnsafeScheme("foo.md")).toBe(false);
+    expect(isUnsafeScheme("#anchor")).toBe(false);
+    expect(isUnsafeScheme("/foo.md")).toBe(false);
+  });
+});
+
+describe("isSafeImageHref (Issue #22)", () => {
+  test("http / https は true", () => {
+    expect(isSafeImageHref("http://example.com/x.png")).toBe(true);
+    expect(isSafeImageHref("https://example.com/x.png")).toBe(true);
+  });
+
+  test("data:image/<type>;base64, は true (png/jpeg/gif/webp/avif/bmp/svg+xml/x-icon)", () => {
+    expect(isSafeImageHref("data:image/png;base64,iVBORw0KGgo=")).toBe(true);
+    expect(isSafeImageHref("data:image/jpeg;base64,/9j/4AAQ")).toBe(true);
+    expect(isSafeImageHref("data:image/svg+xml;base64,PHN2Zw==")).toBe(true);
+    expect(isSafeImageHref("data:image/webp;base64,UklGRg==")).toBe(true);
+    expect(isSafeImageHref("data:image/x-icon;base64,AAA=")).toBe(true);
+  });
+
+  test("data:text/html;base64,... は false (画像でない MIME)", () => {
+    expect(isSafeImageHref("data:text/html;base64,PHNjcmlwdD4=")).toBe(false);
+    expect(isSafeImageHref("data:application/javascript;base64,YWxlcnQ=")).toBe(false);
+  });
+
+  test("data:image でも base64 以外は false", () => {
+    expect(isSafeImageHref("data:image/png,raw")).toBe(false);
+    expect(isSafeImageHref("data:image/svg+xml,<svg/>")).toBe(false);
+  });
+
+  test("javascript / vbscript / file / mailto / tel は false", () => {
+    expect(isSafeImageHref("javascript:alert(1)")).toBe(false);
+    expect(isSafeImageHref("vbscript:msgbox(1)")).toBe(false);
+    expect(isSafeImageHref("file:///etc/passwd")).toBe(false);
+    expect(isSafeImageHref("mailto:x@y.com")).toBe(false);
+    expect(isSafeImageHref("tel:+819012345678")).toBe(false);
+  });
+
+  test("相対パス・アンカーは false (image src として scheme なし → 別経路で解決)", () => {
+    expect(isSafeImageHref("foo.png")).toBe(false);
+    expect(isSafeImageHref("./foo.png")).toBe(false);
+    expect(isSafeImageHref("#anchor")).toBe(false);
+  });
+});
+
+describe("hasScheme (Issue #22)", () => {
+  test("scheme 接頭辞があれば true", () => {
+    expect(hasScheme("http://example.com")).toBe(true);
+    expect(hasScheme("foo+bar.baz:something")).toBe(true);
+    expect(hasScheme("javascript:")).toBe(true);
+  });
+
+  test("scheme なしは false", () => {
+    expect(hasScheme("foo.md")).toBe(false);
+    expect(hasScheme("./foo.md")).toBe(false);
+    expect(hasScheme("/foo.md")).toBe(false);
+    expect(hasScheme("#anchor")).toBe(false);
   });
 });
 
