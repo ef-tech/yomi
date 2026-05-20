@@ -4,33 +4,33 @@ import { renderMarkdown, rewriteImageHref } from "../src/renderer.ts";
 describe("renderMarkdown", () => {
   test("見出しと段落をレンダリング (h1 に id 付与)", async () => {
     const html = await renderMarkdown("# Title\n\n本文");
-    expect(html).toContain('<h1 id="title">Title</h1>');
+    expect(html).toMatch(/<h1 id="title"[^>]*>Title<\/h1>/);
     expect(html).toContain("<p>本文</p>");
   });
 
   test("日本語見出しは id にも日本語が残る", async () => {
     const html = await renderMarkdown("## 使い方");
-    expect(html).toContain('<h2 id="使い方">使い方</h2>');
+    expect(html).toMatch(/<h2 id="使い方"[^>]*>使い方<\/h2>/);
   });
 
   test("同じ見出しが複数あれば id にサフィックスが付く", async () => {
     const html = await renderMarkdown("## intro\n\n## intro\n\n## intro");
-    expect(html).toContain('<h2 id="intro">intro</h2>');
-    expect(html).toContain('<h2 id="intro-1">intro</h2>');
-    expect(html).toContain('<h2 id="intro-2">intro</h2>');
+    expect(html).toMatch(/<h2 id="intro"[^>]*>intro<\/h2>/);
+    expect(html).toMatch(/<h2 id="intro-1"[^>]*>intro<\/h2>/);
+    expect(html).toMatch(/<h2 id="intro-2"[^>]*>intro<\/h2>/);
   });
 
   test("見出しテキストが記号のみ → section-N fallback", async () => {
     const html = await renderMarkdown("# !?&");
-    expect(html).toMatch(/<h1 id="section-\d+">/);
+    expect(html).toMatch(/<h1 id="section-\d+"[^>]*>/);
   });
 
   test("複数文書で id 採番が独立 (Marked インスタンス分離)", async () => {
     const html1 = await renderMarkdown("## intro");
     const html2 = await renderMarkdown("## intro");
     // 2 つ目の文書でも -1 ではなく素の "intro" になる
-    expect(html1).toContain('<h2 id="intro">intro</h2>');
-    expect(html2).toContain('<h2 id="intro">intro</h2>');
+    expect(html1).toMatch(/<h2 id="intro"[^>]*>intro<\/h2>/);
+    expect(html2).toMatch(/<h2 id="intro"[^>]*>intro<\/h2>/);
   });
 
   test("GFM ソフト改行: 1 行改行 → <br>", async () => {
@@ -58,7 +58,7 @@ describe("renderMarkdown", () => {
     expect(html).toContain('<dl class="frontmatter">');
     expect(html).toContain("<dt>title</dt><dd>T</dd>");
     expect(html).toContain('<a href="https://example.com"');
-    expect(html).toContain('<h1 id="本文">本文</h1>');
+    expect(html).toMatch(/<h1 id="本文"[^>]*>本文<\/h1>/);
     // dl が h1 より前
     expect(html.indexOf("<dl")).toBeLessThan(html.indexOf("<h1"));
   });
@@ -66,7 +66,45 @@ describe("renderMarkdown", () => {
   test("フロントマターなしでも本文がレンダリングされる", async () => {
     const html = await renderMarkdown("# Hello");
     expect(html).not.toContain('<dl class="frontmatter">');
-    expect(html).toContain('<h1 id="hello">Hello</h1>');
+    expect(html).toMatch(/<h1 id="hello"[^>]*>Hello<\/h1>/);
+  });
+
+  describe("heading data-line 属性 (Issue #9 scroll sync)", () => {
+    test("単純な見出しに data-line が付与される (1-indexed)", async () => {
+      const html = await renderMarkdown("# Title\n\n本文\n\n## Sub");
+      expect(html).toContain('<h1 id="title" data-line="1">');
+      expect(html).toContain('<h2 id="sub" data-line="5">');
+    });
+
+    test("frontmatter がある場合は body 行 + frontmatter 行数で絶対行になる", async () => {
+      const md = "---\ntitle: T\n---\n# 本文\n\n## 詳細";
+      const html = await renderMarkdown(md);
+      // "---\ntitle: T\n---\n" は 3 \n を消費 → body 始まりは 4 行目
+      // "# 本文" は body の 1 行目 → 絶対 4 行目
+      expect(html).toContain('<h1 id="本文" data-line="4">');
+      // "## 詳細" は body の 3 行目 → 絶対 6 行目
+      expect(html).toContain('<h2 id="詳細" data-line="6">');
+    });
+
+    test("同一テキストの見出しが複数あっても順に data-line が割り当てられる", async () => {
+      const html = await renderMarkdown("## intro\n\n本文\n\n## intro\n\n本文 2");
+      expect(html).toContain('<h2 id="intro" data-line="1">');
+      expect(html).toContain('<h2 id="intro-1" data-line="5">');
+    });
+
+    test("見出し 0 個の md には data-line が出ない (h タグ自体ない)", async () => {
+      const html = await renderMarkdown("本文だけ");
+      expect(html).not.toMatch(/<h[1-6]/);
+    });
+
+    test("段落本文中に heading raw と同じ文字列があっても行頭マッチで正しい行が選ばれる", async () => {
+      // 段落 1 行目に "# 注意" の文字列が **段落内に inline で** 含まれる
+      // 後続に同じ raw の本物の見出しがある
+      const md = "「以下の # 注意 を見てください」\n\n# 注意\n\n本文。";
+      const html = await renderMarkdown(md);
+      // 行頭マッチ条件により、line 3 が選ばれることを期待 (段落 1 行目 = 行頭マッチ失敗)
+      expect(html).toContain('<h1 id="注意" data-line="3">');
+    });
   });
 
   test("テーブル (GFM) をレンダリング", async () => {

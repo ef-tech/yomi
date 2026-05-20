@@ -10,6 +10,21 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-20
+
+並列モードでソースとプレビューのスクロール位置が**見出し基準で左右同期**するようになりました (Issue #9)。長文 md でも「プレビューで見ている場所がソースのどこか」が見失われません。
+
+### Added (Issue #9)
+
+- **並列モードのスクロール同期**: source 側 `<pre id="source">` と preview 側を相互に追従。
+  - 見出しベース: `<h1>` 〜 `<h6>` に `data-line` 属性 (source 上の絶対行番号) を埋め、source の行ベース Y 座標と preview の `offsetTop` を線形補間
+  - 純関数 `mapScrollTop` / `findHeadingLines` を `public/scroll-sync.js` に切り出し、unit テストでカバー
+  - ループ防止: `scrollSyncing` フラグ + `requestAnimationFrame` で 1 フレーム後にクリア
+  - 編集モード時は自動 OFF (textarea のキャレット位置を乱さないため)、出ると `rebuildScrollSyncPairs()` で復活
+  - 見出し 0 個の md では pair が作れないので独立スクロール
+  - Mermaid async 描画完了後に pair を再構築 (描画前後で `offsetTop` が変わるため)
+  - 設定は `localStorage` (`yomi:scrollSync:v1`、デフォルト ON) に保存
+
 ## [0.10.1] - 2026-05-20
 
 `/api/asset` 画像配信エンドポイントの defense-in-depth 強化 (Issue #22)。PR #20 (v0.7.0) の adversarial review で見つかった MEDIUM / LOW 指摘をまとめて follow-up。

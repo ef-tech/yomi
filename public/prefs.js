@@ -49,4 +49,9 @@ export const prefs = {
     stringify: (v) => (v ? "true" : "false"),
   }),
   tocExpandLevel: makePref("yomi:tocExpandLevel:v1"),
+  // Issue #9: split mode のスクロール同期 ON/OFF (デフォルト ON)
+  scrollSync: makePref("yomi:scrollSync:v1", {
+    parse: (s) => s === "true",
+    stringify: (v) => (v ? "true" : "false"),
+  }),
 };

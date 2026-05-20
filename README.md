@@ -135,6 +135,19 @@ Markdown 内の `![alt](foo.png)` の相対パスは、yomi が `GET /api/asset?
 
 プレビュー内の画像をクリックすると、その画像 URL が新しいタブで開きます（`<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap）。ブラウザネイティブの画像表示で原寸 / ズーム / 保存ができます。hover で `cursor: zoom-in` を表示。markdown で `[![](foo.png)](url)` のようにリンクで囲んだ画像はリンク先が優先され、画像ジャンプは発火しません。
 
+### 並列モードのスクロール同期 (Issue #9)
+
+**並列** モード (md ソース + プレビューの 2 ペイン) では、見出し基準でスクロール位置が左右同期します。`<h1>` 〜 `<h6>` に source 上の絶対行番号を `data-line` 属性で埋め、source 側の行ベース Y 座標と preview 側の `offsetTop` を線形補間する純関数で対応付けます。
+
+| モード | 同期 |
+|---|---|
+| `preview` (単独) | N/A |
+| `並列` | 有効 (デフォルト ON) |
+| `MD` (単独) | N/A |
+| 編集モード (textarea + preview) | 無効 (textarea のキャレット位置を乱さないため) |
+
+見出しが 0 個の md では pair が作れないので両ペインが独立してスクロールします。Mermaid 図の async 描画完了後も pair が再構築されるので、図を含む md でも同期が乱れません。設定は `localStorage` (`yomi:scrollSync:v1`、デフォルト ON) に保存されます。
+
 ### ナビゲーション / 履歴
 
 - 「現在開いているファイル」は URL クエリ `?path=foo.md` に反映される
