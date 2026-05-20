@@ -10,6 +10,16 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-05-20
+
+PR #20 (v0.7.0) の maintainability specialist が指摘した重複統合 + helper 切り出しを follow-up (Issue #23)。動作変更なし、internal refactor のみ。
+
+### Changed (Issue #23)
+
+- **Content-Type マッピングの single source of truth 化**: `src/server.ts` の `ASSET_TYPES` から `.svg` / `.png` / `.ico` の重複を排除し、`src/util/image-ext.ts` の `IMAGE_CONTENT_TYPES` (全 9 拡張子) を spread で取り込むよう変更。これにより `.jpg` / `.jpeg` / `.gif` / `.webp` / `.avif` / `.bmp` も自動的に `/public/` 配下から正しい MIME で配信される。
+- **`computeStrongEtag(buffer)` helper を `src/util/etag.ts` に切り出し**: handleAssetRead 内で inline 計算していた sha256 prefix 強 ETag を共通化。unit テスト 5 ケース追加で決定性 / 内容差分 / 入力型 (Uint8Array/Buffer/ArrayBuffer) を担保。
+- **`?? "application/octet-stream"` フォールバックに safety net コメント追加**: handleAssetRead は前段で `isImageExtension` を gate するため事実上到達不能だが、型安全のため残してあることを明示。
+
 ## [0.11.0] - 2026-05-20
 
 並列モードでソースとプレビューのスクロール位置が**見出し基準で左右同期**するようになりました (Issue #9)。長文 md でも「プレビューで見ている場所がソースのどこか」が見失われません。
