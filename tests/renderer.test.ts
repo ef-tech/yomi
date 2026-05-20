@@ -96,6 +96,15 @@ describe("renderMarkdown", () => {
       const html = await renderMarkdown("本文だけ");
       expect(html).not.toMatch(/<h[1-6]/);
     });
+
+    test("段落本文中に heading raw と同じ文字列があっても行頭マッチで正しい行が選ばれる", async () => {
+      // 段落 1 行目に "# 注意" の文字列が **段落内に inline で** 含まれる
+      // 後続に同じ raw の本物の見出しがある
+      const md = "「以下の # 注意 を見てください」\n\n# 注意\n\n本文。";
+      const html = await renderMarkdown(md);
+      // 行頭マッチ条件により、line 3 が選ばれることを期待 (段落 1 行目 = 行頭マッチ失敗)
+      expect(html).toContain('<h1 id="注意" data-line="3">');
+    });
   });
 
   test("テーブル (GFM) をレンダリング", async () => {

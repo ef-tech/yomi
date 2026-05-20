@@ -91,7 +91,12 @@ function createMarked(opts: RenderOptions, source: string, body: string): Marked
         }
       }
       if (token.type === "heading") {
-        const idx = body.indexOf(token.raw, cursor);
+        // 行頭マッチに限定する: 段落内に同じ raw 文字列が偶然含まれていても拾わない。
+        // 見つからない場合は次の候補へ ( idx + 1 から再検索)。
+        let idx = body.indexOf(token.raw, cursor);
+        while (idx > 0 && body[idx - 1] !== "\n") {
+          idx = body.indexOf(token.raw, idx + 1);
+        }
         if (idx >= 0) {
           const lineInBody = (body.slice(0, idx).match(/\n/g)?.length ?? 0) + 1;
           headingLines.set(token as Tokens.Heading, fmLines + lineInBody);
