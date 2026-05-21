@@ -1258,6 +1258,15 @@ function navigateInternal(href) {
     return;
   }
 
+  // Issue #37: PDF など md ツリーに含まれないが /api/asset で配信可能な
+  // ファイルは別タブで開く (Content-Disposition: inline でブラウザのネイティブ
+  // ビューアに任せる)。tabnabbing 防止のため noopener,noreferrer を付ける。
+  if (isAssetDownloadablePath(resolved)) {
+    const url = `/api/asset?path=${encodePathForUrl(resolved)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+
   // 拡張子なし fallback: foo → foo.md → foo.markdown → foo.mdx
   const candidates = state.fileButtons.has(resolved)
     ? [resolved]
@@ -1270,6 +1279,20 @@ function navigateInternal(href) {
   }
 
   navigateTo(hit, { history: "push", hash }).catch((err) => setStatus("error", err.message));
+}
+
+/**
+ * Issue #37: navigateInternal で別タブ表示する対象拡張子の判定。
+ * サーバ側 `src/util/asset-ext.ts` の ASSET_CONTENT_TYPES 追加分と揃える。
+ * 画像は renderer が `<img>` + `<a target="_blank">` で直接出力するため、
+ * ここでは PDF のみを対象にする (md 内 `[X](foo.pdf)` リンク用)。
+ */
+function isAssetDownloadablePath(path) {
+  return typeof path === "string" && /\.pdf$/i.test(path);
+}
+
+function encodePathForUrl(p) {
+  return p.split("/").map(encodeURIComponent).join("/");
 }
 
 function showExternalLinkBanner(url) {

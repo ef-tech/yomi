@@ -10,6 +10,20 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-22
+
+md 内 `[X](foo.pdf)` のような **PDF リンクが新しいタブで開く** ようになりました (Issue #37)。これまでは「ファイルが見つかりません」エラーになっていたものが、ブラウザ内蔵の PDF ビューアで閲覧できます。
+
+### Added (Issue #37)
+
+- **PDF を `/api/asset` 経由で配信**: `src/util/asset-ext.ts` に `ASSET_CONTENT_TYPES = { ...IMAGE_CONTENT_TYPES, ".pdf": "application/pdf" }` を新設し、server の asset エンドポイント入口バリデーションを `isAssetExtension` に置き換え。Content-Disposition は `inline` のまま (ブラウザ内蔵 PDF ビューア → 保存も可能)。
+- **クライアントの PDF リンク遷移**: `app.js` の `navigateInternal` で resolved パスが `.pdf` の場合 `window.open("/api/asset?path=...", "_blank", "noopener,noreferrer")` で別タブ表示。tabnabbing 防止の `noopener,noreferrer` 付き。md ツリーには含まれない (md 専用スキャナの対象外) 添付ファイルでも、md と同階層 / `../` で参照されていれば開ける。
+
+### Changed
+
+- **`/api/asset` の入口判定が画像専用 → asset 全般 (画像 + PDF)**: 既存の TOCTOU 対策 / 強 ETag / 50MB 上限 / Content-Disposition: inline / X-Content-Type-Options: nosniff はそのまま PDF にも適用される (defense-in-depth)。
+- **エラーメッセージ**: 「画像ファイル以外は読み取れません」→「対応していない拡張子です」、「画像サイズが大きすぎます」→「ファイルサイズが大きすぎます」。
+
 ## [0.11.1] - 2026-05-20
 
 PR #20 (v0.7.0) の maintainability specialist が指摘した重複統合 + helper 切り出しを follow-up (Issue #23)。動作変更なし、internal refactor のみ。

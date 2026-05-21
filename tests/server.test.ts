@@ -258,10 +258,14 @@ describe("server - /api/asset (Issue #19)", () => {
     "hex",
   );
 
+  // Issue #37: PDF を /api/asset で配信できることを検証
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n%test pdf body\n%%EOF\n", "utf-8");
+
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-asset-"));
     await writeFile(join(root, "pic.png"), PNG_BYTES);
     await writeFile(join(root, "doc.md"), "![alt](pic.png)");
+    await writeFile(join(root, "return_voucher.pdf"), PDF_BYTES);
     // サブディレクトリ
     await mkdir(join(root, "images"), { recursive: true });
     await writeFile(join(root, "images", "x.png"), PNG_BYTES);
@@ -323,9 +327,20 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
-  test("画像以外の拡張子は 400", async () => {
+  test("対応していない拡張子は 400", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=danger.txt`);
     expect(res.status).toBe(400);
+  });
+
+  test("Issue #37: PDF が application/pdf + inline で配信される", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=return_voucher.pdf`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("content-disposition")).toBe("inline");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.equals(PDF_BYTES)).toBe(true);
   });
 
   test("path 未指定は 400", async () => {
