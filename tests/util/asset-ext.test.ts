@@ -20,6 +20,24 @@ describe("isAssetExtension", () => {
     expect(isAssetExtension("noext")).toBe(false);
     expect(isAssetExtension("")).toBe(false);
   });
+
+  test("末尾ドットは false (空拡張子)", () => {
+    expect(isAssetExtension("foo.")).toBe(false);
+  });
+
+  test("画像拡張子の大文字も許可される (case-insensitive)", () => {
+    expect(isAssetExtension("A.PNG")).toBe(true);
+    expect(isAssetExtension("B.JPG")).toBe(true);
+    expect(isAssetExtension("C.WebP")).toBe(true);
+  });
+
+  test("Object.prototype 継承キー (`.toString`, `.__proto__`) は false (プロトタイプ汚染防御)", () => {
+    // `lastIndexOf('.') > -1` で `.toString` 等の文字列が "拡張子" として渡された
+    // 場合に `in` 演算子が Object.prototype を見て true を返さないことを保証。
+    expect(isAssetExtension("foo.toString")).toBe(false);
+    expect(isAssetExtension("foo.hasOwnProperty")).toBe(false);
+    expect(isAssetExtension("foo.constructor")).toBe(false);
+  });
 });
 
 describe("assetContentType", () => {
@@ -34,5 +52,10 @@ describe("assetContentType", () => {
     expect(assetContentType("a.md")).toBeNull();
     expect(assetContentType("a.zip")).toBeNull();
     expect(assetContentType("noext")).toBeNull();
+  });
+
+  test("Object.prototype 継承キーは null (プロトタイプ汚染防御)", () => {
+    expect(assetContentType("foo.toString")).toBeNull();
+    expect(assetContentType("foo.__proto__")).toBeNull();
   });
 });

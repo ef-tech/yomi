@@ -16,11 +16,15 @@ export const ASSET_CONTENT_TYPES: Readonly<Record<string, string>> = {
 export function isAssetExtension(nameOrPath: string): boolean {
   const dot = nameOrPath.lastIndexOf(".");
   if (dot < 0) return false;
-  return nameOrPath.slice(dot).toLowerCase() in ASSET_CONTENT_TYPES;
+  // Object.hasOwn で `.toString` / `.__proto__` 等の Object.prototype 継承
+  // プロパティ経由でフィルタを通過する経路を塞ぐ (defense-in-depth)。
+  return Object.hasOwn(ASSET_CONTENT_TYPES, nameOrPath.slice(dot).toLowerCase());
 }
 
 export function assetContentType(nameOrPath: string): string | null {
   const dot = nameOrPath.lastIndexOf(".");
   if (dot < 0) return null;
-  return ASSET_CONTENT_TYPES[nameOrPath.slice(dot).toLowerCase()] ?? null;
+  const ext = nameOrPath.slice(dot).toLowerCase();
+  if (!Object.hasOwn(ASSET_CONTENT_TYPES, ext)) return null;
+  return ASSET_CONTENT_TYPES[ext] ?? null;
 }

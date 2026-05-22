@@ -327,9 +327,11 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
-  test("対応していない拡張子は 400", async () => {
+  test("対応していない拡張子は 400 + エラー文言", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=danger.txt`);
     expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("対応していない拡張子です");
   });
 
   test("Issue #37: PDF が application/pdf + inline で配信される", async () => {
@@ -341,6 +343,11 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
     const buf = Buffer.from(await res.arrayBuffer());
     expect(buf.equals(PDF_BYTES)).toBe(true);
+  });
+
+  test("Issue #37: PDF も path traversal は拒否 (画像と同じ resolveSafe を継承)", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=${encodeURIComponent("../escape.pdf")}`);
+    expect(res.status).toBe(400);
   });
 
   test("path 未指定は 400", async () => {
@@ -447,9 +454,13 @@ describe("server - /api/asset サイズ上限 (Issue #19)", () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-asset-size-"));
     // sparse file: 実体は最小限でも size は MAX_ASSET_BYTES + 1
-    const p = join(root, "huge.png");
-    await writeFile(p, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    await truncate(p, MAX_ASSET_BYTES + 1);
+    const png = join(root, "huge.png");
+    await writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await truncate(png, MAX_ASSET_BYTES + 1);
+    // Issue #37: PDF も同じ size limit に従う
+    const pdf = join(root, "huge.pdf");
+    await writeFile(pdf, Buffer.from("%PDF-1.4\n", "utf-8"));
+    await truncate(pdf, MAX_ASSET_BYTES + 1);
     ctx = await startServer(root);
   });
 
@@ -461,6 +472,13 @@ describe("server - /api/asset サイズ上限 (Issue #19)", () => {
   test("MAX_ASSET_BYTES 超は 413", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=huge.png`);
     expect(res.status).toBe(413);
+  });
+
+  test("Issue #37: PDF も MAX_ASSET_BYTES 超で 413 + 統一エラー文言", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=huge.pdf`);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("ファイルサイズが大きすぎます");
   });
 });
 

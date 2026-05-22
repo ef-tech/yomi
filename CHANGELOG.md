@@ -17,12 +17,21 @@ md 内 `[X](foo.pdf)` のような **PDF リンクが新しいタブで開く** 
 ### Added (Issue #37)
 
 - **PDF を `/api/asset` 経由で配信**: `src/util/asset-ext.ts` に `ASSET_CONTENT_TYPES = { ...IMAGE_CONTENT_TYPES, ".pdf": "application/pdf" }` を新設し、server の asset エンドポイント入口バリデーションを `isAssetExtension` に置き換え。Content-Disposition は `inline` のまま (ブラウザ内蔵 PDF ビューア → 保存も可能)。
-- **クライアントの PDF リンク遷移**: `app.js` の `navigateInternal` で resolved パスが `.pdf` の場合 `window.open("/api/asset?path=...", "_blank", "noopener,noreferrer")` で別タブ表示。tabnabbing 防止の `noopener,noreferrer` 付き。md ツリーには含まれない (md 専用スキャナの対象外) 添付ファイルでも、md と同階層 / `../` で参照されていれば開ける。
+- **renderer 側で `<a href="foo.pdf">` を `/api/asset?path=...` + `target="_blank" rel="noopener noreferrer"` に rewrite**: src/renderer.ts の link renderer で相対 PDF リンクを書き換える。これにより左クリックだけでなく **中クリック / Ctrl-Cmd-クリック / 右クリック「リンクを新しいタブで開く」/「リンクアドレスをコピー」もブラウザネイティブに動作**する。`[Report](foo.pdf#page=3)` のような Chrome PDF ビューアの page jump hash も保持。
+- **クライアント側のクリック判定を単純化**: `a.target === "_blank"` であれば renderer 出力 (画像 wrap / PDF rewrite) として一様にブラウザに任せる。`navigateInternal` の PDF 分岐は撤去。
 
 ### Changed
 
 - **`/api/asset` の入口判定が画像専用 → asset 全般 (画像 + PDF)**: 既存の TOCTOU 対策 / 強 ETag / 50MB 上限 / Content-Disposition: inline / X-Content-Type-Options: nosniff はそのまま PDF にも適用される (defense-in-depth)。
+- **`isAssetExtension` / `assetContentType` を `Object.hasOwn` 判定に変更**: `in` 演算子が `Object.prototype` 継承キー (`.toString` / `.__proto__` 等) でフィルタを通過する経路を塞ぐ (defense-in-depth)。
+- **`encodePathForUrl` を `public/link-resolver.js` に統合**: server-side renderer.ts と client-side app.js の重複を解消し、URL エンコーディングポリシーの drift を防ぐ。
 - **エラーメッセージ**: 「画像ファイル以外は読み取れません」→「対応していない拡張子です」、「画像サイズが大きすぎます」→「ファイルサイズが大きすぎます」。
+
+### Tests
+
+- `tests/util/asset-ext.test.ts`: PDF / 大文字拡張子 / 末尾ドット / プロトタイプ汚染 (`.toString` 等) の edge case をカバー。
+- `tests/server.test.ts`: PDF が application/pdf + inline で配信されること、PDF が path traversal で 400、PDF が MAX_ASSET_BYTES 超で 413 + 統一エラー文言を検証。
+- `tests/renderer.test.ts`: `rewritePdfLinkHref` の unit テスト + renderMarkdown が `<a target="_blank" href="/api/asset?path=...">` を出力すること、md / 外部 URL リンクは rewrite しないこと、hash (#page=N) 保持を検証。
 
 ## [0.11.1] - 2026-05-20
 
