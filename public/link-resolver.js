@@ -141,6 +141,16 @@ export function splitHrefHash(href) {
 }
 
 /**
+ * 各セグメントを encodeURIComponent しつつ "/" を保持して URL 化する。
+ * `/api/asset?path=...` の path クエリ用などに使う共有ヘルパー (Issue #37 で
+ * server-side renderer.ts と client-side app.js の重複を解消)。
+ */
+export function encodePathForUrl(p) {
+  if (typeof p !== "string") return "";
+  return p.split("/").map(encodeURIComponent).join("/");
+}
+
+/**
  * 現在のファイル path と相対 href から、リンク先の path を解決する。
  * POSIX 風の path 正規化 (`.`, `..` を解決)。
  *

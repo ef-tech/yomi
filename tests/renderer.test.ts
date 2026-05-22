@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderMarkdown, rewriteImageHref } from "../src/renderer.ts";
+import { renderMarkdown, rewriteImageHref, rewritePdfLinkHref } from "../src/renderer.ts";
 
 describe("renderMarkdown", () => {
   test("見出しと段落をレンダリング (h1 に id 付与)", async () => {
@@ -288,5 +288,76 @@ describe("rewriteImageHref (unit)", () => {
 
   test("相対画像は /api/asset URL", () => {
     expect(rewriteImageHref("foo.png", "docs/a.md")).toBe("/api/asset?path=docs/foo.png");
+  });
+});
+
+describe("rewritePdfLinkHref (Issue #37, unit)", () => {
+  test("currentPath 未指定なら null (default renderer)", () => {
+    expect(rewritePdfLinkHref("foo.pdf", undefined)).toBeNull();
+  });
+
+  test("空文字は null", () => {
+    expect(rewritePdfLinkHref("", "a.md")).toBeNull();
+  });
+
+  test("アンカー (`#sec`) は null", () => {
+    expect(rewritePdfLinkHref("#sec", "a.md")).toBeNull();
+  });
+
+  test("外部 URL は null (default renderer のバナー処理に任せる)", () => {
+    expect(rewritePdfLinkHref("https://example.com/foo.pdf", "a.md")).toBeNull();
+    expect(rewritePdfLinkHref("http://example.com/foo.pdf", "a.md")).toBeNull();
+  });
+
+  test("javascript: / vbscript: / data: は null (default renderer 側でブロック)", () => {
+    expect(rewritePdfLinkHref("javascript:alert(1)", "a.md")).toBeNull();
+    expect(rewritePdfLinkHref("vbscript:msgbox(1)", "a.md")).toBeNull();
+    expect(rewritePdfLinkHref("data:application/pdf;base64,AAA", "a.md")).toBeNull();
+  });
+
+  test("拡張子が pdf 以外は null", () => {
+    expect(rewritePdfLinkHref("foo.md", "a.md")).toBeNull();
+    expect(rewritePdfLinkHref("foo.png", "a.md")).toBeNull();
+    expect(rewritePdfLinkHref("foo", "a.md")).toBeNull();
+  });
+
+  test("相対 PDF は /api/asset URL に rewrite", () => {
+    expect(rewritePdfLinkHref("foo.pdf", "docs/a.md")).toBe("/api/asset?path=docs/foo.pdf");
+  });
+
+  test("大文字 PDF も rewrite", () => {
+    expect(rewritePdfLinkHref("FOO.PDF", "docs/a.md")).toBe("/api/asset?path=docs/FOO.PDF");
+  });
+
+  test("hash (#page=N) を保持", () => {
+    // splitHrefHash で decode 済みの hash がそのまま付く
+    expect(rewritePdfLinkHref("foo.pdf#page=3", "a.md")).toBe("/api/asset?path=foo.pdf#page=3");
+  });
+
+  test("../ で親ディレクトリ参照も解決", () => {
+    expect(rewritePdfLinkHref("../shared/spec.pdf", "docs/api.md")).toBe(
+      "/api/asset?path=shared/spec.pdf",
+    );
+  });
+
+  test("renderMarkdown が <a target='_blank'> + /api/asset URL を出力", async () => {
+    const html = await renderMarkdown("[Report](report.pdf)", { currentPath: "docs/a.md" });
+    expect(html).toContain('<a href="/api/asset?path=docs/report.pdf"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  test("renderMarkdown が #page=N hash を保持", async () => {
+    const html = await renderMarkdown("[P3](report.pdf#page=3)", { currentPath: "a.md" });
+    expect(html).toContain('href="/api/asset?path=report.pdf#page=3"');
+  });
+
+  test("renderMarkdown は md / 外部 URL リンクは rewrite しない (default 出力維持)", async () => {
+    const md = await renderMarkdown("[X](other.md)", { currentPath: "a.md" });
+    expect(md).toContain('<a href="other.md">X</a>');
+    expect(md).not.toContain("target=");
+    const ext = await renderMarkdown("[G](https://example.com/x.pdf)", { currentPath: "a.md" });
+    expect(ext).toContain('<a href="https://example.com/x.pdf">G</a>');
+    expect(ext).not.toContain("target=");
   });
 });

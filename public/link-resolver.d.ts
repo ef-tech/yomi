@@ -14,3 +14,4 @@ export declare function isSafeImageHref(href: string): boolean;
 export declare function hasScheme(href: string): boolean;
 export declare function splitHrefHash(href: string): { path: string; hash: string | null };
 export declare function resolveRelativePath(currentPath: string, href: string): string;
+export declare function encodePathForUrl(p: string): string;

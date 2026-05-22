@@ -6,9 +6,10 @@ import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
+import { assetContentType, isAssetExtension } from "./util/asset-ext.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
-import { IMAGE_CONTENT_TYPES, imageContentType, isImageExtension } from "./util/image-ext.ts";
+import { IMAGE_CONTENT_TYPES } from "./util/image-ext.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
@@ -317,8 +318,8 @@ async function handleAssetRead(
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
-  if (!isImageExtension(requested)) {
-    return Response.json({ error: "画像ファイル以外は読み取れません" }, { status: 400 });
+  if (!isAssetExtension(requested)) {
+    return Response.json({ error: "対応していない拡張子です" }, { status: 400 });
   }
 
   let safe: { rel: string; abs: string };
@@ -345,16 +346,16 @@ async function handleAssetRead(
       return Response.json({ error: "ファイルではありません" }, { status: 400 });
     }
     if (st.size > MAX_ASSET_BYTES) {
-      return Response.json({ error: "画像サイズが大きすぎます" }, { status: 413 });
+      return Response.json({ error: "ファイルサイズが大きすぎます" }, { status: 413 });
     }
 
     const buffer = await fh.readFile();
     const etag = computeStrongEtag(buffer);
 
-    // safety net: handleAssetRead は前段で isImageExtension をチェック済みなので、
-    // safe.rel の拡張子は必ず IMAGE_CONTENT_TYPES に存在する。
+    // safety net: handleAssetRead は前段で isAssetExtension をチェック済みなので、
+    // safe.rel の拡張子は必ず ASSET_CONTENT_TYPES に存在する。
     // この `?? "application/octet-stream"` は事実上到達しないが、型安全のため残す。
-    const contentType = imageContentType(safe.rel) ?? "application/octet-stream";
+    const contentType = assetContentType(safe.rel) ?? "application/octet-stream";
     const headers: Record<string, string> = {
       "Content-Type": contentType,
       "Cache-Control": "no-cache",

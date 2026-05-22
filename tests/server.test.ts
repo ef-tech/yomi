@@ -258,10 +258,14 @@ describe("server - /api/asset (Issue #19)", () => {
     "hex",
   );
 
+  // Issue #37: PDF を /api/asset で配信できることを検証
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n%test pdf body\n%%EOF\n", "utf-8");
+
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-asset-"));
     await writeFile(join(root, "pic.png"), PNG_BYTES);
     await writeFile(join(root, "doc.md"), "![alt](pic.png)");
+    await writeFile(join(root, "return_voucher.pdf"), PDF_BYTES);
     // サブディレクトリ
     await mkdir(join(root, "images"), { recursive: true });
     await writeFile(join(root, "images", "x.png"), PNG_BYTES);
@@ -323,8 +327,26 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
-  test("画像以外の拡張子は 400", async () => {
+  test("対応していない拡張子は 400 + エラー文言", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=danger.txt`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("対応していない拡張子です");
+  });
+
+  test("Issue #37: PDF が application/pdf + inline で配信される", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=return_voucher.pdf`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("content-disposition")).toBe("inline");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.equals(PDF_BYTES)).toBe(true);
+  });
+
+  test("Issue #37: PDF も path traversal は拒否 (画像と同じ resolveSafe を継承)", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=${encodeURIComponent("../escape.pdf")}`);
     expect(res.status).toBe(400);
   });
 
@@ -432,9 +454,13 @@ describe("server - /api/asset サイズ上限 (Issue #19)", () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-asset-size-"));
     // sparse file: 実体は最小限でも size は MAX_ASSET_BYTES + 1
-    const p = join(root, "huge.png");
-    await writeFile(p, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    await truncate(p, MAX_ASSET_BYTES + 1);
+    const png = join(root, "huge.png");
+    await writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await truncate(png, MAX_ASSET_BYTES + 1);
+    // Issue #37: PDF も同じ size limit に従う
+    const pdf = join(root, "huge.pdf");
+    await writeFile(pdf, Buffer.from("%PDF-1.4\n", "utf-8"));
+    await truncate(pdf, MAX_ASSET_BYTES + 1);
     ctx = await startServer(root);
   });
 
@@ -446,6 +472,13 @@ describe("server - /api/asset サイズ上限 (Issue #19)", () => {
   test("MAX_ASSET_BYTES 超は 413", async () => {
     const res = await fetch(`${ctx.url}/api/asset?path=huge.png`);
     expect(res.status).toBe(413);
+  });
+
+  test("Issue #37: PDF も MAX_ASSET_BYTES 超で 413 + 統一エラー文言", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=huge.pdf`);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("ファイルサイズが大きすぎます");
   });
 });
 

@@ -1211,15 +1211,11 @@ function wireLinkNavigation() {
     // ページ内アンカーは既存挙動 (見出しジャンプ) に任せる
     if (isAnchor(href)) return;
 
-    // Issue #32: 画像クリックで別タブ表示用に renderer が付ける
-    // <a target="_blank"><img></a> wrap はブラウザネイティブの新タブ動作に任せる
-    if (
-      a.target === "_blank" &&
-      a.children.length === 1 &&
-      a.firstElementChild?.tagName === "IMG"
-    ) {
-      return;
-    }
+    // Issue #32 / #37: renderer 側で `target="_blank"` を付与した <a>
+    // (画像 wrap, PDF rewrite) はブラウザネイティブの新タブ動作に任せる。
+    // 左クリックだけでなく中クリック / Ctrl-Cmd-クリック / 右クリックの
+    // 「リンクを新しいタブで開く」「リンクアドレスをコピー」もそのまま動く。
+    if (a.target === "_blank") return;
 
     ev.preventDefault();
 

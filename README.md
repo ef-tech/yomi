@@ -111,6 +111,7 @@ yomi [options]
 |---|---|---|
 | 相対 md パス | `[X](other.md)` `[Y](../bar.md)` | yomi 内で該当ファイルに遷移 (左ツリー選択と同等) |
 | 拡張子なし相対 | `[X](foo)` | `foo.md` → `.markdown` → `.mdx` の順に探索して遷移 |
+| 相対 PDF パス | `[X](return_voucher.pdf)` | `/api/asset?path=...` を新規タブで開き、ブラウザ内蔵 PDF ビューアで表示 (Issue #37) |
 | アンカー | `[B](#使い方)` | 既存の見出しジャンプ動作を維持 |
 | 外部 URL | `[G](https://...)` `[M](mailto:...)` | 警告バナー → 「開く」で新規タブ、「閉じる」でキャンセル |
 | `javascript:` スキーム | `[X](javascript:...)` | **無条件ブロック** |

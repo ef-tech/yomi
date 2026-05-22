@@ -1,9 +1,13 @@
 import { Marked, type Tokens } from "marked";
 import {
+  encodePathForUrl,
   hasScheme,
+  isAnchor,
   isJavascriptUrl,
   isSafeImageHref,
+  isUnsafeScheme,
   resolveRelativePath,
+  splitHrefHash,
 } from "../public/link-resolver.js";
 import { parseFrontmatter, renderFrontmatter } from "./frontmatter.ts";
 import { escapeHtml } from "./util/html.ts";
@@ -17,14 +21,6 @@ export interface RenderOptions {
    * 省略時は画像 src は変換せずそのまま出力する。
    */
   currentPath?: string;
-}
-
-/**
- * 各セグメントを encodeURIComponent しつつ "/" を保持して URL 化する。
- * `path.split("/").map(encodeURIComponent).join("/")` のショートカット。
- */
-function encodePathForUrl(p: string): string {
-  return p.split("/").map(encodeURIComponent).join("/");
 }
 
 /**
@@ -56,6 +52,37 @@ export function rewriteImageHref(href: string, currentPath?: string): string {
   const resolved = resolveRelativePath(currentPath, href);
   if (!resolved) return href;
   return `/api/asset?path=${encodePathForUrl(resolved)}`;
+}
+
+/**
+ * Issue #37: Markdown の `[X](foo.pdf)` の href を `/api/asset?path=...` に
+ * 書き換えて `target="_blank" rel="noopener noreferrer"` を付与する。
+ *
+ * 戻り値 null は「rewrite 対象外、default renderer に任せる」シグナル。
+ *
+ * 対象条件:
+ * - currentPath が指定されている
+ * - href がアンカー (`#...`) でない
+ * - href が javascript: 等の危険スキームでも、絶対 URL / mailto / tel 等の
+ *   外部スキームでもない (相対 path 限定)
+ * - 拡張子が `.pdf`
+ *
+ * `<a target="_blank">` を返すことで、左クリックだけでなく中クリック /
+ * Ctrl-クリック / 右クリック「リンクを新しいタブで開く」/「リンクアドレスを
+ * コピー」もブラウザネイティブで動作する。クライアント側の app.js は
+ * `a.target === "_blank"` を見て click を素通りさせる。
+ */
+export function rewritePdfLinkHref(href: string, currentPath: string | undefined): string | null {
+  if (!href || !currentPath) return null;
+  if (isAnchor(href)) return null;
+  if (isJavascriptUrl(href) || isUnsafeScheme(href)) return null;
+  if (hasScheme(href)) return null;
+  const { path: hrefPath, hash } = splitHrefHash(href);
+  if (!/\.pdf$/i.test(hrefPath)) return null;
+  const resolved = resolveRelativePath(currentPath, hrefPath);
+  if (!resolved) return null;
+  const base = `/api/asset?path=${encodePathForUrl(resolved)}`;
+  return hash ? `${base}#${hash}` : base;
 }
 
 /**
@@ -133,6 +160,14 @@ function createMarked(opts: RenderOptions, source: string, body: string): Marked
         const img = `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttr}>`;
         if (!href || imageInsideLink.has(token)) return img;
         return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${img}</a>`;
+      },
+      link(token) {
+        // Issue #37: PDF 相対リンクのみ rewrite。それ以外は default renderer。
+        const rewritten = rewritePdfLinkHref(token.href ?? "", opts.currentPath);
+        if (rewritten === null) return false;
+        const inner = this.parser.parseInline(token.tokens);
+        const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : "";
+        return `<a href="${escapeHtml(rewritten)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${inner}</a>`;
       },
     },
   });
