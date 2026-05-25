@@ -238,6 +238,27 @@ bun test tests/safepath     # ファイル名で絞り込み
 bun run typecheck
 ```
 
+## トラブルシューティング
+
+### ライブリロードと監視上限 (Linux)
+
+yomi はファイル監視で `node_modules` や `.git` などの除外ディレクトリには watch を張らないため、通常は監視上限に触れません。それでも巨大なツリーを開くと、Linux の inotify watch 上限 (`fs.inotify.max_user_watches`) に達して次の警告が出ることがあります。
+
+```
+ファイル監視の上限に達しました (ENOSPC)。…
+```
+
+`ENOSPC` はディスク容量不足ではなく **inotify watch 上限の枯渇** を意味します。上限を引き上げるには:
+
+```bash
+# 一時的に変更
+sudo sysctl fs.inotify.max_user_watches=524288
+
+# 永続化
+echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf
+sudo sysctl -p /etc/sysctl.d/99-inotify.conf
+```
+
 ## ライセンス
 
 MIT — 詳細は [`LICENSE`](LICENSE) を参照。

@@ -1,6 +1,6 @@
-import { type FSWatcher, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
+import { type FSWatcher, watch } from "chokidar";
 import { type SaveMark, sha256 } from "./save-mark.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
@@ -23,6 +23,19 @@ export interface WatcherOptions {
 
 const DEBOUNCE_MS = 80;
 
+/**
+ * ディレクトリツリーを監視し、md ファイルの変更を通知する。
+ *
+ * 監視は chokidar に委譲する。`ignored` で除外ディレクトリ (node_modules 等) を
+ * 走査・監視の前段で弾くため、Linux で `fs.inotify.max_user_watches` を枯渇させて
+ * ENOSPC を招くことがない (再帰監視が node_modules 全体に watch を張る問題の回避)。
+ * ディレクトリの作成・リネーム・削除、エディタのアトミック保存 (swap+rename) も
+ * chokidar 側が一貫して扱う。
+ *
+ * onChange の kind:
+ * - "rename": ファイルの追加/削除 (ツリー構造が変化) → クライアントはツリーを再取得
+ * - "change": 既存ファイルの内容変更 → クライアントは表示中ファイルを再読込
+ */
 export function createWatcher(
   rootDir: string,
   onChange: ChangeListener,
@@ -31,47 +44,75 @@ export function createWatcher(
   const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const saveMark = options.saveMark;
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
+  let closed = false;
+  let enospcWarned = false;
 
-  const fire = (path: string, kind: ChangeKind) => {
-    const existing = debounceMap.get(path);
+  const fire = (rel: string, kind: ChangeKind) => {
+    if (closed) return;
+    const existing = debounceMap.get(rel);
     if (existing) clearTimeout(existing);
     debounceMap.set(
-      path,
+      rel,
       setTimeout(async () => {
-        debounceMap.delete(path);
-        if (saveMark && (await isOwnSave(rootDir, path, saveMark))) return;
-        onChange(path, kind);
+        debounceMap.delete(rel);
+        if (closed) return;
+        if (saveMark && (await isOwnSave(rootDir, rel, saveMark))) return;
+        if (closed) return; // close() が isOwnSave の await 中に走った場合の保険
+        onChange(rel, kind);
       }, DEBOUNCE_MS),
     );
   };
 
-  let watcher: FSWatcher;
-  try {
-    watcher = watch(rootDir, { recursive: true }, (eventType, filename) => {
-      if (!filename) return;
-      const rel = toPosix(String(filename));
-      if (!rel) return;
-      if (isExcludedPath(rel, excludes)) return;
-      if (!isMarkdownExtension(rel)) return;
-      fire(rel, eventType === "rename" ? "rename" : "change");
-    });
-  } catch (err) {
-    console.warn(
-      `ファイル監視を開始できません: ${(err as Error).message}\n` +
-        "ライブリロードは無効化されます。",
-    );
-    return { close: () => {} };
-  }
+  // 除外ディレクトリ配下は走査・監視しない (ENOSPC 回避の要)。
+  // chokidar はこの matcher が true を返すパスへ descend しない。
+  const ignored = (absPath: string): boolean => {
+    const rel = toPosix(relative(rootDir, absPath));
+    // rootDir 自身 (rel === "") や rootDir 外 (".." / "../...") は除外判定の対象外。
+    // 単に ".." で始まる名前 (例: "..cache") は通常の in-tree パスなので除外対象に残す。
+    if (!rel || rel === ".." || rel.startsWith("../")) return false;
+    return isExcludedPath(rel, excludes);
+  };
 
-  watcher.on("error", (err) => {
-    console.error("watcher エラー:", err);
+  const emit = (kind: ChangeKind) => (absPath: string) => {
+    const rel = toPosix(relative(rootDir, absPath));
+    if (!rel || !isMarkdownExtension(rel)) return;
+    fire(rel, kind);
+  };
+
+  const watcher: FSWatcher = watch(rootDir, {
+    ignored,
+    ignoreInitial: true,
+    followSymlinks: false,
+    persistent: true,
   });
+
+  watcher
+    .on("add", emit("rename"))
+    .on("change", emit("change"))
+    .on("unlink", emit("rename"))
+    .on("error", (err) => {
+      if (closed) return; // close() 後の teardown エラーはログに出さない
+      if ((err as NodeJS.ErrnoException)?.code === "ENOSPC") {
+        if (!enospcWarned) {
+          enospcWarned = true;
+          console.warn(
+            "ファイル監視の上限に達しました (ENOSPC)。ディスク容量不足ではなく、" +
+              "Linux の inotify watch 上限 (fs.inotify.max_user_watches) の枯渇です。\n" +
+              "一部ファイルのライブリロードが無効化されます。次のコマンドで上限を引き上げられます:\n" +
+              "  sudo sysctl fs.inotify.max_user_watches=524288",
+          );
+        }
+        return;
+      }
+      console.error("watcher エラー:", err);
+    });
 
   return {
     close() {
+      closed = true;
       for (const t of debounceMap.values()) clearTimeout(t);
       debounceMap.clear();
-      watcher.close();
+      void watcher.close();
     },
   };
 }

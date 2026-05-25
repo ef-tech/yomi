@@ -10,6 +10,28 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-25
+
+大規模な `node_modules` (特に pnpm の `.pnpm` 配下) を含むディレクトリで `yomi` を実行した際に、ファイル監視が `ENOSPC` で失敗してライブリロードが効かなくなる問題を修正しました (Issue #39)。
+
+### Fixed (Issue #39)
+
+- **ファイル監視を chokidar に置き換え**: `src/watcher.ts` の `fs.watch({ recursive: true })` を廃止し chokidar を採用。再帰監視は Linux で除外ディレクトリ (node_modules 等) を含む全サブディレクトリに inotify watch を張り、watch 上限 (`fs.inotify.max_user_watches`) を枯渇させて `ENOSPC` を招いていた。chokidar の `ignored` で `DEFAULT_EXCLUDES` / カスタム excludes を走査・監視の前段で弾くため、node_modules 配下に watch を張らず `ENOSPC` を回避する。ディレクトリの作成・リネーム・削除、エディタのアトミック保存 (swap+rename) も chokidar 側が一貫して扱う。
+- **`ENOSPC` を分かりやすいメッセージで案内**: watch 上限に達した場合、ディスク容量不足ではなく inotify watch 上限の枯渇である旨と `sudo sysctl fs.inotify.max_user_watches=524288` による回避策を 1 度だけ警告する。それ以外の watcher エラーは従来どおりログ出力。
+- **`close()` を終端化**: 停止後にデバウンス済みコールバックが `onChange` を発火しないよう `closed` ガードを追加。
+
+### Dependencies
+
+- **`chokidar` を追加** (^5.0.0)。クロスプラットフォームのファイル監視を実績ある実装に委譲し、除外ディレクトリの非監視・rename・アトミック保存を一貫して扱う。
+
+### Tests
+
+- `tests/watcher.test.ts`: ネスト (深い階層含む) の変更検知、新規ディレクトリと中身がほぼ同時に出現するケース (git checkout / 展開) の取りこぼし防止、ディレクトリ rename で旧パスの幻イベントが出ないこと、ディレクトリ削除後の再作成検知を追加。
+
+### Docs
+
+- `README.md`: トラブルシューティング節に inotify watch 上限の引き上げ手順を追記。
+
 ## [0.12.0] - 2026-05-22
 
 md 内 `[X](foo.pdf)` のような **PDF リンクが新しいタブで開く** ようになりました (Issue #37)。これまでは「ファイルが見つかりません」エラーになっていたものが、ブラウザ内蔵の PDF ビューアで閲覧できます。
