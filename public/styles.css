@@ -670,6 +670,33 @@ body {
   color: var(--text-muted);
 }
 
+/* ===== ツリーツールバー (Issue #41) ===== */
+.tree-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  padding: 0 0.5rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.4rem;
+}
+
+.tree-toolbar-btn {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+}
+
+.tree-toolbar-btn:hover {
+  background: var(--bg-emphasis);
+  color: var(--text);
+}
+
 /* ===== ツリー ===== */
 .tree,
 .tree ul {
@@ -1162,6 +1189,12 @@ body {
   .tree-item {
     min-height: 44px;
     padding-block: 0.5rem;
+  }
+
+  /* ツリーツールバーのタップ領域拡大 (Issue #41) */
+  .tree-toolbar-btn {
+    min-height: 44px;
+    min-width: 44px;
   }
 
   /* === content-header: パス (tap to copy) のみ === */

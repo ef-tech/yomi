@@ -25,6 +25,9 @@ const els = {
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
   menuBtn: document.getElementById("menu-btn"),
   tree: document.getElementById("tree"),
+  // ツリーツールバー (Issue #41)
+  treeExpandAll: document.getElementById("tree-expand-all"),
+  treeCollapseAll: document.getElementById("tree-collapse-all"),
   preview: document.getElementById("preview"),
   source: document.getElementById("source"),
   editor: document.getElementById("editor"),
@@ -172,6 +175,7 @@ wireThemeToggle();
 wireEditActions();
 wireCopyPath();
 wireSidebar();
+wireTreeToolbar();
 wireOverflowMenu();
 wireTocFab();
 wireTopbarAutohide();
@@ -285,6 +289,27 @@ function renderNode(node) {
 function setDirOpen(button, ul, open) {
   button.classList.toggle("is-open", open);
   ul.style.display = open ? "" : "none";
+}
+
+/* ===== ツリーツールバー (Issue #41) ===== */
+
+function wireTreeToolbar() {
+  els.treeExpandAll.addEventListener("click", () => {
+    for (const [path, { button, ul }] of state.dirNodes) {
+      setDirOpen(button, ul, true);
+      state.openDirs.add(path);
+    }
+    saveOpenDirs();
+  });
+
+  els.treeCollapseAll.addEventListener("click", () => {
+    for (const { button, ul } of state.dirNodes.values()) {
+      setDirOpen(button, ul, false);
+    }
+    // 初期状態 (ルート直下のみ表示) に戻す
+    state.openDirs = new Set([""]);
+    saveOpenDirs();
+  });
 }
 
 function chooseInitialFile(tree) {
