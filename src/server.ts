@@ -8,7 +8,7 @@ import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
 import { assetContentType, isAssetExtension } from "./util/asset-ext.ts";
 import { computeStrongEtag } from "./util/etag.ts";
-import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
+import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES } from "./util/image-ext.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
@@ -74,6 +74,17 @@ export function createServer(config: ServerConfig): ServerHandle {
         return new Response("Method Not Allowed", {
           status: 405,
           headers: { Allow: "GET, POST" },
+        });
+      }
+
+      if (url.pathname === "/api/file/create") {
+        if (req.method === "POST") {
+          if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
+          return handleFileCreate(config.rootDir, req, saveMark, excludes);
+        }
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "POST" },
         });
       }
 
@@ -305,6 +316,80 @@ async function handleFileWrite(
 
   const html = await renderMarkdown(body, { currentPath: safe.rel });
   return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
+}
+
+interface FileCreateBody {
+  path?: unknown;
+}
+
+/**
+ * POST /api/file/create — 空の Markdown ファイルを新規作成する (Issue #6)。
+ *
+ * POST /api/file (上書き保存) とエンドポイントを分けているのは、
+ * 「既存がなければ 404 ではなく作る」のような曖昧な意味論を避けるため。
+ * 存在チェックと作成は open(flag: "wx") = O_CREAT | O_EXCL でアトミックに行い、
+ * 既存ファイルは 409、親ディレクトリ不存在は 400 (再帰作成しない)。
+ */
+async function handleFileCreate(
+  rootDir: string,
+  req: Request,
+  saveMark: SaveMark,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
+  let parsed: FileCreateBody;
+  try {
+    parsed = (await req.json()) as FileCreateBody;
+  } catch {
+    return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
+  }
+
+  const { path } = parsed;
+  if (typeof path !== "string" || path.length === 0) {
+    return Response.json({ error: "path が必要です" }, { status: 400 });
+  }
+  if (!isMarkdownPath(path)) {
+    return Response.json({ error: "Markdown ファイル以外は作成できません" }, { status: 400 });
+  }
+
+  let safe: { rel: string; abs: string };
+  try {
+    safe = await resolveSafe(rootDir, path);
+  } catch (err) {
+    if (err instanceof UnsafePathError) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  // 除外ディレクトリ配下はツリーに表示されないファイルが出来て混乱するため拒否
+  if (isExcludedPath(safe.rel, excludes)) {
+    return Response.json(
+      { error: `除外ディレクトリ配下には作成できません: ${safe.rel}` },
+      { status: 400 },
+    );
+  }
+
+  // 自己保存マークを先に登録し、watcher の add イベントでの二重発火を防ぐ
+  // (作成したクライアント自身がツリーを再取得するため、ブロードキャスト不要)
+  saveMark.set(safe.rel, sha256(Buffer.from("")));
+  let handle: FileHandle;
+  try {
+    // O_CREAT | O_EXCL: 存在チェックと作成をアトミックに (TOCTOU 回避)
+    handle = await open(safe.abs, "wx");
+  } catch (err) {
+    saveMark.clear(safe.rel);
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      return Response.json({ error: `既に存在します: ${safe.rel}` }, { status: 409 });
+    }
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return Response.json({ error: `親ディレクトリが存在しません: ${safe.rel}` }, { status: 400 });
+    }
+    return Response.json({ error: (err as Error).message }, { status: 500 });
+  }
+  await handle.close();
+
+  return Response.json({ path: safe.rel });
 }
 
 /** /api/asset 配信サイズ上限 (50 MB)。DoS / 誤配信抑制のため。 */
