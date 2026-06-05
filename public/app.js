@@ -15,6 +15,7 @@ import {
   nextNavIndex,
   seedNavCounter,
 } from "./navigation.js";
+import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
@@ -29,6 +30,8 @@ const els = {
   // ツリーツールバー (Issue #41)
   treeExpandAll: document.getElementById("tree-expand-all"),
   treeCollapseAll: document.getElementById("tree-collapse-all"),
+  // 新規 md 作成 (Issue #6)
+  treeNewFile: document.getElementById("tree-new-file"),
   preview: document.getElementById("preview"),
   source: document.getElementById("source"),
   editor: document.getElementById("editor"),
@@ -165,6 +168,8 @@ const state = {
   tocObserver: null,
   /** Issue #9: split mode のスクロール同期 ON/OFF (デフォルト ON) */
   scrollSyncEnabled: true,
+  /** Issue #6: 表示中の新規ファイル名インライン入力 { li, input } (非表示時は null) */
+  newFileInput: null,
 };
 
 restorePreferences();
@@ -276,6 +281,19 @@ function renderNode(node) {
       else state.openDirs.delete(node.path);
       saveOpenDirs();
     });
+
+    // Issue #6: hover で表示される「+」(このディレクトリの子として新規 md)
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "dir-new-btn";
+    addBtn.textContent = "＋";
+    addBtn.title = `${node.path} に新規 md ファイル`;
+    addBtn.setAttribute("aria-label", `${node.name} に新規 Markdown ファイルを作成`);
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openNewFileInput(node.path);
+    });
+    li.insertBefore(addBtn, ul);
   } else {
     state.fileButtons.set(node.path, button);
     button.addEventListener("click", () => {
@@ -304,6 +322,8 @@ function updateTreeToolbarState() {
   const enabled = isTreeToolbarEnabled(state.dirNodes.size);
   els.treeExpandAll.disabled = !enabled;
   els.treeCollapseAll.disabled = !enabled;
+  // 新規作成はルート直下に作れるため、ツリーが一度でも描画されたら常に有効 (Issue #6)
+  els.treeNewFile.disabled = false;
 }
 
 function wireTreeToolbar() {
@@ -323,6 +343,98 @@ function wireTreeToolbar() {
     }
     saveOpenDirs();
   });
+
+  els.treeNewFile.addEventListener("click", () => {
+    openNewFileInput("");
+  });
+}
+
+/* ===== 新規 Markdown ファイル作成 (Issue #6) ===== */
+
+/**
+ * 新規ファイル名のインライン入力をツリーに表示する。
+ * dirPath="" はルート直下、それ以外はそのディレクトリの子として作成する。
+ * Enter で確定、Esc / フォーカス喪失でキャンセル。
+ */
+function openNewFileInput(dirPath) {
+  closeNewFileInput();
+
+  // 挿入先の <ul>: ルートはツリー直下、ディレクトリはその子リスト
+  let parentUl;
+  if (dirPath) {
+    const dirNode = state.dirNodes.get(dirPath);
+    if (!dirNode) return;
+    // 閉じているディレクトリは開いてから入力欄を見せる
+    setDirOpen(dirNode.button, dirNode.ul, true);
+    state.openDirs.add(dirPath);
+    saveOpenDirs();
+    parentUl = dirNode.ul;
+  } else {
+    parentUl = els.tree.querySelector("ul");
+    if (!parentUl) return;
+  }
+
+  const li = document.createElement("li");
+  li.className = "tree-new-li";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tree-new-input";
+  input.placeholder = "新規ファイル名 (.md)";
+  input.setAttribute("aria-label", "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)");
+  li.appendChild(input);
+  parentUl.prepend(li);
+  state.newFileInput = { li, input };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submitNewFile(input.value, dirPath);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeNewFileInput();
+    }
+  });
+  // フォーカスが外れたらキャンセル (Enter 確定時は submitNewFile が先に閉じる)
+  input.addEventListener("blur", () => closeNewFileInput());
+  input.focus();
+}
+
+function closeNewFileInput() {
+  if (!state.newFileInput) return;
+  const { li } = state.newFileInput;
+  state.newFileInput = null;
+  li.remove();
+}
+
+/**
+ * 入力名を補完して POST /api/file/create → ツリー再取得 → 新規ファイルを
+ * 編集モードで開く。失敗 (409 / 400) は status にエラー表示する。
+ */
+async function submitNewFile(rawName, dirPath) {
+  const name = completeMarkdownFileName(rawName);
+  if (name === null) {
+    setStatus("error", "ファイル名が不正です (空・パス区切りは使えません)");
+    return;
+  }
+  const path = joinTreePath(dirPath, name);
+  closeNewFileInput();
+
+  try {
+    const created = await fetchJson("/api/file/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    // 自己保存マークで watcher は発火しないため、自分でツリーを更新する
+    const tree = await fetchJson("/api/tree");
+    renderTree(tree);
+    await navigateTo(created.path, { history: "push" });
+    if (!state.editing) enterEditMode();
+    els.editor.setSelectionRange(0, 0);
+    setStatus("ok", `${created.path} を作成しました`);
+  } catch (err) {
+    setStatus("error", `作成失敗: ${err.message}`);
+  }
 }
 
 function chooseInitialFile(tree) {
