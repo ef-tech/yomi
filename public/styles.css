@@ -692,9 +692,19 @@ body {
   border-radius: 4px;
 }
 
-.tree-toolbar-btn:hover {
+.tree-toolbar-btn:hover:not(:disabled) {
   background: var(--bg-emphasis);
   color: var(--text);
+}
+
+.tree-toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent, #0969da);
+  outline-offset: 1px;
+}
+
+.tree-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ===== ツリー ===== */

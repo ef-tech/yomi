@@ -19,6 +19,7 @@ import { prefs } from "./prefs.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
+import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
 
 const els = {
   sidebar: document.getElementById("sidebar"),
@@ -238,6 +239,7 @@ function renderTree(root) {
     ul.appendChild(renderNode(child));
   }
   els.tree.appendChild(ul);
+  updateTreeToolbarState();
 }
 
 function renderNode(node) {
@@ -293,21 +295,32 @@ function setDirOpen(button, ul, open) {
 
 /* ===== ツリーツールバー (Issue #41) ===== */
 
+/**
+ * ディレクトリが 1 つもない間はツールバーを無効化する。
+ * 初期 HTML は disabled で始まり、renderTree のたびに再評価する
+ * (読み込み中・読み込み失敗・フラット構成では押せない)。
+ */
+function updateTreeToolbarState() {
+  const enabled = isTreeToolbarEnabled(state.dirNodes.size);
+  els.treeExpandAll.disabled = !enabled;
+  els.treeCollapseAll.disabled = !enabled;
+}
+
 function wireTreeToolbar() {
   els.treeExpandAll.addEventListener("click", () => {
-    for (const [path, { button, ul }] of state.dirNodes) {
+    state.openDirs = expandAllDirs(state.dirNodes.keys());
+    for (const { button, ul } of state.dirNodes.values()) {
       setDirOpen(button, ul, true);
-      state.openDirs.add(path);
     }
     saveOpenDirs();
   });
 
   els.treeCollapseAll.addEventListener("click", () => {
+    // 初期状態 (ルート直下のみ表示) に戻す
+    state.openDirs = collapseAllDirs();
     for (const { button, ul } of state.dirNodes.values()) {
       setDirOpen(button, ul, false);
     }
-    // 初期状態 (ルート直下のみ表示) に戻す
-    state.openDirs = new Set([""]);
     saveOpenDirs();
   });
 }
