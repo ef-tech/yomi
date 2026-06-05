@@ -248,6 +248,101 @@ describe("server", () => {
       expect(res.headers.get("allow")).toBe("GET, POST");
     });
   });
+
+  describe("POST /api/file/create (Issue #6)", () => {
+    const create = (body: unknown) =>
+      fetch(`${ctx.url}/api/file/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+
+    beforeAll(async () => {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await mkdir(join(root, "node_modules"), { recursive: true });
+    });
+
+    test(".md を作成できる (空ファイル + path 返却)", async () => {
+      const res = await create({ path: "created.md" });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { path: string };
+      expect(json.path).toBe("created.md");
+      const onDisk = await readFile(join(root, "created.md"), "utf-8");
+      expect(onDisk).toBe("");
+    });
+
+    test(".markdown / .mdx も作成できる", async () => {
+      for (const name of ["created.markdown", "created.mdx"]) {
+        const res = await create({ path: name });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { path: string }).path).toBe(name);
+      }
+    });
+
+    test("既存サブディレクトリ内に作成できる", async () => {
+      const res = await create({ path: "docs/nested.md" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { path: string }).path).toBe("docs/nested.md");
+      const onDisk = await readFile(join(root, "docs", "nested.md"), "utf-8");
+      expect(onDisk).toBe("");
+    });
+
+    test("既存ファイルは 409 (内容は壊れない)", async () => {
+      await writeFile(join(root, "keep.md"), "# Keep");
+      const res = await create({ path: "keep.md" });
+      expect(res.status).toBe(409);
+      const onDisk = await readFile(join(root, "keep.md"), "utf-8");
+      expect(onDisk).toBe("# Keep");
+    });
+
+    test("パストラバーサル (../) は 400", async () => {
+      const res = await create({ path: "../evil.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("絶対パスは 400", async () => {
+      const res = await create({ path: "/tmp/evil.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("Markdown 以外の拡張子は 400", async () => {
+      for (const path of ["evil.txt", "evil.sh", "noext"]) {
+        const res = await create({ path });
+        expect(res.status).toBe(400);
+      }
+    });
+
+    test("親ディレクトリが存在しない場合は 400 (再帰作成しない)", async () => {
+      const res = await create({ path: "no-such-dir/new.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("除外ディレクトリ (node_modules) 配下は 400", async () => {
+      const res = await create({ path: "node_modules/sneaky.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("path なし / 不正 JSON は 400", async () => {
+      expect((await create({})).status).toBe(400);
+      expect((await create({ path: 123 })).status).toBe(400);
+      expect((await create("{not json")).status).toBe(400);
+    });
+
+    test("Origin が異なれば 403", async () => {
+      const res = await fetch(`${ctx.url}/api/file/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://attacker.example" },
+        body: JSON.stringify({ path: "csrf.md" }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    test("GET /api/file/create は 405 + Allow: POST", async () => {
+      const res = await fetch(`${ctx.url}/api/file/create`);
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("POST");
+    });
+  });
 });
 
 describe("server - /api/asset (Issue #19)", () => {

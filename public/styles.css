@@ -707,6 +707,61 @@ body {
   cursor: default;
 }
 
+/* 新規 md ボタンは左端に寄せる (Issue #6)。⊞⊟ は右端のまま */
+.tree-new-file-btn {
+  margin-right: auto;
+}
+
+/* ===== 新規ファイル作成 (Issue #6) ===== */
+
+/* ディレクトリ hover で出す「+」。タッチデバイスは hover が無いのでツールバーの＋を使う */
+.dir-new-btn {
+  display: none;
+  position: absolute;
+  top: 0.1rem;
+  right: 0.3rem;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tree li:hover > .dir-new-btn {
+    display: block;
+  }
+  .dir-new-btn:hover {
+    background: var(--bg-emphasis);
+    color: var(--text);
+  }
+}
+
+.dir-new-btn:focus-visible {
+  display: block;
+  outline: 2px solid var(--accent, #0969da);
+  outline-offset: 1px;
+}
+
+.tree-new-li {
+  padding: 0.15rem 0.75rem;
+}
+
+.tree-new-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.9rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent, #0969da);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+}
+
 /* ===== ツリー ===== */
 .tree,
 .tree ul {
@@ -728,6 +783,8 @@ body {
 
 .tree li {
   padding: 0;
+  /* .dir-new-btn (Issue #6) の絶対配置基準 */
+  position: relative;
 }
 
 .tree-item {
