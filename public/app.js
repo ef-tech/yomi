@@ -19,12 +19,16 @@ import { prefs } from "./prefs.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
+import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
 
 const els = {
   sidebar: document.getElementById("sidebar"),
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
   menuBtn: document.getElementById("menu-btn"),
   tree: document.getElementById("tree"),
+  // ツリーツールバー (Issue #41)
+  treeExpandAll: document.getElementById("tree-expand-all"),
+  treeCollapseAll: document.getElementById("tree-collapse-all"),
   preview: document.getElementById("preview"),
   source: document.getElementById("source"),
   editor: document.getElementById("editor"),
@@ -172,6 +176,7 @@ wireThemeToggle();
 wireEditActions();
 wireCopyPath();
 wireSidebar();
+wireTreeToolbar();
 wireOverflowMenu();
 wireTocFab();
 wireTopbarAutohide();
@@ -234,6 +239,7 @@ function renderTree(root) {
     ul.appendChild(renderNode(child));
   }
   els.tree.appendChild(ul);
+  updateTreeToolbarState();
 }
 
 function renderNode(node) {
@@ -285,6 +291,38 @@ function renderNode(node) {
 function setDirOpen(button, ul, open) {
   button.classList.toggle("is-open", open);
   ul.style.display = open ? "" : "none";
+}
+
+/* ===== ツリーツールバー (Issue #41) ===== */
+
+/**
+ * ディレクトリが 1 つもない間はツールバーを無効化する。
+ * 初期 HTML は disabled で始まり、renderTree のたびに再評価する
+ * (読み込み中・読み込み失敗・フラット構成では押せない)。
+ */
+function updateTreeToolbarState() {
+  const enabled = isTreeToolbarEnabled(state.dirNodes.size);
+  els.treeExpandAll.disabled = !enabled;
+  els.treeCollapseAll.disabled = !enabled;
+}
+
+function wireTreeToolbar() {
+  els.treeExpandAll.addEventListener("click", () => {
+    state.openDirs = expandAllDirs(state.dirNodes.keys());
+    for (const { button, ul } of state.dirNodes.values()) {
+      setDirOpen(button, ul, true);
+    }
+    saveOpenDirs();
+  });
+
+  els.treeCollapseAll.addEventListener("click", () => {
+    // 初期状態 (ルート直下のみ表示) に戻す
+    state.openDirs = collapseAllDirs();
+    for (const { button, ul } of state.dirNodes.values()) {
+      setDirOpen(button, ul, false);
+    }
+    saveOpenDirs();
+  });
 }
 
 function chooseInitialFile(tree) {
