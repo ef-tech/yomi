@@ -714,9 +714,13 @@ body {
 
 /* ===== 新規ファイル作成 (Issue #6) ===== */
 
-/* ディレクトリ hover で出す「+」。タッチデバイスは hover が無いのでツールバーの＋を使う */
+/* ディレクトリの「+」。マウスは hover、キーボードは Tab フォーカスで表示する (Issue #6)。
+   display:none だとフォーカス不能でタブ順から外れ、キーボード/スクリーンリーダーから
+   到達できなくなる。opacity:0 で視覚的にのみ隠してフォーカス可能なまま残し、
+   pointer-events:none で非表示時のマウスクリックは行へ透過させる。 */
 .dir-new-btn {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
   position: absolute;
   top: 0.1rem;
   right: 0.3rem;
@@ -732,7 +736,8 @@ body {
 
 @media (hover: hover) and (pointer: fine) {
   .tree li:hover > .dir-new-btn {
-    display: block;
+    opacity: 1;
+    pointer-events: auto;
   }
   .dir-new-btn:hover {
     background: var(--bg-emphasis);
@@ -740,8 +745,10 @@ body {
   }
 }
 
+/* キーボード Tab フォーカス時に表示してクリック可能にする (hover の無い環境でも到達可能) */
 .dir-new-btn:focus-visible {
-  display: block;
+  opacity: 1;
+  pointer-events: auto;
   outline: 2px solid var(--accent, #0969da);
   outline-offset: 1px;
 }
