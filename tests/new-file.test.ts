@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { completeMarkdownFileName, joinTreePath } from "../public/new-file.js";
+import {
+  MD_EXTENSIONS as CLIENT_MD_EXTENSIONS,
+  completeMarkdownFileName,
+  joinTreePath,
+} from "../public/new-file.js";
+import { MD_EXTENSIONS as SERVER_MD_EXTENSIONS } from "../src/util/markdown-ext.ts";
 
 describe("completeMarkdownFileName", () => {
   test("拡張子なしは .md を補完", () => {
@@ -46,6 +51,22 @@ describe("completeMarkdownFileName", () => {
     // ".md" はベース名が空なので ".md.md" になる (隠しファイル風の入力は維持)
     expect(completeMarkdownFileName(".md")).toBe(".md.md");
     expect(completeMarkdownFileName(".hidden")).toBe(".hidden.md");
+  });
+
+  test("末尾ドットは許可拡張子ではないため .md を補完 (foo. → foo..md)", () => {
+    // lastIndexOf('.') > 0 だが slice('.') === '.' は MD_EXTENSIONS に無い → 補完対象
+    expect(completeMarkdownFileName("foo.")).toBe("foo..md");
+  });
+});
+
+describe("MD_EXTENSIONS", () => {
+  test("クライアントとサーバの許可拡張子は完全一致する (ドリフト防止)", () => {
+    // public/new-file.js はビルドステップなしのため server の .ts を import できず
+    // 拡張子集合を手動コピーしている。両者がずれると UI とサーバの判定が食い違うため
+    // ここで不変条件として固定する。
+    const client = [...CLIENT_MD_EXTENSIONS].sort();
+    const server = [...SERVER_MD_EXTENSIONS].sort();
+    expect(client).toEqual(server);
   });
 });
 

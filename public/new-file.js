@@ -8,7 +8,7 @@
  */
 
 /** クライアント側で受け入れる Markdown 拡張子 (サーバの MD_EXTENSIONS と同値) */
-const MD_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
+export const MD_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
 
 /**
  * インライン入力されたファイル名を Markdown ファイル名に補完する。

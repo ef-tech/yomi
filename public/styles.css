@@ -761,7 +761,9 @@ body {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
-  font-size: 0.9rem;
+  /* 16px 未満だと iOS Safari がフォーカス時にズームするため明示的に 16px。
+     ベースは 14px なので 1rem では不足する (Issue #6 のタッチ入口対策) */
+  font-size: 16px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--accent, #0969da);

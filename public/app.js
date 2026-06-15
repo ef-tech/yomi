@@ -291,7 +291,7 @@ function renderNode(node) {
     addBtn.setAttribute("aria-label", `${node.name} に新規 Markdown ファイルを作成`);
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      openNewFileInput(node.path);
+      openNewFileInput(node.path, addBtn);
     });
     li.insertBefore(addBtn, ul);
   } else {
@@ -345,7 +345,7 @@ function wireTreeToolbar() {
   });
 
   els.treeNewFile.addEventListener("click", () => {
-    openNewFileInput("");
+    openNewFileInput("", els.treeNewFile);
   });
 }
 
@@ -355,8 +355,10 @@ function wireTreeToolbar() {
  * 新規ファイル名のインライン入力をツリーに表示する。
  * dirPath="" はルート直下、それ以外はそのディレクトリの子として作成する。
  * Enter で確定、Esc / フォーカス喪失でキャンセル。
+ * trigger は呼び出し元のボタン (ツールバー / ディレクトリの「＋」)。入力欄を
+ * 閉じたときにフォーカスをここへ戻し、キーボード利用者がツリー内の位置を失わないようにする。
  */
-function openNewFileInput(dirPath) {
+function openNewFileInput(dirPath, trigger = null) {
   closeNewFileInput();
 
   // 挿入先の <ul>: ルートはツリー直下、ディレクトリはその子リスト
@@ -383,7 +385,7 @@ function openNewFileInput(dirPath) {
   input.setAttribute("aria-label", "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)");
   li.appendChild(input);
   parentUl.prepend(li);
-  state.newFileInput = { li, input };
+  state.newFileInput = { li, input, trigger };
 
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -401,9 +403,12 @@ function openNewFileInput(dirPath) {
 
 function closeNewFileInput() {
   if (!state.newFileInput) return;
-  const { li } = state.newFileInput;
+  const { li, trigger } = state.newFileInput;
   state.newFileInput = null;
   li.remove();
+  // フォーカスをトリガーの「＋」へ戻す。ツリー再描画でトリガーが DOM から外れた
+  // 場合 (作成成功時など) は戻さない。成功時は呼び出し側が editor にフォーカスする。
+  if (trigger?.isConnected) trigger.focus();
 }
 
 /**
@@ -428,7 +433,13 @@ async function submitNewFile(rawName, dirPath) {
     // 自己保存マークで watcher は発火しないため、自分でツリーを更新する
     const tree = await fetchJson("/api/tree");
     renderTree(tree);
-    await navigateTo(created.path, { history: "push" });
+    const moved = await navigateTo(created.path, { history: "push" });
+    if (!moved) {
+      // 編集中に破棄をキャンセルした等で遷移がブロックされた場合、ファイルは
+      // 作成済みだが古いエディタは触らない (誤ったキャレット移動・状態表示を避ける)
+      setStatus("ok", `${created.path} を作成しました (編集中のため未オープン)`);
+      return;
+    }
     if (!state.editing) enterEditMode();
     els.editor.setSelectionRange(0, 0);
     setStatus("ok", `${created.path} を作成しました`);
@@ -488,15 +499,17 @@ function applyFile(data) {
  *
  * loadFile が失敗した場合は URL も history も触らず status 表示のみ。
  */
+// 戻り値: 実際にファイルへ遷移/表示できたら true、編集中の破棄キャンセルや
+// 読み込み失敗で遷移しなかったら false (呼び出し側はこれを見て後続処理を分岐できる)。
 async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
-  if (mode === "push" && !confirmLeaveEdit()) return;
+  if (mode === "push" && !confirmLeaveEdit()) return false;
 
   let data;
   try {
     data = await loadFile(path);
   } catch (err) {
     setStatus("error", `${path} を開けませんでした: ${err.message}`);
-    return;
+    return false;
   }
 
   applyFile(data);
@@ -506,7 +519,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
 
   if (mode === "none") {
     setStatus("ok", `${data.path} を表示`);
-    return;
+    return true;
   }
 
   const url = buildUrl(data.path, hash);
@@ -520,6 +533,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
   }
 
   setStatus("ok", `${data.path} を表示`);
+  return true;
 }
 
 /**
