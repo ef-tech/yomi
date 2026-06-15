@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../src/save-mark.ts";
@@ -317,6 +326,12 @@ describe("server", () => {
       expect(res.status).toBe(400);
     });
 
+    test("親パス成分がファイル (ディレクトリでない) なら 400 (ENOTDIR)", async () => {
+      // hello.md は既存のファイル。これを親ディレクトリ扱いした作成は ENOTDIR → 400。
+      const res = await create({ path: "hello.md/child.md" });
+      expect(res.status).toBe(400);
+    });
+
     test("除外ディレクトリ (node_modules) 配下は 400", async () => {
       const res = await create({ path: "node_modules/sneaky.md" });
       expect(res.status).toBe(400);
@@ -341,6 +356,76 @@ describe("server", () => {
       const res = await fetch(`${ctx.url}/api/file/create`);
       expect(res.status).toBe(405);
       expect(res.headers.get("allow")).toBe("POST");
+    });
+
+    test("大文字拡張子 (.MD) も作成できる (サーバ判定は大文字小文字無視)", async () => {
+      const res = await create({ path: "Upper.MD" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { path: string }).path).toBe("Upper.MD");
+      expect(await readFile(join(root, "Upper.MD"), "utf-8")).toBe("");
+    });
+
+    test("作成成功で self save-mark (空内容 sha) が登録される (二重リロード抑止)", async () => {
+      const res = await create({ path: "marked.md" });
+      expect(res.status).toBe(200);
+      expect(ctx.handle.saveMark.has("marked.md", sha256(Buffer.from("")))).toBe(true);
+    });
+
+    test("作成失敗 (409) は既存の save-mark を clear しない (クロバー回帰)", async () => {
+      const first = await create({ path: "twice.md" });
+      expect(first.status).toBe(200);
+      expect(ctx.handle.saveMark.has("twice.md", sha256(Buffer.from("")))).toBe(true);
+      // 2 回目は 409。失敗時にマークを触らないので 1 回目のマークが残る
+      const second = await create({ path: "twice.md" });
+      expect(second.status).toBe(409);
+      expect(ctx.handle.saveMark.has("twice.md", sha256(Buffer.from("")))).toBe(true);
+    });
+
+    test(".yomiignore 由来の除外ディレクトリ配下も 400", async () => {
+      const r = await mkdtemp(join(tmpdir(), "yomi-excl-"));
+      await mkdir(join(r, "secret"), { recursive: true });
+      const handle = createServer({
+        rootDir: r,
+        hostname: "127.0.0.1",
+        port: 0,
+        watch: false,
+        excludes: new Set(["secret"]),
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/file/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "secret/x.md" }),
+        });
+        expect(res.status).toBe(400);
+      } finally {
+        handle.close();
+        await rm(r, { recursive: true, force: true });
+      }
+    });
+
+    test("symlink された親ディレクトリ経由でルート外には作成できない (400)", async () => {
+      const base = await mkdtemp(join(tmpdir(), "yomi-sym-"));
+      const r = join(base, "root");
+      const outside = join(base, "outside");
+      await mkdir(r);
+      await mkdir(outside);
+      // root 内に root 外を指すシンボリックリンクディレクトリを作る
+      await symlink(outside, join(r, "linkdir"));
+      const handle = createServer({ rootDir: r, hostname: "127.0.0.1", port: 0, watch: false });
+      try {
+        const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/file/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "linkdir/evil.md" }),
+        });
+        expect(res.status).toBe(400);
+        // ルート外にファイルが作られていないこと
+        expect(await readdir(outside)).toEqual([]);
+      } finally {
+        handle.close();
+        await rm(base, { recursive: true, force: true });
+      }
     });
   });
 });
@@ -604,6 +689,33 @@ describe("server - body サイズ上限", () => {
     // 上書きされていないこと (空のまま)
     const onDisk = await readFile(join(root, "target.md"), "utf-8");
     expect(onDisk).toBe("");
+  });
+});
+
+// 大ボディ POST は body をドレインせず早期 413 を返すため keep-alive 接続を
+// 汚す。他テストと接続を共有しないよう専用サーバ (別ポート) で隔離する。
+describe("server - /api/file/create body サイズ上限", () => {
+  let root: string;
+  let ctx: ServerCtx;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-create-size-"));
+    ctx = await startServer(root);
+  });
+
+  afterAll(async () => {
+    ctx.handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("上限超過ボディは 413 (DoS 防御)", async () => {
+    const huge = `${"x".repeat(MAX_WRITE_BYTES + 1)}.md`;
+    const res = await fetch(`${ctx.url}/api/file/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: huge }),
+    });
+    expect(res.status).toBe(413);
   });
 });
 

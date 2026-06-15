@@ -41,6 +41,8 @@ export interface ServerConfig {
 
 export interface ServerHandle {
   server: ReturnType<typeof Bun.serve>;
+  /** 自己保存マーク。テストから作成/書き込み後のマーク状態を検証するために公開する。 */
+  saveMark: SaveMark;
   close(): void;
 }
 
@@ -138,6 +140,7 @@ export function createServer(config: ServerConfig): ServerHandle {
 
   return {
     server,
+    saveMark,
     close() {
       watcher?.close();
       server.stop();
@@ -336,9 +339,20 @@ async function handleFileCreate(
   saveMark: SaveMark,
   excludes: ReadonlySet<string>,
 ): Promise<Response> {
+  // body は {path} のみだが、上限なしだと巨大ボディで LAN クライアントが
+  // メモリを枯渇させられる。handleFileWrite と同じく MAX_WRITE_BYTES で上限を課す。
+  const lengthHeader = req.headers.get("content-length");
+  if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
+    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+  }
+
   let parsed: FileCreateBody;
   try {
-    parsed = (await req.json()) as FileCreateBody;
+    const text = await req.text();
+    if (Buffer.byteLength(text, "utf-8") > MAX_WRITE_BYTES) {
+      return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+    }
+    parsed = JSON.parse(text) as FileCreateBody;
   } catch {
     return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
   }
@@ -369,15 +383,11 @@ async function handleFileCreate(
     );
   }
 
-  // 自己保存マークを先に登録し、watcher の add イベントでの二重発火を防ぐ
-  // (作成したクライアント自身がツリーを再取得するため、ブロードキャスト不要)
-  saveMark.set(safe.rel, sha256(Buffer.from("")));
   let handle: FileHandle;
   try {
     // O_CREAT | O_EXCL: 存在チェックと作成をアトミックに (TOCTOU 回避)
     handle = await open(safe.abs, "wx");
   } catch (err) {
-    saveMark.clear(safe.rel);
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EEXIST") {
       return Response.json({ error: `既に存在します: ${safe.rel}` }, { status: 409 });
@@ -385,9 +395,17 @@ async function handleFileCreate(
     if (code === "ENOENT" || code === "ENOTDIR") {
       return Response.json({ error: `親ディレクトリが存在しません: ${safe.rel}` }, { status: 400 });
     }
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // 想定外の FS エラー (EACCES / ENOSPC 等) は生メッセージを返さず汎用化する。
+    // safepath.ts の NUL 処理と同じく、内部状態 (絶対パス等) の漏洩を避ける。
+    console.error(`handleFileCreate 失敗 (${safe.rel}):`, err);
+    return Response.json({ error: "ファイルの作成に失敗しました" }, { status: 500 });
   }
   await handle.close();
+
+  // 作成に成功した時だけ自己保存マークを登録する。watcher は DEBOUNCE_MS(80ms) 後に
+  // 内容 sha を照合するため、close 直後の同期的な set がそれに先行し二重発火を防ぐ。
+  // 失敗時はマークを触らないので、同一パスを保存中の別リクエストのマークを壊さない。
+  saveMark.set(safe.rel, sha256(Buffer.from("")));
 
   return Response.json({ path: safe.rel });
 }
