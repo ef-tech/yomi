@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { toPosix } from "./util/path-util.ts";
 
 export { isMarkdownExtension as isMarkdownPath } from "./util/markdown-ext.ts";
@@ -38,10 +38,28 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   }
 
   const rootAbs = await safeRealpath(rootDir);
-  const candidateAbs = await safeRealpath(resolve(rootAbs, requested));
+  const requestedAbs = resolve(rootAbs, requested);
+  const candidateAbs = await safeRealpath(requestedAbs);
   const rel = relative(rootAbs, candidateAbs);
 
   if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
+  }
+
+  // leaf が存在しないと realpath は candidateAbs を解決できず lexical fallback する。
+  // その結果、root 内のシンボリックリンク先ディレクトリ (root 外を指す) を経由した
+  // 新規ファイル作成を上の rel チェックだけでは検知できない。実在する親ディレクトリの
+  // realpath を取り、ルート内に収まっているか再検証する (親は実在するので realpath で
+  // symlink が解決される。親自体が存在しなければ呼び出し側の open が ENOENT で弾く)。
+  //
+  // 既知の限界 (TOCTOU): この realpath チェックと呼び出し側の open(abs) の間に、
+  // 親ディレクトリを symlink にすり替えるレースは防げない。完全に塞ぐには各パス成分を
+  // O_NOFOLLOW / openat(dirfd) で開く必要があるが、その攻撃にはローカル FS への書き込み
+  // 権限が前提で (その攻撃者は既に直接ファイルを作れる)、ローカル/LAN 向けの本ツールには
+  // 過剰なため対応しない。静的な symlink エスケープはこのチェックで防げる。
+  const parentReal = await safeRealpath(dirname(requestedAbs));
+  const parentRel = relative(rootAbs, parentReal);
+  if (parentRel === ".." || parentRel.startsWith(`..${sep}`) || isAbsolute(parentRel)) {
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 

@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../src/save-mark.ts";
@@ -246,6 +255,177 @@ describe("server", () => {
       const res = await fetch(`${ctx.url}/api/file`, { method: "PUT" });
       expect(res.status).toBe(405);
       expect(res.headers.get("allow")).toBe("GET, POST");
+    });
+  });
+
+  describe("POST /api/file/create (Issue #6)", () => {
+    const create = (body: unknown) =>
+      fetch(`${ctx.url}/api/file/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+
+    beforeAll(async () => {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await mkdir(join(root, "node_modules"), { recursive: true });
+    });
+
+    test(".md を作成できる (空ファイル + path 返却)", async () => {
+      const res = await create({ path: "created.md" });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { path: string };
+      expect(json.path).toBe("created.md");
+      const onDisk = await readFile(join(root, "created.md"), "utf-8");
+      expect(onDisk).toBe("");
+    });
+
+    test(".markdown / .mdx も作成できる", async () => {
+      for (const name of ["created.markdown", "created.mdx"]) {
+        const res = await create({ path: name });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { path: string }).path).toBe(name);
+      }
+    });
+
+    test("既存サブディレクトリ内に作成できる", async () => {
+      const res = await create({ path: "docs/nested.md" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { path: string }).path).toBe("docs/nested.md");
+      const onDisk = await readFile(join(root, "docs", "nested.md"), "utf-8");
+      expect(onDisk).toBe("");
+    });
+
+    test("既存ファイルは 409 (内容は壊れない)", async () => {
+      await writeFile(join(root, "keep.md"), "# Keep");
+      const res = await create({ path: "keep.md" });
+      expect(res.status).toBe(409);
+      const onDisk = await readFile(join(root, "keep.md"), "utf-8");
+      expect(onDisk).toBe("# Keep");
+    });
+
+    test("パストラバーサル (../) は 400", async () => {
+      const res = await create({ path: "../evil.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("絶対パスは 400", async () => {
+      const res = await create({ path: "/tmp/evil.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("Markdown 以外の拡張子は 400", async () => {
+      for (const path of ["evil.txt", "evil.sh", "noext"]) {
+        const res = await create({ path });
+        expect(res.status).toBe(400);
+      }
+    });
+
+    test("親ディレクトリが存在しない場合は 400 (再帰作成しない)", async () => {
+      const res = await create({ path: "no-such-dir/new.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("親パス成分がファイル (ディレクトリでない) なら 400 (ENOTDIR)", async () => {
+      // hello.md は既存のファイル。これを親ディレクトリ扱いした作成は ENOTDIR → 400。
+      const res = await create({ path: "hello.md/child.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("除外ディレクトリ (node_modules) 配下は 400", async () => {
+      const res = await create({ path: "node_modules/sneaky.md" });
+      expect(res.status).toBe(400);
+    });
+
+    test("path なし / 不正 JSON は 400", async () => {
+      expect((await create({})).status).toBe(400);
+      expect((await create({ path: 123 })).status).toBe(400);
+      expect((await create("{not json")).status).toBe(400);
+    });
+
+    test("Origin が異なれば 403", async () => {
+      const res = await fetch(`${ctx.url}/api/file/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://attacker.example" },
+        body: JSON.stringify({ path: "csrf.md" }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    test("GET /api/file/create は 405 + Allow: POST", async () => {
+      const res = await fetch(`${ctx.url}/api/file/create`);
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("POST");
+    });
+
+    test("大文字拡張子 (.MD) も作成できる (サーバ判定は大文字小文字無視)", async () => {
+      const res = await create({ path: "Upper.MD" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { path: string }).path).toBe("Upper.MD");
+      expect(await readFile(join(root, "Upper.MD"), "utf-8")).toBe("");
+    });
+
+    test("作成成功で self save-mark (空内容 sha) が登録される (二重リロード抑止)", async () => {
+      const res = await create({ path: "marked.md" });
+      expect(res.status).toBe(200);
+      expect(ctx.handle.saveMark.has("marked.md", sha256(Buffer.from("")))).toBe(true);
+    });
+
+    test("作成失敗 (409) は既存の save-mark を clear しない (クロバー回帰)", async () => {
+      const first = await create({ path: "twice.md" });
+      expect(first.status).toBe(200);
+      expect(ctx.handle.saveMark.has("twice.md", sha256(Buffer.from("")))).toBe(true);
+      // 2 回目は 409。失敗時にマークを触らないので 1 回目のマークが残る
+      const second = await create({ path: "twice.md" });
+      expect(second.status).toBe(409);
+      expect(ctx.handle.saveMark.has("twice.md", sha256(Buffer.from("")))).toBe(true);
+    });
+
+    test(".yomiignore 由来の除外ディレクトリ配下も 400", async () => {
+      const r = await mkdtemp(join(tmpdir(), "yomi-excl-"));
+      await mkdir(join(r, "secret"), { recursive: true });
+      const handle = createServer({
+        rootDir: r,
+        hostname: "127.0.0.1",
+        port: 0,
+        watch: false,
+        excludes: new Set(["secret"]),
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/file/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "secret/x.md" }),
+        });
+        expect(res.status).toBe(400);
+      } finally {
+        handle.close();
+        await rm(r, { recursive: true, force: true });
+      }
+    });
+
+    test("symlink された親ディレクトリ経由でルート外には作成できない (400)", async () => {
+      const base = await mkdtemp(join(tmpdir(), "yomi-sym-"));
+      const r = join(base, "root");
+      const outside = join(base, "outside");
+      await mkdir(r);
+      await mkdir(outside);
+      // root 内に root 外を指すシンボリックリンクディレクトリを作る
+      await symlink(outside, join(r, "linkdir"));
+      const handle = createServer({ rootDir: r, hostname: "127.0.0.1", port: 0, watch: false });
+      try {
+        const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/file/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "linkdir/evil.md" }),
+        });
+        expect(res.status).toBe(400);
+        // ルート外にファイルが作られていないこと
+        expect(await readdir(outside)).toEqual([]);
+      } finally {
+        handle.close();
+        await rm(base, { recursive: true, force: true });
+      }
     });
   });
 });
@@ -509,6 +689,33 @@ describe("server - body サイズ上限", () => {
     // 上書きされていないこと (空のまま)
     const onDisk = await readFile(join(root, "target.md"), "utf-8");
     expect(onDisk).toBe("");
+  });
+});
+
+// 大ボディ POST は body をドレインせず早期 413 を返すため keep-alive 接続を
+// 汚す。他テストと接続を共有しないよう専用サーバ (別ポート) で隔離する。
+describe("server - /api/file/create body サイズ上限", () => {
+  let root: string;
+  let ctx: ServerCtx;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-create-size-"));
+    ctx = await startServer(root);
+  });
+
+  afterAll(async () => {
+    ctx.handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("上限超過ボディは 413 (DoS 防御)", async () => {
+    const huge = `${"x".repeat(MAX_WRITE_BYTES + 1)}.md`;
+    const res = await fetch(`${ctx.url}/api/file/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: huge }),
+    });
+    expect(res.status).toBe(413);
   });
 });
 

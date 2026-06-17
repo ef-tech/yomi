@@ -707,6 +707,70 @@ body {
   cursor: default;
 }
 
+/* 新規 md ボタンは左端に寄せる (Issue #6)。⊞⊟ は右端のまま */
+.tree-new-file-btn {
+  margin-right: auto;
+}
+
+/* ===== 新規ファイル作成 (Issue #6) ===== */
+
+/* ディレクトリの「+」。マウスは hover、キーボードは Tab フォーカスで表示する (Issue #6)。
+   display:none だとフォーカス不能でタブ順から外れ、キーボード/スクリーンリーダーから
+   到達できなくなる。opacity:0 で視覚的にのみ隠してフォーカス可能なまま残し、
+   pointer-events:none で非表示時のマウスクリックは行へ透過させる。 */
+.dir-new-btn {
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0.1rem;
+  right: 0.3rem;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tree li:hover > .dir-new-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .dir-new-btn:hover {
+    background: var(--bg-emphasis);
+    color: var(--text);
+  }
+}
+
+/* キーボード Tab フォーカス時に表示してクリック可能にする (hover の無い環境でも到達可能) */
+.dir-new-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent, #0969da);
+  outline-offset: 1px;
+}
+
+.tree-new-li {
+  padding: 0.15rem 0.75rem;
+}
+
+.tree-new-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  /* 16px 未満だと iOS Safari がフォーカス時にズームするため明示的に 16px。
+     ベースは 14px なので 1rem では不足する (Issue #6 のタッチ入口対策) */
+  font-size: 16px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent, #0969da);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+}
+
 /* ===== ツリー ===== */
 .tree,
 .tree ul {
@@ -728,6 +792,8 @@ body {
 
 .tree li {
   padding: 0;
+  /* .dir-new-btn (Issue #6) の絶対配置基準 */
+  position: relative;
 }
 
 .tree-item {
