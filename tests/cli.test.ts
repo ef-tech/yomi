@@ -71,13 +71,46 @@ describe("parseArgs", () => {
     });
   });
 
+  describe("--depth / -L (Issue #44)", () => {
+    test("デフォルトは null (無制限)", () => {
+      expect(parseArgs([]).depth).toBeNull();
+    });
+
+    test("--depth N 形式", () => {
+      expect(parseArgs(["--depth", "1"]).depth).toBe(1);
+      expect(parseArgs(["--depth", "3"]).depth).toBe(3);
+    });
+
+    test("--depth=N 形式", () => {
+      expect(parseArgs(["--depth=2"]).depth).toBe(2);
+    });
+
+    test("-L は --depth のエイリアス", () => {
+      expect(parseArgs(["-L", "2"]).depth).toBe(2);
+      expect(parseArgs(["-L", "2"]).depth).toBe(parseArgs(["--depth", "2"]).depth);
+    });
+
+    test("値がないとエラー", () => {
+      expect(() => parseArgs(["--depth"])).toThrow("--depth には値が必要です");
+      expect(() => parseArgs(["-L"])).toThrow("-L には値が必要です");
+    });
+
+    test("0 / 負数 / 非整数はエラー", () => {
+      expect(() => parseArgs(["--depth", "0"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "-1"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "abc"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "2.5"])).toThrow(/1 以上の整数/);
+    });
+  });
+
   describe("複合", () => {
     test("複数オプションを組み合わせ", () => {
-      const opts = parseArgs(["--port", "3000", "--host=127.0.0.1", "--no-open"]);
+      const opts = parseArgs(["--port", "3000", "--host=127.0.0.1", "--no-open", "-L", "2"]);
       expect(opts.port).toBe(3000);
       expect(opts.host).toBe("127.0.0.1");
       expect(opts.open).toBe(false);
       expect(opts.help).toBe(false);
+      expect(opts.depth).toBe(2);
     });
   });
 
