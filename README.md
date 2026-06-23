@@ -285,6 +285,8 @@ echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.co
 sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 ```
 
+上限を引き上げられない（`sudo` が使えない等）場合は、[`--depth`](#オプション) で監視する階層を絞る方法もあります。たとえば `yomi --depth 2` なら 2 階層までしか監視しないため、watch 数を抑えられます。
+
 ## ライセンス
 
 MIT — 詳細は [`LICENSE`](LICENSE) を参照。
