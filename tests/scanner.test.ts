@@ -129,3 +129,75 @@ describe("scanMarkdownTree", () => {
     expect(findChild(tree, "sub")).toBeUndefined();
   });
 });
+
+describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
+  // root 構造 (level): a.md/b.markdown/c.mdx(1), sub(1)/d.md(2),
+  //   deep(1)/lvl2(2)/lvl3(3)/x.md(4)
+  function allPaths(node: TreeNode): string[] {
+    const out: string[] = [];
+    for (const c of node.children ?? []) {
+      out.push(c.path);
+      out.push(...allPaths(c));
+    }
+    return out;
+  }
+
+  test("maxDepth=1 はルート直下のみ (境界 dir は中を見ず表示)", async () => {
+    const paths = allPaths(await scanMarkdownTree(root, { maxDepth: 1 }));
+    // ルート直下の md とディレクトリは出る
+    expect(paths).toContain("a.md");
+    expect(paths).toContain("sub");
+    expect(paths).toContain("deep");
+    // 2 階層目以降は出ない
+    expect(paths).not.toContain("sub/d.md");
+    expect(paths).not.toContain("deep/lvl2");
+    // 境界 dir (sub) は中を見ないので子は空
+    const sub = findChild(await scanMarkdownTree(root, { maxDepth: 1 }), "sub");
+    expect(sub?.children).toEqual([]);
+  });
+
+  test("maxDepth=2 は 2 階層まで、3 階層目以降は出ない", async () => {
+    const paths = allPaths(await scanMarkdownTree(root, { maxDepth: 2 }));
+    expect(paths).toContain("a.md");
+    expect(paths).toContain("sub/d.md");
+    expect(paths).toContain("deep/lvl2"); // 境界 dir として表示
+    expect(paths).not.toContain("deep/lvl2/lvl3");
+    expect(paths).not.toContain("deep/lvl2/lvl3/x.md");
+  });
+
+  test("maxDepth 未指定は無制限 (深い md も拾う)", async () => {
+    const paths = allPaths(await scanMarkdownTree(root, {}));
+    expect(paths).toContain("deep/lvl2/lvl3/x.md");
+    // 深さ無制限と maxDepth 省略は同一結果
+    expect(allPaths(await scanMarkdownTree(root))).toEqual(paths);
+  });
+
+  test("非境界の本当に空な dir は maxDepth 下でも従来どおり削られる", async () => {
+    // maxDepth=3 では sub(1) は境界でない → 中を見て sub/empty(空) は prune される
+    const sub = findChild(await scanMarkdownTree(root, { maxDepth: 3 }), "sub");
+    expect(sub).toBeDefined();
+    expect(findChild(sub as TreeNode, "empty")).toBeUndefined();
+  });
+
+  test("maxDepth がツリー深さより大きい場合は無制限と同一", async () => {
+    const big = allPaths(await scanMarkdownTree(root, { maxDepth: 99 }));
+    const unlimited = allPaths(await scanMarkdownTree(root));
+    expect(big).toContain("deep/lvl2/lvl3/x.md");
+    expect([...big].sort()).toEqual([...unlimited].sort());
+  });
+
+  test("maxDepth=1: ルート直下が境界 dir のみでもツリーは空にならない", async () => {
+    // ルート直下に md が無く、深い md だけを持つ dir のケース
+    const r = await mkdtemp(join(tmpdir(), "yomi-scanner-trunc-"));
+    await mkdir(join(r, "only", "inner"), { recursive: true });
+    await writeFile(join(r, "only", "inner", "x.md"), "");
+    try {
+      const tree = await scanMarkdownTree(r, { maxDepth: 1 });
+      const only = findChild(tree, "only");
+      expect(only).toBeDefined();
+      expect(only?.children).toEqual([]); // 境界 dir として中は空のまま残る
+    } finally {
+      await rm(r, { recursive: true, force: true });
+    }
+  });
+});

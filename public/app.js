@@ -283,17 +283,24 @@ function renderNode(node) {
     });
 
     // Issue #6: hover で表示される「+」(このディレクトリの子として新規 md)
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.className = "dir-new-btn";
-    addBtn.textContent = "＋";
-    addBtn.title = `${node.path} に新規 md ファイル`;
-    addBtn.setAttribute("aria-label", `${node.name} に新規 Markdown ファイルを作成`);
-    addBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openNewFileInput(node.path, addBtn);
-    });
-    li.insertBefore(addBtn, ul);
+    // Issue #44: --depth で truncate された境界ディレクトリ (中身を読み込んでいない)
+    // には「+」を出さない。出すと深さ超過の場所にファイルが作られ、直後のツリー
+    // 再取得 (同じ深さ制限) に現れず "消えた" ように見える + 監視もされないため。
+    // 通常モードでは pruneEmpty により dir は必ず子を持つので、この条件は常に真。
+    const hasLoadedChildren = (node.children?.length ?? 0) > 0;
+    if (hasLoadedChildren) {
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "dir-new-btn";
+      addBtn.textContent = "＋";
+      addBtn.title = `${node.path} に新規 md ファイル`;
+      addBtn.setAttribute("aria-label", `${node.name} に新規 Markdown ファイルを作成`);
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openNewFileInput(node.path, addBtn);
+      });
+      li.insertBefore(addBtn, ul);
+    }
   } else {
     state.fileButtons.set(node.path, button);
     button.addEventListener("click", () => {

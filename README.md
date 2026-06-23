@@ -86,8 +86,13 @@ yomi [options]
   --no-open       ブラウザを自動で開かない
   --host <addr>   バインドアドレス（デフォルト: 0.0.0.0、同 LAN から閲覧可）
                   ローカル限定にするには --host 127.0.0.1
+  --depth <n>, -L <n>
+                  読み込む階層の深さを制限（tree -L 相当。デフォルト: 無制限）
+                  1 でルート直下のみ。深い md は読み込まず監視もしない
   --help, -h      ヘルプ
 ```
+
+大きなディレクトリツリーでは `--depth`（短縮 `-L`）で起動時にスキャン/監視する階層を絞れる。`tree -L <level>` と同じく、ルート直下を深さ 1 として数える。深さを超えた Markdown は読み込まれず、ファイル監視（ライブリロード）の対象からも外れるため、起動が速くなり inotify の watch 数も減る。深い階層を見たいときは深さを上げて起動し直す。
 
 ### ファイルツリー
 
@@ -279,6 +284,8 @@ sudo sysctl fs.inotify.max_user_watches=524288
 echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf
 sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 ```
+
+上限を引き上げられない（`sudo` が使えない等）場合は、[`--depth`](#オプション) で監視する階層を絞る方法もあります。たとえば `yomi --depth 2` なら 2 階層までしか監視しないため、watch 数を抑えられます。
 
 ## ライセンス
 

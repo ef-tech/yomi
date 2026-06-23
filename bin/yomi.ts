@@ -26,9 +26,10 @@ async function main() {
     hostname: options.host,
     port,
     excludes,
+    maxDepth: options.depth ?? undefined,
   });
 
-  printStartupBanner({ rootDir, host: options.host, port });
+  printStartupBanner({ rootDir, host: options.host, port, depth: options.depth });
   if (userExcludes.size > 0) {
     console.log(`.yomiignore: ${userExcludes.size} 件追加 (${[...userExcludes].join(", ")})`);
   }

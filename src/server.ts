@@ -37,6 +37,8 @@ export interface ServerConfig {
   watch?: boolean;
   /** 除外するディレクトリ/ファイル名 (省略時は DEFAULT_EXCLUDES) */
   excludes?: ReadonlySet<string>;
+  /** 走査/監視する階層の上限 (Issue #44, tree -L 相当)。省略時は無制限。 */
+  maxDepth?: number;
 }
 
 export interface ServerHandle {
@@ -62,7 +64,7 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/tree") {
-        return handleTree(config.rootDir, excludes);
+        return handleTree(config.rootDir, excludes, config.maxDepth);
       }
 
       if (url.pathname === "/api/file") {
@@ -134,7 +136,7 @@ export function createServer(config: ServerConfig): ServerHandle {
           JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
         );
       },
-      { excludes, saveMark },
+      { excludes, saveMark, depth: config.maxDepth },
     );
   }
 
@@ -188,9 +190,13 @@ async function serveAsset(name: string): Promise<Response> {
   return new Response(file, { headers: { "Content-Type": type } });
 }
 
-async function handleTree(rootDir: string, excludes: ReadonlySet<string>): Promise<Response> {
+async function handleTree(
+  rootDir: string,
+  excludes: ReadonlySet<string>,
+  maxDepth?: number,
+): Promise<Response> {
   try {
-    const tree = await scanMarkdownTree(rootDir, { excludes });
+    const tree = await scanMarkdownTree(rootDir, { excludes, maxDepth });
     return Response.json(tree);
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 500 });

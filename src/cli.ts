@@ -3,6 +3,8 @@ export interface CliOptions {
   host: string;
   open: boolean;
   help: boolean;
+  /** 走査する階層の上限 (Issue #44)。null なら無制限。`tree -L <level>` と同義。 */
+  depth: number | null;
 }
 
 export const DEFAULT_OPTIONS: CliOptions = {
@@ -10,6 +12,7 @@ export const DEFAULT_OPTIONS: CliOptions = {
   host: "0.0.0.0",
   open: true,
   help: false,
+  depth: null,
 };
 
 export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
@@ -22,12 +25,17 @@ export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
   --no-open       ブラウザを自動で開かない
   --host <addr>   バインドアドレス（デフォルト: 0.0.0.0、同 LAN から閲覧可）
                   ローカル限定にするには --host 127.0.0.1
+  --depth <n>, -L <n>
+                  読み込む階層の深さを制限（tree -L 相当。デフォルト: 無制限）
+                  1 でルート直下のみ。深い md は読み込まず監視もしない
   --help, -h      このヘルプを表示
 
 例:
   cd /path/to/docs && yomi
   yomi --port 8080 --no-open
   yomi --host 127.0.0.1            # 自端末からのみ
+  yomi --depth 2                   # 2 階層までスキャン
+  yomi -L 1                        # ルート直下のみ
 `;
 
 /** "--name=value" 形式を "--name" "value" に分割し、引数列を統一形式に正規化する */
@@ -48,6 +56,19 @@ function parsePort(value: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
     throw new Error(`--port は 1〜65535 の整数で指定してください: ${value}`);
+  }
+  return n;
+}
+
+function parseDepth(value: string): number {
+  // Number() は 0x10 / 1e3 / +2 / 2.0 等を黙って受理してしまうため、
+  // 10 進整数表記だけを許可する (エラー文言「1 以上の整数」と一致させる)。
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`--depth は 1 以上の整数で指定してください: ${value}`);
+  }
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`--depth は 1 以上の整数で指定してください: ${value}`);
   }
   return n;
 }
@@ -78,6 +99,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         break;
       case "--host":
         opts.host = takeValue(args, i, "--host");
+        i++;
+        break;
+      case "--depth":
+      case "-L":
+        opts.depth = parseDepth(takeValue(args, i, arg));
         i++;
         break;
       default:

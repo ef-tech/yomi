@@ -4,6 +4,8 @@ export interface BannerOptions {
   rootDir: string;
   host: string;
   port: number;
+  /** 走査階層の上限 (Issue #44)。null / 未指定なら無制限で表示しない。 */
+  depth?: number | null;
 }
 
 /** 起動時にコンソールへ表示するバナーを組み立てる (改行区切り 1 文字列) */
@@ -15,6 +17,10 @@ export function buildStartupBanner(opts: BannerOptions): string {
   }
 
   lines.push(`対象ディレクトリ: ${opts.rootDir}`);
+
+  if (opts.depth != null) {
+    lines.push(`走査階層: 深さ ${opts.depth} まで (--depth ${opts.depth})`);
+  }
 
   if (!isLoopback(opts.host)) {
     lines.push(

@@ -19,9 +19,24 @@ export interface WatcherOptions {
   excludes?: ReadonlySet<string>;
   /** 自己保存マーク。イベントの現状ファイル sha がここに登録された値と一致する場合は publish しない */
   saveMark?: SaveMark;
+  /**
+   * 監視する階層の上限 (Issue #44)。scanMarkdownTree の maxDepth と同義
+   * (ルート直下 = 1)。スキャンで読み込まない深い dir は監視もしないことで、
+   * inotify watch 数を抑える。未指定なら無制限 (現行動作)。
+   */
+  depth?: number;
 }
 
 const DEBOUNCE_MS = 80;
+
+/**
+ * tree level の深さ (ルート直下 = 1、scanMarkdownTree の maxDepth と同義) を
+ * chokidar の depth (降りるサブディレクトリの段数、ルート直下 = 0) へ変換する。
+ * 両者の規約差 (-1 オフセット) をこの 1 箇所に閉じ込める。undefined は無制限。
+ */
+export function toChokidarDepth(treeDepth: number | undefined): number | undefined {
+  return treeDepth !== undefined ? treeDepth - 1 : undefined;
+}
 
 /**
  * ディレクトリツリーを監視し、md ファイルの変更を通知する。
@@ -43,6 +58,8 @@ export function createWatcher(
 ): WatcherHandle {
   const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const saveMark = options.saveMark;
+  // tree level の depth を chokidar の depth へ変換 (toChokidarDepth 参照)。
+  const chokidarDepth = toChokidarDepth(options.depth);
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
   let closed = false;
   let enospcWarned = false;
@@ -84,6 +101,7 @@ export function createWatcher(
     ignoreInitial: true,
     followSymlinks: false,
     persistent: true,
+    depth: chokidarDepth,
   });
 
   watcher

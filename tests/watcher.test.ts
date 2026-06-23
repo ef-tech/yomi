@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SaveMark, sha256 } from "../src/save-mark.ts";
-import { createWatcher, type WatcherHandle } from "../src/watcher.ts";
+import { createWatcher, toChokidarDepth, type WatcherHandle } from "../src/watcher.ts";
 
 /** chokidar の初期スキャン完了 (ready) を待つための余裕。これより前の書き込みは初期ファイル扱いで取りこぼす。 */
 const READY_MS = 350;
@@ -253,5 +253,45 @@ describe("createWatcher", () => {
     } finally {
       handle.close();
     }
+  });
+
+  test("depth 指定で深い階層の変更は publish されない (Issue #44)", async () => {
+    // 共有 root とは別の専用ツリーで検証する
+    const droot = await mkdtemp(join(tmpdir(), "yomi-watcher-depth-"));
+    await mkdir(join(droot, "d1"), { recursive: true });
+    await writeFile(join(droot, "shallow.md"), "x"); // level 1
+    await writeFile(join(droot, "d1", "deep.md"), "x"); // level 2
+
+    const calls: string[] = [];
+    // depth=1: ルート直下のみ監視 (chokidar depth 0)
+    const handle: WatcherHandle = createWatcher(droot, (path) => calls.push(path), { depth: 1 });
+
+    try {
+      await wait(READY_MS);
+      await writeFile(join(droot, "shallow.md"), "changed"); // 監視内 (level 1)
+      await writeFile(join(droot, "d1", "deep.md"), "changed"); // 監視外 (level 2)
+      await wait(DEBOUNCE_MARGIN_MS);
+
+      // positive control: 浅い変更は届く (= watcher は生きている)
+      expect(calls).toContain("shallow.md");
+      // depth 制限: 深い変更は届かない
+      expect(calls).not.toContain("d1/deep.md");
+    } finally {
+      handle.close();
+      await rm(droot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("toChokidarDepth (Issue #44)", () => {
+  // tree level (ルート直下 = 1) → chokidar depth (降りる段数、ルート直下 = 0)
+  test("tree depth N → chokidar depth N-1", () => {
+    expect(toChokidarDepth(1)).toBe(0);
+    expect(toChokidarDepth(2)).toBe(1);
+    expect(toChokidarDepth(5)).toBe(4);
+  });
+
+  test("undefined は無制限のまま undefined", () => {
+    expect(toChokidarDepth(undefined)).toBeUndefined();
   });
 });
