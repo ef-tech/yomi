@@ -50,4 +50,22 @@ describe("buildStartupBanner", () => {
     });
     expect(banner).toContain("http://127.0.0.1:12345");
   });
+
+  describe("depth 表示 (Issue #44)", () => {
+    test("depth 指定で走査階層行を含む", () => {
+      const banner = buildStartupBanner({
+        rootDir: "/x",
+        host: "127.0.0.1",
+        port: 3939,
+        depth: 2,
+      });
+      expect(banner).toContain("走査階層: 深さ 2 まで (--depth 2)");
+    });
+
+    test("depth 未指定 / null では走査階層行を出さない", () => {
+      const base = { rootDir: "/x", host: "127.0.0.1", port: 3939 };
+      expect(buildStartupBanner(base)).not.toContain("走査階層");
+      expect(buildStartupBanner({ ...base, depth: null })).not.toContain("走査階層");
+    });
+  });
 });

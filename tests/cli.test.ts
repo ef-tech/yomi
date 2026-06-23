@@ -101,6 +101,15 @@ describe("parseArgs", () => {
       expect(() => parseArgs(["--depth", "abc"])).toThrow(/1 以上の整数/);
       expect(() => parseArgs(["--depth", "2.5"])).toThrow(/1 以上の整数/);
     });
+
+    test("16 進 / 指数 / 符号付き / 空白は 10 進整数でないため拒否", () => {
+      // Number() は黙って受理してしまうが parseDepth は 10 進整数表記のみ許可
+      expect(() => parseArgs(["--depth", "0x10"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "1e3"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "+2"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", "2.0"])).toThrow(/1 以上の整数/);
+      expect(() => parseArgs(["--depth", " 2"])).toThrow(/1 以上の整数/);
+    });
   });
 
   describe("複合", () => {

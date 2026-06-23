@@ -30,6 +30,15 @@ export interface WatcherOptions {
 const DEBOUNCE_MS = 80;
 
 /**
+ * tree level の深さ (ルート直下 = 1、scanMarkdownTree の maxDepth と同義) を
+ * chokidar の depth (降りるサブディレクトリの段数、ルート直下 = 0) へ変換する。
+ * 両者の規約差 (-1 オフセット) をこの 1 箇所に閉じ込める。undefined は無制限。
+ */
+export function toChokidarDepth(treeDepth: number | undefined): number | undefined {
+  return treeDepth !== undefined ? treeDepth - 1 : undefined;
+}
+
+/**
  * ディレクトリツリーを監視し、md ファイルの変更を通知する。
  *
  * 監視は chokidar に委譲する。`ignored` で除外ディレクトリ (node_modules 等) を
@@ -49,10 +58,8 @@ export function createWatcher(
 ): WatcherHandle {
   const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const saveMark = options.saveMark;
-  // scanMarkdownTree の maxDepth (ルート直下 = 1) を chokidar の depth に変換する。
-  // chokidar の depth は「降りるサブディレクトリの段数」(0 = ルート直下のみ監視) なので
-  // maxDepth - 1。未指定なら無制限 (undefined を渡して全段監視)。
-  const chokidarDepth = options.depth !== undefined ? options.depth - 1 : undefined;
+  // tree level の depth を chokidar の depth へ変換 (toChokidarDepth 参照)。
+  const chokidarDepth = toChokidarDepth(options.depth);
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
   let closed = false;
   let enospcWarned = false;

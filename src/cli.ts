@@ -61,6 +61,11 @@ function parsePort(value: string): number {
 }
 
 function parseDepth(value: string): number {
+  // Number() は 0x10 / 1e3 / +2 / 2.0 等を黙って受理してしまうため、
+  // 10 進整数表記だけを許可する (エラー文言「1 以上の整数」と一致させる)。
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`--depth は 1 以上の整数で指定してください: ${value}`);
+  }
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1) {
     throw new Error(`--depth は 1 以上の整数で指定してください: ${value}`);
