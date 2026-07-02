@@ -182,6 +182,10 @@ const state = {
   newFileInput: null,
 };
 
+// スマホの toast 表示タイマー (setStatus / clearStatus で共有)。startup の
+// applyLang が clearStatus を呼ぶため、TDZ 回避に init シーケンスより前で宣言する。
+let statusToastTimer = null;
+
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
 onLangChange(reapplyDynamicI18n);
@@ -767,7 +771,6 @@ function expandAncestors(path) {
   saveOpenDirs();
 }
 
-let statusToastTimer = null;
 function setStatus(kind, text) {
   els.status.textContent = text;
   els.status.classList.remove("is-ok", "is-error", "is-toast");
@@ -947,6 +950,20 @@ function reapplyDynamicI18n() {
   // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
   updateExpandToggleUi();
   if (state.tocVisible) refreshToc();
+  // ステータスは key を保持しない一過性メッセージのため、言語切替時はクリアする
+  // (旧言語の文言が残らないように。次の操作で新言語で再表示される。
+  //  競合バナー等の操作可能な UI は別要素なので消えない)。
+  clearStatus();
+}
+
+/** ステータス表示を空にする (テキスト + 装飾クラス + toast タイマーを解除)。 */
+function clearStatus() {
+  if (statusToastTimer) {
+    clearTimeout(statusToastTimer);
+    statusToastTimer = null;
+  }
+  els.status.textContent = "";
+  els.status.classList.remove("is-ok", "is-error", "is-toast");
 }
 
 /** 編集モードの状態に応じて編集ボタン / overflow ボタンの表記を現在言語で設定する。 */
