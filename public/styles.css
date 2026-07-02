@@ -1181,7 +1181,8 @@ body {
     margin-bottom: 0.3rem;
   }
   .overflow-theme,
-  .overflow-view {
+  .overflow-view,
+  .overflow-lang {
     display: inline-flex;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -1189,7 +1190,8 @@ body {
     background: var(--bg-subtle);
   }
   .overflow-theme-btn,
-  .overflow-view-btn {
+  .overflow-view-btn,
+  .overflow-lang-btn {
     appearance: none;
     border: 0;
     background: transparent;
@@ -1202,11 +1204,13 @@ body {
     min-height: 44px;
   }
   .overflow-theme-btn:first-child,
-  .overflow-view-btn:first-child {
+  .overflow-view-btn:first-child,
+  .overflow-lang-btn:first-child {
     border-left: 0;
   }
   .overflow-theme-btn[aria-pressed="true"],
-  .overflow-view-btn[aria-pressed="true"] {
+  .overflow-view-btn[aria-pressed="true"],
+  .overflow-lang-btn[aria-pressed="true"] {
     background: var(--selected-bg);
     color: var(--selected-text);
     font-weight: 600;

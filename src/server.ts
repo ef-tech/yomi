@@ -72,7 +72,8 @@ export function createServer(config: ServerConfig): ServerHandle {
           return handleFileRead(config.rootDir, url.searchParams.get("path"));
         }
         if (req.method === "POST") {
-          if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
+          if (!checkOrigin(req))
+            return forbidden("Origin が許可されていません", "origin_forbidden");
           return handleFileWrite(config.rootDir, req, saveMark);
         }
         return new Response("Method Not Allowed", {
@@ -83,7 +84,8 @@ export function createServer(config: ServerConfig): ServerHandle {
 
       if (url.pathname === "/api/file/create") {
         if (req.method === "POST") {
-          if (!checkOrigin(req)) return forbidden("Origin が許可されていません");
+          if (!checkOrigin(req))
+            return forbidden("Origin が許可されていません", "origin_forbidden");
           return handleFileCreate(config.rootDir, req, saveMark, excludes);
         }
         return new Response("Method Not Allowed", {
@@ -172,8 +174,8 @@ export function checkOrigin(req: Request): boolean {
   return originHost === host;
 }
 
-function forbidden(message: string): Response {
-  return Response.json({ error: message }, { status: 403 });
+function forbidden(message: string, code?: string): Response {
+  return Response.json({ error: message, code }, { status: 403 });
 }
 
 async function serveAsset(name: string): Promise<Response> {
@@ -219,10 +221,13 @@ async function handleFileRead(rootDir: string, requested: string | null): Promis
     return Response.json({ path: safe.rel, raw, html, sha: sha256(buf) });
   } catch (err) {
     if (err instanceof UnsafePathError) {
-      return Response.json({ error: err.message }, { status: 400 });
+      return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return Response.json({ error: `ファイルが見つかりません: ${requested}` }, { status: 404 });
+      return Response.json(
+        { error: `ファイルが見つかりません: ${requested}`, code: "not_found" },
+        { status: 404 },
+      );
     }
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }
@@ -241,23 +246,29 @@ async function handleFileWrite(
 ): Promise<Response> {
   const lengthHeader = req.headers.get("content-length");
   if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
-    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+    return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
   }
 
   let parsed: FileWriteBody;
   try {
     const text = await req.text();
     if (Buffer.byteLength(text, "utf-8") > MAX_WRITE_BYTES) {
-      return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+      return Response.json(
+        { error: "body が大きすぎます", code: "body_too_large" },
+        { status: 413 },
+      );
     }
     parsed = JSON.parse(text) as FileWriteBody;
   } catch {
-    return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
+    return Response.json(
+      { error: "JSON の解析に失敗しました", code: "invalid_json" },
+      { status: 400 },
+    );
   }
 
   const { path, body, baseSha } = parsed;
   if (typeof path !== "string" || path.length === 0) {
-    return Response.json({ error: "path が必要です" }, { status: 400 });
+    return Response.json({ error: "path が必要です", code: "path_required" }, { status: 400 });
   }
   if (typeof body !== "string") {
     return Response.json({ error: "body は string です" }, { status: 400 });
@@ -269,7 +280,7 @@ async function handleFileWrite(
     return Response.json({ error: "Markdown ファイル以外には書き込めません" }, { status: 400 });
   }
   if (Buffer.byteLength(body, "utf-8") > MAX_WRITE_BYTES) {
-    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+    return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
   }
 
   let safe: { rel: string; abs: string };
@@ -277,7 +288,7 @@ async function handleFileWrite(
     safe = await resolveSafe(rootDir, path);
   } catch (err) {
     if (err instanceof UnsafePathError) {
-      return Response.json({ error: err.message }, { status: 400 });
+      return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
   }
@@ -349,26 +360,35 @@ async function handleFileCreate(
   // メモリを枯渇させられる。handleFileWrite と同じく MAX_WRITE_BYTES で上限を課す。
   const lengthHeader = req.headers.get("content-length");
   if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
-    return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+    return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
   }
 
   let parsed: FileCreateBody;
   try {
     const text = await req.text();
     if (Buffer.byteLength(text, "utf-8") > MAX_WRITE_BYTES) {
-      return Response.json({ error: "body が大きすぎます" }, { status: 413 });
+      return Response.json(
+        { error: "body が大きすぎます", code: "body_too_large" },
+        { status: 413 },
+      );
     }
     parsed = JSON.parse(text) as FileCreateBody;
   } catch {
-    return Response.json({ error: "JSON の解析に失敗しました" }, { status: 400 });
+    return Response.json(
+      { error: "JSON の解析に失敗しました", code: "invalid_json" },
+      { status: 400 },
+    );
   }
 
   const { path } = parsed;
   if (typeof path !== "string" || path.length === 0) {
-    return Response.json({ error: "path が必要です" }, { status: 400 });
+    return Response.json({ error: "path が必要です", code: "path_required" }, { status: 400 });
   }
   if (!isMarkdownPath(path)) {
-    return Response.json({ error: "Markdown ファイル以外は作成できません" }, { status: 400 });
+    return Response.json(
+      { error: "Markdown ファイル以外は作成できません", code: "not_markdown" },
+      { status: 400 },
+    );
   }
 
   let safe: { rel: string; abs: string };
@@ -376,7 +396,7 @@ async function handleFileCreate(
     safe = await resolveSafe(rootDir, path);
   } catch (err) {
     if (err instanceof UnsafePathError) {
-      return Response.json({ error: err.message }, { status: 400 });
+      return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
   }
@@ -384,7 +404,7 @@ async function handleFileCreate(
   // 除外ディレクトリ配下はツリーに表示されないファイルが出来て混乱するため拒否
   if (isExcludedPath(safe.rel, excludes)) {
     return Response.json(
-      { error: `除外ディレクトリ配下には作成できません: ${safe.rel}` },
+      { error: `除外ディレクトリ配下には作成できません: ${safe.rel}`, code: "excluded_dir" },
       { status: 400 },
     );
   }
@@ -396,15 +416,24 @@ async function handleFileCreate(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EEXIST") {
-      return Response.json({ error: `既に存在します: ${safe.rel}` }, { status: 409 });
+      return Response.json(
+        { error: `既に存在します: ${safe.rel}`, code: "already_exists" },
+        { status: 409 },
+      );
     }
     if (code === "ENOENT" || code === "ENOTDIR") {
-      return Response.json({ error: `親ディレクトリが存在しません: ${safe.rel}` }, { status: 400 });
+      return Response.json(
+        { error: `親ディレクトリが存在しません: ${safe.rel}`, code: "parent_missing" },
+        { status: 400 },
+      );
     }
     // 想定外の FS エラー (EACCES / ENOSPC 等) は生メッセージを返さず汎用化する。
     // safepath.ts の NUL 処理と同じく、内部状態 (絶対パス等) の漏洩を避ける。
     console.error(`handleFileCreate 失敗 (${safe.rel}):`, err);
-    return Response.json({ error: "ファイルの作成に失敗しました" }, { status: 500 });
+    return Response.json(
+      { error: "ファイルの作成に失敗しました", code: "create_failed" },
+      { status: 500 },
+    );
   }
   await handle.close();
 
@@ -436,7 +465,7 @@ async function handleAssetRead(
     safe = await resolveSafe(rootDir, requested);
   } catch (err) {
     if (err instanceof UnsafePathError) {
-      return Response.json({ error: err.message }, { status: 400 });
+      return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
   }

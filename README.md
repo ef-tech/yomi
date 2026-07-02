@@ -1,5 +1,7 @@
 # yomi (読み)
 
+**日本語** | [English](README.en.md)
+
 [![CI](https://github.com/ef-tech/yomi/actions/workflows/ci.yml/badge.svg)](https://github.com/ef-tech/yomi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -23,6 +25,7 @@
 - ブラウザの戻る/進むに対応、URL `?path=foo.md` でリロード復元・URL コピペで再現
 - GFM タスクリスト `- [ ] xxx` をプレビュー上でクリックして ON/OFF、md ファイルにも反映
 - Markdown 内の画像 `![](foo.png)` を相対パス解決して表示（同階層・`../`・サブディレクトリ対応）
+- UI 言語の切替（日本語 / English、ブラウザ言語に自動追従、`localStorage` に保存）
 
 ## スクリーンショット
 
@@ -102,6 +105,16 @@ yomi [options]
 - **⊟ 全て閉じる**: 初期状態（ルート直下のみ表示）に戻す
 
 ディレクトリの開閉状態は `localStorage` に保存され、リロード後も維持される。
+
+### UI 言語の切替 (日本語 / English)
+
+トップバーの言語トグル (**自動 / EN / 日本語**、スマホは ⋮ メニュー内) で UI の表示言語を切り替えられる。
+
+- **自動**: ブラウザの言語 (`navigator.language`) が `en*` なら英語、それ以外は日本語
+- **EN / 日本語**: 明示的に固定
+- 選択は `localStorage` (`yomi:lang:v1`) に保存され、リロード後も維持される
+- `<html lang>` も選択言語に追従する
+- Markdown の中身・ファイル名・パスは翻訳対象外 (UI ラベル・ステータス・API エラーメッセージのみ)
 
 ### 目次 (TOC)
 
