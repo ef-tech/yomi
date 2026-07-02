@@ -63,6 +63,13 @@ describe("server", () => {
       expect(json.raw).toBe("# Hello");
       expect(json.sha).toBe(sha256("# Hello"));
     });
+
+    // Issue #48: 存在しないファイルの 404 は i18n 用 code:"not_found" を含む
+    test("存在しないファイルは 404 + code:not_found", async () => {
+      const res = await fetch(`${ctx.url}/api/file?path=nope.md`);
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { code?: string }).code).toBe("not_found");
+    });
   });
 
   describe("POST /api/file - 正常系", () => {

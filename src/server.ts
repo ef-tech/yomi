@@ -224,7 +224,10 @@ async function handleFileRead(rootDir: string, requested: string | null): Promis
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return Response.json({ error: `ファイルが見つかりません: ${requested}` }, { status: 404 });
+      return Response.json(
+        { error: `ファイルが見つかりません: ${requested}`, code: "not_found" },
+        { status: 404 },
+      );
     }
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }
