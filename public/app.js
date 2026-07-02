@@ -1,5 +1,6 @@
 import DOMPurify from "https://cdn.jsdelivr.net/npm/dompurify@3/+esm";
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+import { applyI18n, ERROR_CODE_KEYS, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import {
   isAnchor,
   isExternalUrl,
@@ -55,6 +56,9 @@ const els = {
   conflictDismiss: document.getElementById("conflict-dismiss"),
   toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
   themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
+  // UI 言語トグル (Issue #48)
+  langButtons: Array.from(document.querySelectorAll(".lang-toggle-btn")),
+  overflowLangBtns: Array.from(document.querySelectorAll(".overflow-lang-btn")),
   // TOC
   tocBtn: document.getElementById("toc-btn"),
   tocPanel: document.getElementById("toc-panel"),
@@ -105,6 +109,10 @@ const MOBILE_QUERY = window.matchMedia("(max-width: 767px)");
 const THEME_MODES = ["auto", "light", "dark"];
 const DEFAULT_THEME_MODE = "auto";
 
+// UI 言語モード (Issue #48): auto はブラウザ言語に追従、ja / en は固定
+const LANG_MODES = ["auto", "ja", "en"];
+const DEFAULT_LANG_MODE = "auto";
+
 const TOC_EXPAND_LEVELS = ["h3", "h6"];
 const DEFAULT_TOC_EXPAND_LEVEL = "h3";
 
@@ -150,6 +158,8 @@ const state = {
   viewMode: DEFAULT_VIEW_MODE,
   /** テーマモード: auto | light | dark */
   themeMode: DEFAULT_THEME_MODE,
+  /** UI 言語モード: auto | ja | en (localStorage 永続、Issue #48) */
+  langMode: DEFAULT_LANG_MODE,
   /** 編集モード中かどうか */
   editing: false,
   /** 編集中で未保存の差分があるかどうか */
@@ -172,12 +182,18 @@ const state = {
   newFileInput: null,
 };
 
+// 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
+// applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
+onLangChange(reapplyDynamicI18n);
+
 restorePreferences();
 applyViewMode(state.viewMode);
 applyThemeMode(state.themeMode);
+applyLang(state.langMode);
 initMermaid(state.themeMode);
 wireViewToggle();
 wireThemeToggle();
+wireLangToggle();
 wireEditActions();
 wireCopyPath();
 wireSidebar();
@@ -203,7 +219,7 @@ async function init() {
   try {
     const tree = await fetchJson("/api/tree");
     renderTree(tree);
-    setStatus("ok", `ファイル ${state.fileButtons.size} 件`);
+    setStatus("ok", t("status.fileCount", { count: state.fileButtons.size }));
 
     const initial = chooseInitialFile(tree);
     if (initial) {
@@ -211,13 +227,15 @@ async function init() {
       const hash = getHashFromUrl();
       await navigateTo(initial, { history: "replace", hash });
     } else {
-      els.preview.innerHTML =
-        '<p class="placeholder">このディレクトリには Markdown ファイルが見つかりませんでした。</p>';
+      const p = document.createElement("p");
+      p.className = "placeholder";
+      p.textContent = t("preview.noFiles");
+      els.preview.replaceChildren(p);
     }
   } catch (err) {
-    setStatus("error", `初期化失敗: ${err.message}`);
+    setStatus("error", t("status.initFailed", { msg: errorText(err) }));
     els.tree.removeAttribute("aria-busy");
-    els.tree.textContent = `読み込みエラー: ${err.message}`;
+    els.tree.textContent = t("status.loadError", { msg: errorText(err) });
   }
 }
 
@@ -227,10 +245,21 @@ async function fetchJson(url, options) {
   if (!res.ok) {
     const err = new Error(data.error ?? `HTTP ${res.status}`);
     err.status = res.status;
+    err.code = data.code;
     err.payload = data;
     throw err;
   }
   return data;
+}
+
+/**
+ * fetch エラーを表示用文字列に変換する (Issue #48)。
+ * サーバが返した code を翻訳キーに対応づけ、未知 code / code 無しは
+ * サーバの error 文字列 (err.message) にフォールバックする。
+ */
+function errorText(err) {
+  const key = err?.code ? ERROR_CODE_KEYS[err.code] : undefined;
+  return key ? t(key) : (err?.message ?? String(err));
 }
 
 function renderTree(root) {
@@ -293,8 +322,11 @@ function renderNode(node) {
       addBtn.type = "button";
       addBtn.className = "dir-new-btn";
       addBtn.textContent = "＋";
-      addBtn.title = `${node.path} に新規 md ファイル`;
-      addBtn.setAttribute("aria-label", `${node.name} に新規 Markdown ファイルを作成`);
+      // 言語切替時に再翻訳できるよう path / name を data 属性で保持 (reapplyDynamicI18n)
+      addBtn.dataset.dirPath = node.path;
+      addBtn.dataset.dirName = node.name;
+      addBtn.title = t("tree.newFileInDir.title", { path: node.path });
+      addBtn.setAttribute("aria-label", t("tree.newFileInDir.aria", { name: node.name }));
       addBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         openNewFileInput(node.path, addBtn);
@@ -305,7 +337,7 @@ function renderNode(node) {
     state.fileButtons.set(node.path, button);
     button.addEventListener("click", () => {
       navigateTo(node.path, { history: "push" }).catch((err) => {
-        setStatus("error", err.message);
+        setStatus("error", errorText(err));
       });
     });
   }
@@ -388,8 +420,8 @@ function openNewFileInput(dirPath, trigger = null) {
   const input = document.createElement("input");
   input.type = "text";
   input.className = "tree-new-input";
-  input.placeholder = "新規ファイル名 (.md)";
-  input.setAttribute("aria-label", "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)");
+  input.placeholder = t("tree.newFileInput.placeholder");
+  input.setAttribute("aria-label", t("tree.newFileInput.aria"));
   li.appendChild(input);
   parentUl.prepend(li);
   state.newFileInput = { li, input, trigger };
@@ -425,7 +457,7 @@ function closeNewFileInput() {
 async function submitNewFile(rawName, dirPath) {
   const name = completeMarkdownFileName(rawName);
   if (name === null) {
-    setStatus("error", "ファイル名が不正です (空・パス区切りは使えません)");
+    setStatus("error", t("status.invalidName"));
     return;
   }
   const path = joinTreePath(dirPath, name);
@@ -444,14 +476,14 @@ async function submitNewFile(rawName, dirPath) {
     if (!moved) {
       // 編集中に破棄をキャンセルした等で遷移がブロックされた場合、ファイルは
       // 作成済みだが古いエディタは触らない (誤ったキャレット移動・状態表示を避ける)
-      setStatus("ok", `${created.path} を作成しました (編集中のため未オープン)`);
+      setStatus("ok", t("status.createdNotOpened", { path: created.path }));
       return;
     }
     if (!state.editing) enterEditMode();
     els.editor.setSelectionRange(0, 0);
-    setStatus("ok", `${created.path} を作成しました`);
+    setStatus("ok", t("status.created", { path: created.path }));
   } catch (err) {
-    setStatus("error", `作成失敗: ${err.message}`);
+    setStatus("error", t("status.createFailed", { msg: errorText(err) }));
   }
 }
 
@@ -515,7 +547,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
   try {
     data = await loadFile(path);
   } catch (err) {
-    setStatus("error", `${path} を開けませんでした: ${err.message}`);
+    setStatus("error", t("status.openFailed", { path, msg: errorText(err) }));
     return false;
   }
 
@@ -525,7 +557,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
   if (mode === "push") closeSidebarIfMobile();
 
   if (mode === "none") {
-    setStatus("ok", `${data.path} を表示`);
+    setStatus("ok", t("status.showing", { path: data.path }));
     return true;
   }
 
@@ -539,7 +571,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
     window.history.replaceState(entry, "", url);
   }
 
-  setStatus("ok", `${data.path} を表示`);
+  setStatus("ok", t("status.showing", { path: data.path }));
   return true;
 }
 
@@ -613,9 +645,9 @@ function wireHistoryNavigation() {
       const data = await loadFile(target.path);
       applyFile(data);
       scrollIntoHash(target.hash);
-      setStatus("ok", `${data.path} を表示`);
+      setStatus("ok", t("status.showing", { path: data.path }));
     } catch (err) {
-      setStatus("error", `${target.path} を開けませんでした: ${err.message}`);
+      setStatus("error", t("status.openFailed", { path: target.path, msg: errorText(err) }));
     }
   });
 }
@@ -641,7 +673,7 @@ async function renderMermaid() {
     await mermaid.run({ nodes });
   } catch (err) {
     console.error("Mermaid render error:", err);
-    setStatus("error", `Mermaid 描画エラー: ${err.message ?? err}`);
+    setStatus("error", t("status.mermaidError", { msg: err.message ?? err }));
   }
 }
 
@@ -856,6 +888,76 @@ function saveThemeMode() {
   prefs.themeMode.save(state.themeMode);
 }
 
+/* ===== UI 言語切替 (Issue #48) ===== */
+
+/**
+ * 言語モード (auto | ja | en) を適用する。
+ * - resolveLang で実効言語を決め、<html lang> とトグルの押下状態を同期
+ * - setLang でメッセージ辞書を切替 → onLangChange 経由で reapplyDynamicI18n が
+ *   静的 (data-i18n) + 動的 (JS で組み立てた) 文言を一括再描画する
+ */
+function applyLang(mode) {
+  state.langMode = mode;
+  const effective = resolveLang(mode, navigator.language);
+  document.documentElement.lang = effective;
+  for (const btn of [...els.langButtons, ...els.overflowLangBtns]) {
+    btn.setAttribute("aria-pressed", btn.dataset.langMode === mode ? "true" : "false");
+  }
+  setLang(effective);
+}
+
+function wireLangToggle() {
+  const onSelect = (mode) => {
+    if (!mode || !LANG_MODES.includes(mode)) return;
+    if (state.langMode === mode) return;
+    applyLang(mode);
+    prefs.lang.save(mode);
+  };
+  for (const btn of [...els.langButtons, ...els.overflowLangBtns]) {
+    btn.addEventListener("click", () => onSelect(btn.dataset.langMode));
+  }
+}
+
+/**
+ * 言語変更時に、data-i18n 属性で宣言できない「JS が組み立てた文言」を再適用する。
+ * 静的属性は applyI18n が担当。ここではツリーの「＋」ツールチップ・編集ボタン表記・
+ * TOC ラベル・開いている新規入力欄など、動的に生成した DOM を現在言語へ更新する。
+ */
+function reapplyDynamicI18n() {
+  applyI18n(document);
+  // ツリーの「＋」ボタンのツールチップ (ディレクトリ path / name 入り)
+  for (const btn of els.tree.querySelectorAll(".dir-new-btn")) {
+    btn.title = t("tree.newFileInDir.title", { path: btn.dataset.dirPath ?? "" });
+    btn.setAttribute(
+      "aria-label",
+      t("tree.newFileInDir.aria", { name: btn.dataset.dirName ?? "" }),
+    );
+  }
+  // 開いているインライン新規ファイル入力欄
+  if (state.newFileInput) {
+    state.newFileInput.input.placeholder = t("tree.newFileInput.placeholder");
+    state.newFileInput.input.setAttribute("aria-label", t("tree.newFileInput.aria"));
+  }
+  // 編集モードのボタン表記 (applyI18n が data-i18n で編集前ラベルに戻すため、この後に上書き)
+  syncEditButtonLabels();
+  // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
+  updateExpandToggleUi();
+  if (state.tocVisible) refreshToc();
+}
+
+/** 編集モードの状態に応じて編集ボタン / overflow ボタンの表記を現在言語で設定する。 */
+function syncEditButtonLabels() {
+  if (state.editing) {
+    els.editBtn.textContent = t("edit.saveClose");
+    els.editBtn.title = t("edit.saveClose.title");
+    if (els.overflowEdit) els.overflowEdit.textContent = t("edit.saveClose.emoji");
+  } else {
+    els.editBtn.textContent = t("edit.button");
+    els.editBtn.title = t("edit.button.title");
+    if (els.overflowEdit) els.overflowEdit.textContent = t("overflow.editMode");
+  }
+}
+
 /* ===== 編集モード ===== */
 
 function wireEditActions() {
@@ -863,7 +965,7 @@ function wireEditActions() {
   els.editBtn.addEventListener("click", () => {
     if (state.editing) {
       // 編集モード中の「完了」: 未保存があれば保存 → 成功で閉じる、失敗なら編集モード継続
-      handleFinishEdit().catch((err) => setStatus("error", err.message));
+      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
     } else {
       enterEditMode();
     }
@@ -897,7 +999,7 @@ async function handleFinishEdit() {
 
 function confirmDiscard() {
   if (!state.dirty) return true;
-  return window.confirm("未保存の変更を破棄して編集を終了しますか?");
+  return window.confirm(t("confirm.discardEditEnd"));
 }
 
 function enableEditActions(enabled) {
@@ -918,9 +1020,9 @@ function wireCopyPath() {
     try {
       await copyTextToClipboard(state.currentPath);
       flashCopied();
-      setStatus("ok", `パスをコピー: ${state.currentPath}`);
+      setStatus("ok", t("status.pathCopied", { path: state.currentPath }));
     } catch (err) {
-      setStatus("error", `コピー失敗: ${err.message}`);
+      setStatus("error", t("status.copyFailed", { msg: err.message }));
     }
   });
 }
@@ -959,7 +1061,7 @@ async function copyTextToClipboard(text) {
   } finally {
     document.body.removeChild(ta);
   }
-  if (!ok) throw new Error("execCommand copy が失敗しました");
+  if (!ok) throw new Error(t("error.copyExec"));
 }
 
 /* ===== Sidebar overlay (Issue #25, スマホ専用) ===== */
@@ -1050,7 +1152,7 @@ function wireOverflowMenu() {
   els.overflowEdit.addEventListener("click", () => {
     setOverflowOpen(false);
     if (state.editing) {
-      handleFinishEdit().catch((err) => setStatus("error", err.message));
+      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
     } else {
       enterEditMode();
     }
@@ -1169,13 +1271,9 @@ function enterEditMode() {
   els.editor.value = state.currentRaw;
   els.editor.hidden = false;
   els.editBtn.setAttribute("aria-pressed", "true");
-  els.editBtn.textContent = "保存して閉じる";
-  els.editBtn.title = "保存して編集モードを終了 (Ctrl/Cmd+S でも保存可)";
   // Issue #30: スマホ用 overflow menu の編集ボタンも同期
-  if (els.overflowEdit) {
-    els.overflowEdit.setAttribute("aria-pressed", "true");
-    els.overflowEdit.textContent = "💾 保存して閉じる";
-  }
+  if (els.overflowEdit) els.overflowEdit.setAttribute("aria-pressed", "true");
+  syncEditButtonLabels();
   els.discardBtn.hidden = false;
   setDirty(false);
   // TOC を一時退避 (編集終了で復元)
@@ -1193,13 +1291,9 @@ function exitEditMode() {
   els.contentBody.classList.remove("is-editing");
   els.editor.hidden = true;
   els.editBtn.setAttribute("aria-pressed", "false");
-  els.editBtn.textContent = "編集";
-  els.editBtn.title = "ブラウザ内で編集する";
   // Issue #30: スマホ用 overflow menu の編集ボタンも同期
-  if (els.overflowEdit) {
-    els.overflowEdit.setAttribute("aria-pressed", "false");
-    els.overflowEdit.textContent = "✏️ 編集モード";
-  }
+  if (els.overflowEdit) els.overflowEdit.setAttribute("aria-pressed", "false");
+  syncEditButtonLabels();
   els.discardBtn.hidden = true;
   setDirty(false);
   // TOC 復元 (編集前に開いていれば再表示)。currentPath がなければ disabled のまま
@@ -1224,13 +1318,13 @@ function setDirty(dirty) {
 
 function confirmLeaveEdit() {
   if (!state.editing || !state.dirty) return true;
-  return window.confirm("未保存の変更があります。破棄して続行しますか?");
+  return window.confirm(t("confirm.unsavedContinue"));
 }
 
 async function saveEdit({ force = false } = {}) {
   if (!state.editing) return false;
   if (!state.currentPath) {
-    setStatus("error", "保存失敗: 表示中のファイルがありません");
+    setStatus("error", t("status.saveNoFile"));
     return false;
   }
   const body = els.editor.value;
@@ -1253,14 +1347,14 @@ async function saveEdit({ force = false } = {}) {
       renderMermaid().catch(() => {});
     }
     els.source.textContent = data.raw;
-    setStatus("ok", `${state.currentPath} を保存`);
+    setStatus("ok", t("status.saved", { path: state.currentPath }));
     return true;
   } catch (err) {
     if (err.status === 409 && err.payload) {
       showConflict(err.payload);
-      setStatus("error", "競合: ファイルが他で更新されています");
+      setStatus("error", t("status.conflict"));
     } else {
-      setStatus("error", `保存失敗: ${err.message}`);
+      setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
     }
     return false;
   }
@@ -1303,7 +1397,7 @@ async function onTaskCheckboxToggle(ev) {
   if (newChecked === null) {
     // ソース上に該当タスクなし (markdown と DOM index がズレた)
     target.checked = !target.checked; // revert
-    setStatus("error", "タスクの位置を特定できませんでした");
+    setStatus("error", t("status.taskLocateFailed"));
     return;
   }
 
@@ -1321,15 +1415,21 @@ async function onTaskCheckboxToggle(ev) {
     });
     // applyFile 経由で再描画: state 更新 + DOM + TOC + チェックボックス再 attach を一括
     applyFile(data);
-    setStatus("ok", `${state.currentPath} を更新 (タスク${newChecked ? "ON" : "OFF"})`);
+    setStatus(
+      "ok",
+      t("status.taskUpdated", {
+        path: state.currentPath,
+        state: newChecked ? t("task.on") : t("task.off"),
+      }),
+    );
   } catch (err) {
     target.checked = !target.checked; // revert UI
     target.disabled = state.editing;
     if (err.status === 409 && err.payload) {
       showConflict(err.payload);
-      setStatus("error", "競合: ファイルが他で更新されています");
+      setStatus("error", t("status.conflict"));
     } else {
-      setStatus("error", `保存失敗: ${err.message}`);
+      setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
     }
   }
 }
@@ -1360,7 +1460,7 @@ function takeServerVersion() {
   els.source.textContent = state.currentRaw;
   if (state.viewMode !== "md") renderMermaid().catch(() => {});
   hideConflict();
-  setStatus("ok", "サーバ側の内容を取り込みました");
+  setStatus("ok", t("status.serverTaken"));
 }
 
 function forceOverwrite() {
@@ -1392,7 +1492,7 @@ function wireLinkNavigation() {
 
     // Issue #22: javascript: 以外の危険スキーム (vbscript / file / chrome-extension / data 等) も同じ扱い
     if (isUnsafeScheme(href)) {
-      setStatus("error", "不正なリンクをブロックしました");
+      setStatus("error", t("status.blockedLink"));
       return;
     }
 
@@ -1421,7 +1521,7 @@ function navigateInternal(href) {
   const { path: hrefPath, hash } = splitHrefHash(href);
   const resolved = resolveRelativePath(state.currentPath, hrefPath);
   if (!resolved) {
-    setStatus("error", `ファイルが見つかりません: ${href}`);
+    setStatus("error", t("status.fileNotFound", { href }));
     return;
   }
 
@@ -1432,11 +1532,11 @@ function navigateInternal(href) {
 
   const hit = candidates.find((c) => state.fileButtons.has(c));
   if (!hit) {
-    setStatus("error", `ファイルが見つかりません: ${href}`);
+    setStatus("error", t("status.fileNotFound", { href }));
     return;
   }
 
-  navigateTo(hit, { history: "push", hash }).catch((err) => setStatus("error", err.message));
+  navigateTo(hit, { history: "push", hash }).catch((err) => setStatus("error", errorText(err)));
 }
 
 function showExternalLinkBanner(url) {
@@ -1509,7 +1609,7 @@ function applyTocVisibility(visible, { persist = true } = {}) {
 function updateExpandToggleUi() {
   const isExpanded = state.tocExpandLevel === "h6";
   els.tocExpandToggle.setAttribute("aria-pressed", isExpanded ? "true" : "false");
-  els.tocExpandToggle.textContent = isExpanded ? "▴ H4- 折りたたみ" : "▾ H4- 展開";
+  els.tocExpandToggle.textContent = isExpanded ? t("toc.collapseH4") : t("toc.expandH4");
 }
 
 function refreshToc() {
@@ -1537,7 +1637,7 @@ function renderTocTree(tree) {
   if (tree.length === 0) {
     const empty = document.createElement("p");
     empty.className = "toc-empty";
-    empty.textContent = "目次がありません";
+    empty.textContent = t("toc.empty");
     els.tocList.appendChild(empty);
     return;
   }
@@ -1635,7 +1735,9 @@ function wireKeyboard() {
       if (!state.editing) return;
       ev.preventDefault();
       ev.stopPropagation();
-      saveEdit().catch((err) => setStatus("error", `保存失敗: ${err.message}`));
+      saveEdit().catch((err) =>
+        setStatus("error", t("status.saveFailed", { msg: errorText(err) })),
+      );
     },
     { capture: true },
   );
@@ -1732,18 +1834,18 @@ async function handleLiveEvent(msg) {
       try {
         const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
         showConflict(latest);
-        setStatus("error", "ファイルが他で更新されています");
+        setStatus("error", t("status.fileUpdatedElsewhere"));
       } catch (err) {
-        setStatus("error", err.message);
+        setStatus("error", errorText(err));
       }
       return;
     }
     try {
       const data = await loadFile(state.currentPath);
       applyFile(data);
-      setStatus("ok", `${data.path} を再読込`);
+      setStatus("ok", t("status.reloaded", { path: data.path }));
     } catch (err) {
-      setStatus("error", err.message);
+      setStatus("error", errorText(err));
     }
     return;
   }
@@ -1756,11 +1858,11 @@ async function handleLiveEvent(msg) {
         if (state.fileButtons.has(state.currentPath)) {
           highlightSelected(state.currentPath);
         } else {
-          setStatus("error", `ファイルが削除されました: ${state.currentPath}`);
+          setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
         }
       }
     } catch (err) {
-      setStatus("error", `ツリー再取得失敗: ${err.message}`);
+      setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
     }
   }
 }
