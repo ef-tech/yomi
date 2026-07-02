@@ -90,7 +90,11 @@ const els = {
 const SANITIZE_CONFIG = {
   USE_PROFILES: { html: true },
   ADD_ATTR: ["target", "rel"],
-  // data-* 属性 (data-task-index 等) は DOMPurify デフォルトで保持
+  // data-* 属性 (data-task-index 等) は DOMPurify デフォルトで保持。
+  // ただし data-i18n* は禁止する (Issue #48): プレビュー内の md に紛れ込むと
+  // applyI18n(document) が言語切替時にその要素の textContent/属性を辞書値で
+  // 上書きしてしまうため、i18n 機構がユーザーコンテンツに漏れないようにする。
+  FORBID_ATTR: ["data-i18n", "data-i18n-title", "data-i18n-aria-label", "data-i18n-placeholder"],
 };
 
 function sanitize(html) {
@@ -233,6 +237,8 @@ async function init() {
     } else {
       const p = document.createElement("p");
       p.className = "placeholder";
+      // data-i18n を付けて言語切替時に applyI18n が再翻訳できるようにする (Issue #48)
+      p.dataset.i18n = "preview.noFiles";
       p.textContent = t("preview.noFiles");
       els.preview.replaceChildren(p);
     }
@@ -491,7 +497,7 @@ async function submitNewFile(rawName, dirPath) {
     els.editor.setSelectionRange(0, 0);
     setStatus("ok", t("status.created", { path: created.path }));
   } catch (err) {
-    setStatus("error", t("status.createFailed", { msg: errorText(err) }));
+    setStatus("error", t("status.createFailed", { path, msg: errorText(err) }));
   }
 }
 
@@ -1635,6 +1641,8 @@ function updateExpandToggleUi() {
   const isExpanded = state.tocExpandLevel === "h6";
   els.tocExpandToggle.setAttribute("aria-pressed", isExpanded ? "true" : "false");
   els.tocExpandToggle.textContent = isExpanded ? t("toc.collapseH4") : t("toc.expandH4");
+  // title も状態に追従させる (data-i18n-title は常に展開側なので、ここで上書き)
+  els.tocExpandToggle.title = isExpanded ? t("toc.collapseH4.title") : t("toc.expandH4.title");
 }
 
 function refreshToc() {

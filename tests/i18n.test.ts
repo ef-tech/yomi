@@ -60,6 +60,19 @@ describe("t", () => {
     setLang("ja");
     expect(t("status.showing")).toBe("{path} を表示");
   });
+
+  test("置換は 1 パスで行い、値に含まれる別プレースホルダを二重置換しない", () => {
+    setLang("ja");
+    // path 値に "{state}" が含まれていても、後続の {state} 置換に飲み込まれない
+    expect(t("status.taskUpdated", { path: "{state}.md", state: "ON" })).toBe(
+      "{state}.md を更新 (タスクON)",
+    );
+  });
+
+  test("params に無いプレースホルダは元の {name} のまま残す", () => {
+    setLang("en");
+    expect(t("status.openFailed", { path: "a.md" })).toBe("Could not open a.md: {msg}");
+  });
 });
 
 describe("ja / en の辞書はキー集合が完全に一致する", () => {

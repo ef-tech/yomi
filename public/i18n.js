@@ -14,6 +14,7 @@
 export const ERROR_CODE_KEYS = {
   invalid_json: "error.invalid_json",
   path_required: "error.path_required",
+  not_found: "error.not_found",
   not_markdown: "error.not_markdown",
   unsafe_path: "error.unsafe_path",
   excluded_dir: "error.excluded_dir",
@@ -96,6 +97,7 @@ const MESSAGES = {
     "toc.expandH4": "▾ H4- 展開",
     "toc.expandH4.title": "H4 以下も表示",
     "toc.collapseH4": "▴ H4- 折りたたみ",
+    "toc.collapseH4.title": "H4 以下を隠す",
     "toc.empty": "目次がありません",
     // ステータス (動的)
     "status.fileCount": "ファイル {count} 件",
@@ -104,7 +106,7 @@ const MESSAGES = {
     "status.invalidName": "ファイル名が不正です (空・パス区切りは使えません)",
     "status.created": "{path} を作成しました",
     "status.createdNotOpened": "{path} を作成しました (編集中のため未オープン)",
-    "status.createFailed": "作成失敗: {msg}",
+    "status.createFailed": "{path} の作成に失敗しました: {msg}",
     "status.openFailed": "{path} を開けませんでした: {msg}",
     "status.showing": "{path} を表示",
     "status.mermaidError": "Mermaid 描画エラー: {msg}",
@@ -131,6 +133,7 @@ const MESSAGES = {
     // API エラー (サーバ code → 翻訳)
     "error.invalid_json": "JSON の解析に失敗しました",
     "error.path_required": "path が必要です",
+    "error.not_found": "ファイルが見つかりません",
     "error.not_markdown": "Markdown ファイル以外は作成できません",
     "error.unsafe_path": "パスが不正です",
     "error.excluded_dir": "除外ディレクトリ配下には作成できません",
@@ -212,6 +215,7 @@ const MESSAGES = {
     "toc.expandH4": "▾ Show H4-",
     "toc.expandH4.title": "Show H4 and deeper",
     "toc.collapseH4": "▴ Hide H4-",
+    "toc.collapseH4.title": "Hide H4 and deeper",
     "toc.empty": "No headings",
     // status (dynamic)
     "status.fileCount": "{count} files",
@@ -220,7 +224,7 @@ const MESSAGES = {
     "status.invalidName": "Invalid file name (empty or path separators are not allowed)",
     "status.created": "Created {path}",
     "status.createdNotOpened": "Created {path} (not opened while editing)",
-    "status.createFailed": "Create failed: {msg}",
+    "status.createFailed": "Failed to create {path}: {msg}",
     "status.openFailed": "Could not open {path}: {msg}",
     "status.showing": "Showing {path}",
     "status.mermaidError": "Mermaid render error: {msg}",
@@ -247,6 +251,7 @@ const MESSAGES = {
     // API errors (server code -> translation)
     "error.invalid_json": "Failed to parse JSON",
     "error.path_required": "path is required",
+    "error.not_found": "File not found",
     "error.not_markdown": "Only Markdown files can be created",
     "error.unsafe_path": "Invalid path",
     "error.excluded_dir": "Cannot create under an excluded directory",
@@ -300,9 +305,12 @@ export function t(key, params) {
   if (msg === undefined) msg = MESSAGES.ja[key];
   if (msg === undefined) return key;
   if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      msg = msg.replaceAll(`{${k}}`, String(v));
-    }
+    // テンプレートを 1 パスで走査し、各 {name} をその場で params から置換する。
+    // 逐次 replaceAll だと、置換後の値に別の {name} が含まれる場合 (例: パスに
+    // "{state}" を含むファイル名) に二重置換される。単一パスならその事故を防げる。
+    msg = msg.replace(/\{(\w+)\}/g, (match, name) =>
+      name in params ? String(params[name]) : match,
+    );
   }
   return msg;
 }
