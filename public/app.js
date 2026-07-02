@@ -797,6 +797,10 @@ function restorePreferences() {
   const theme = prefs.themeMode.load();
   if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
 
+  // Issue #48: UI 言語モード (auto|ja|en)。未保存/不正値はデフォルト auto を維持
+  const lang = prefs.lang.load();
+  if (lang && LANG_MODES.includes(lang)) state.langMode = lang;
+
   const tocVis = prefs.tocVisible.load();
   if (tocVis === true) state.tocVisible = true;
 
