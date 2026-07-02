@@ -266,6 +266,10 @@ function renderTree(root) {
   state.fileButtons.clear();
   state.dirNodes.clear();
   els.tree.removeAttribute("aria-busy");
+  // 起動時プレースホルダ "読み込み中…" の data-i18n を除去する (Issue #48)。
+  // これを残すと、言語切替時の applyI18n() が #tree.textContent を loading 文言で
+  // 上書きし、描画済みのツリー (ファイル/ディレクトリ) が消えてしまう。
+  els.tree.removeAttribute("data-i18n");
   els.tree.innerHTML = "";
 
   const ul = document.createElement("ul");
