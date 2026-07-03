@@ -44,6 +44,8 @@ export const prefs = {
   // 旧 "yomi:currentPath:v1" は廃止: 現在ファイルは URL ?path= で表現する
   viewMode: makePref("yomi:viewMode:v1"),
   themeMode: makePref("yomi:themeMode:v1"),
+  // Issue #48: UI 言語 ("auto" | "ja" | "en"、デフォルト auto)
+  lang: makePref("yomi:lang:v1"),
   tocVisible: makePref("yomi:tocVisible:v1", {
     parse: (s) => s === "true",
     stringify: (v) => (v ? "true" : "false"),

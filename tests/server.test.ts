@@ -63,6 +63,13 @@ describe("server", () => {
       expect(json.raw).toBe("# Hello");
       expect(json.sha).toBe(sha256("# Hello"));
     });
+
+    // Issue #48: 存在しないファイルの 404 は i18n 用 code:"not_found" を含む
+    test("存在しないファイルは 404 + code:not_found", async () => {
+      const res = await fetch(`${ctx.url}/api/file?path=nope.md`);
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { code?: string }).code).toBe("not_found");
+    });
   });
 
   describe("POST /api/file - 正常系", () => {
@@ -356,6 +363,28 @@ describe("server", () => {
       const res = await fetch(`${ctx.url}/api/file/create`);
       expect(res.status).toBe(405);
       expect(res.headers.get("allow")).toBe("POST");
+    });
+
+    // Issue #48: フロントの i18n はサーバの error `code` を翻訳キーに対応づける。
+    // 各エラー応答が想定 code を返すことを保証する (メッセージ文字列は fallback)。
+    test("エラー応答は i18n 用の code を含む", async () => {
+      const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code;
+
+      await writeFile(join(root, "dup.md"), "# dup");
+      expect(await codeOf(await create({ path: "dup.md" }))).toBe("already_exists");
+      expect(await codeOf(await create({ path: "evil.txt" }))).toBe("not_markdown");
+      expect(await codeOf(await create({ path: "node_modules/x.md" }))).toBe("excluded_dir");
+      expect(await codeOf(await create({ path: "no-such-dir/new.md" }))).toBe("parent_missing");
+      expect(await codeOf(await create({ path: "../evil.md" }))).toBe("unsafe_path");
+      expect(await codeOf(await create({}))).toBe("path_required");
+      expect(await codeOf(await create("{not json"))).toBe("invalid_json");
+
+      const csrf = await fetch(`${ctx.url}/api/file/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://attacker.example" },
+        body: JSON.stringify({ path: "csrf.md" }),
+      });
+      expect(await codeOf(csrf)).toBe("origin_forbidden");
     });
 
     test("大文字拡張子 (.MD) も作成できる (サーバ判定は大文字小文字無視)", async () => {

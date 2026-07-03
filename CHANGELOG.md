@@ -10,6 +10,21 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-02
+
+ブラウザ UI を **日本語 / English に切り替え** られるようになりました (Issue #48)。トップバー（スマホは ⋮ メニュー）の言語トグル（自動 / EN / 日本語）で、ラベル・ステータス・API エラーメッセージを含む UI 全体が即時に言語を切り替えます。「自動」はブラウザの言語（`navigator.language`）に追従し、選択は `localStorage` に保存されてリロード後も維持されます。ビルドステップは増やさず、純粋な JS メッセージ辞書で実現しています。Markdown 本文・ファイル名・パスは翻訳対象外です。
+
+### Added (Issue #48)
+
+- **UI 言語切替（日本語 / English）**: トップバーとスマホ ⋮ メニューに言語トグル（自動 / EN / 日本語）を追加。「自動」は `navigator.language` が `en*` なら英語、それ以外は日本語。選択は `localStorage`（`yomi:lang:v1`）に永続化され、`<html lang>` も追従する
+- **i18n メッセージ辞書 (`public/i18n.js`)**: ビルド不要の純 JS 辞書。ja / en が同一キー集合を持つ（テストで保証）。`t(key, params)` はプレースホルダ `{name}` を 1 パスで置換し、未翻訳キーは ja へフォールバック。`data-i18n` / `data-i18n-title` / `data-i18n-aria-label` / `data-i18n-placeholder` 属性で静的文言を宣言的に翻訳
+- **API エラーメッセージの多言語化**: サーバのエラー応答に `code` を付与し、フロントで翻訳キーへ対応づけ（`already_exists` / `not_markdown` / `unsafe_path` / `not_found` など）。未知 code はサーバの文字列にフォールバック
+- **README の日英 2 ファイル化**: `README.en.md`（全訳）を追加し、両 README 冒頭に相互リンクを設置
+
+### Changed
+
+- **`renderMarkdown` のサニタイズ**: プレビュー内 Markdown から `data-i18n*` 属性を除去（`FORBID_ATTR`）。言語切替時の `applyI18n` がユーザーコンテンツを書き換えないようにする
+
 ## [0.15.0] - 2026-06-24
 
 起動時に **読み込む階層の深さを指定** できるようになりました (Issue #44)。`tree -L` のように `yomi --depth 2`（短縮 `-L 2`）で 2 階層までに絞れます。深い Markdown は読み込まず監視もしないので、巨大なディレクトリツリーでも起動が速くなり、ファイル監視の watch 数も減ります（[#39](https://github.com/ef-tech/yomi/issues/39) の inotify ENOSPC 軽減）。

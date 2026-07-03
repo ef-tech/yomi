@@ -12,80 +12,131 @@
         type="button"
         id="menu-btn"
         class="menu-btn"
+        data-i18n-aria-label="menu.openTree.aria"
         aria-label="ファイルツリーを開く"
         aria-expanded="false"
+        data-i18n-title="menu.tree.title"
         title="ファイルツリー"
       >☰</button>
       <h1 class="brand">yomi</h1>
-      <div class="theme-toggle" role="group" aria-label="テーマ">
+      <div class="theme-toggle" role="group" data-i18n-aria-label="theme.group" aria-label="テーマ">
         <button
           type="button"
           class="theme-toggle-btn"
           data-theme-mode="auto"
+          data-i18n-title="theme.auto.title"
           title="システム設定に追従"
           aria-pressed="true"
+          data-i18n="theme.auto"
         >自動</button>
         <button
           type="button"
           class="theme-toggle-btn"
           data-theme-mode="light"
+          data-i18n-title="theme.light.title"
           title="ライトテーマ"
           aria-pressed="false"
+          data-i18n="theme.light"
         >ライト</button>
         <button
           type="button"
           class="theme-toggle-btn"
           data-theme-mode="dark"
+          data-i18n-title="theme.dark.title"
           title="ダークテーマ"
           aria-pressed="false"
+          data-i18n="theme.dark"
         >ダーク</button>
+      </div>
+      <div class="theme-toggle lang-toggle" role="group" data-i18n-aria-label="lang.group" aria-label="言語">
+        <button
+          type="button"
+          class="theme-toggle-btn lang-toggle-btn"
+          data-lang-mode="auto"
+          data-i18n-title="lang.auto.title"
+          title="ブラウザの言語に追従"
+          aria-pressed="true"
+          data-i18n="lang.auto"
+        >自動</button>
+        <button
+          type="button"
+          class="theme-toggle-btn lang-toggle-btn"
+          data-lang-mode="en"
+          data-i18n-title="lang.en.title"
+          title="Show in English"
+          aria-pressed="false"
+          data-i18n="lang.en"
+        >EN</button>
+        <button
+          type="button"
+          class="theme-toggle-btn lang-toggle-btn"
+          data-lang-mode="ja"
+          data-i18n-title="lang.ja.title"
+          title="日本語で表示"
+          aria-pressed="false"
+          data-i18n="lang.ja"
+        >日本語</button>
       </div>
       <button
         type="button"
         id="toc-btn"
         class="toc-btn"
         aria-pressed="false"
+        data-i18n-title="toc.button.title"
         title="目次 (Ctrl/Cmd+Shift+O)"
+        data-i18n="toc.button"
       >📖 目次</button>
       <div class="status" id="status" aria-live="polite"></div>
       <button
         type="button"
         id="overflow-btn"
         class="overflow-btn"
+        data-i18n-aria-label="menu.more"
         aria-label="メニュー"
         aria-expanded="false"
+        data-i18n-title="menu.more"
         title="メニュー"
       >⋮</button>
     </header>
-    <div id="overflow-menu" class="overflow-menu" role="menu" aria-label="メニュー" hidden>
+    <div id="overflow-menu" class="overflow-menu" role="menu" data-i18n-aria-label="menu.more" aria-label="メニュー" hidden>
       <div class="overflow-section">
-        <div class="overflow-label">テーマ</div>
+        <div class="overflow-label" data-i18n="theme.group">テーマ</div>
         <div class="overflow-theme">
-          <button type="button" class="overflow-theme-btn" data-theme-mode="auto">自動</button>
-          <button type="button" class="overflow-theme-btn" data-theme-mode="light">ライト</button>
-          <button type="button" class="overflow-theme-btn" data-theme-mode="dark">ダーク</button>
+          <button type="button" class="overflow-theme-btn" data-theme-mode="auto" data-i18n="theme.auto">自動</button>
+          <button type="button" class="overflow-theme-btn" data-theme-mode="light" data-i18n="theme.light">ライト</button>
+          <button type="button" class="overflow-theme-btn" data-theme-mode="dark" data-i18n="theme.dark">ダーク</button>
         </div>
       </div>
       <div class="overflow-section">
-        <div class="overflow-label">表示モード</div>
+        <div class="overflow-label" data-i18n="lang.group">言語</div>
+        <div class="overflow-lang">
+          <button type="button" class="overflow-lang-btn" data-lang-mode="auto" data-i18n="lang.auto">自動</button>
+          <button type="button" class="overflow-lang-btn" data-lang-mode="en" data-i18n="lang.en">EN</button>
+          <button type="button" class="overflow-lang-btn" data-lang-mode="ja" data-i18n="lang.ja">日本語</button>
+        </div>
+      </div>
+      <div class="overflow-section">
+        <div class="overflow-label" data-i18n="viewMode.label">表示モード</div>
         <div class="overflow-view">
-          <button type="button" class="overflow-view-btn" data-mode="preview">プレビュー</button>
-          <button type="button" class="overflow-view-btn" data-mode="md">MD</button>
+          <button type="button" class="overflow-view-btn" data-mode="preview" data-i18n="view.preview">プレビュー</button>
+          <button type="button" class="overflow-view-btn" data-mode="md" data-i18n="view.md">MD</button>
         </div>
       </div>
       <div class="overflow-section">
-        <button type="button" id="overflow-edit" class="overflow-action">✏️ 編集モード</button>
+        <button type="button" id="overflow-edit" class="overflow-action" data-i18n="overflow.editMode">✏️ 編集モード</button>
       </div>
     </div>
     <main class="layout">
       <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
-      <aside id="sidebar" class="sidebar" aria-label="ファイルツリー">
+      <aside id="sidebar" class="sidebar" data-i18n-aria-label="sidebar.label" aria-label="ファイルツリー">
         <div class="tree-toolbar">
           <button
             type="button"
             id="tree-new-file"
             class="tree-toolbar-btn tree-new-file-btn"
+            data-i18n-aria-label="tree.newFile.aria"
             aria-label="新規 Markdown ファイルを作成"
+            data-i18n-title="tree.newFile.title"
             title="新規 md ファイル"
             disabled
           >＋</button>
@@ -93,7 +144,9 @@
             type="button"
             id="tree-expand-all"
             class="tree-toolbar-btn"
+            data-i18n-aria-label="tree.expandAll"
             aria-label="全て開く"
+            data-i18n-title="tree.expandAll"
             title="全て開く"
             disabled
           >⊞</button>
@@ -101,12 +154,14 @@
             type="button"
             id="tree-collapse-all"
             class="tree-toolbar-btn"
+            data-i18n-aria-label="tree.collapseAll"
             aria-label="全て閉じる"
+            data-i18n-title="tree.collapseAll"
             title="全て閉じる"
             disabled
           >⊟</button>
         </div>
-        <nav id="tree" class="tree" aria-busy="true">読み込み中…</nav>
+        <nav id="tree" class="tree" aria-busy="true" data-i18n="tree.loading">読み込み中…</nav>
       </aside>
       <section class="content">
         <div class="content-header">
@@ -114,35 +169,43 @@
             type="button"
             id="current-path"
             class="current-path"
+            data-i18n-aria-label="path.copy.aria"
             aria-label="表示中のファイルパス。タップでコピー"
+            data-i18n-title="path.copy.title"
             title="タップでパスをコピー"
             disabled
           ></button>
-          <span id="dirty-indicator" class="dirty-indicator" aria-live="polite" hidden>● 未保存</span>
+          <span id="dirty-indicator" class="dirty-indicator" aria-live="polite" data-i18n="dirty.indicator" hidden>● 未保存</span>
           <div class="edit-actions">
             <button
               type="button"
               id="edit-btn"
               class="edit-btn"
               aria-pressed="false"
+              data-i18n-title="edit.button.title"
               title="ブラウザ内で編集する"
+              data-i18n="edit.button"
             >編集</button>
             <button
               type="button"
               id="discard-btn"
               class="discard-btn"
+              data-i18n-title="edit.discard.title"
               title="編集を破棄して閉じる"
+              data-i18n="edit.discard"
               hidden
             >破棄</button>
           </div>
-          <div class="view-toggle" role="tablist" aria-label="表示モード">
+          <div class="view-toggle" role="tablist" data-i18n-aria-label="viewMode.label" aria-label="表示モード">
             <button
               type="button"
               class="view-toggle-btn"
               data-mode="preview"
               role="tab"
               aria-selected="true"
+              data-i18n-title="view.preview.title"
               title="プレビューのみ"
+              data-i18n="view.preview"
             >プレビュー</button>
             <button
               type="button"
@@ -150,7 +213,9 @@
               data-mode="split"
               role="tab"
               aria-selected="false"
+              data-i18n-title="view.split.title"
               title="Markdown とプレビューを並列表示"
+              data-i18n="view.split"
             >並列</button>
             <button
               type="button"
@@ -158,7 +223,9 @@
               data-mode="md"
               role="tab"
               aria-selected="false"
+              data-i18n-title="view.md.title"
               title="Markdown ソースのみ"
+              data-i18n="view.md"
             >MD</button>
           </div>
         </div>
@@ -168,14 +235,14 @@
           role="alert"
           hidden
         >
-          <span class="conflict-message">他の場所でファイルが更新されています。</span>
-          <button type="button" id="conflict-take-server" class="conflict-action">
+          <span class="conflict-message" data-i18n="conflict.message">他の場所でファイルが更新されています。</span>
+          <button type="button" id="conflict-take-server" class="conflict-action" data-i18n="conflict.takeServer">
             サーバ内容を取り込む
           </button>
-          <button type="button" id="conflict-overwrite" class="conflict-action is-danger">
+          <button type="button" id="conflict-overwrite" class="conflict-action is-danger" data-i18n="conflict.overwrite">
             強制上書き
           </button>
-          <button type="button" id="conflict-dismiss" class="conflict-action">
+          <button type="button" id="conflict-dismiss" class="conflict-action" data-i18n="common.close">
             閉じる
           </button>
         </div>
@@ -187,13 +254,13 @@
           hidden
         >
           <span id="external-link-title" class="conflict-message">
-            外部 URL を開きますか?
+            <span data-i18n="extlink.message">外部 URL を開きますか?</span>
             <span id="external-link-url" class="external-link-url"></span>
           </span>
-          <button type="button" id="external-link-cancel" class="conflict-action">
+          <button type="button" id="external-link-cancel" class="conflict-action" data-i18n="common.close">
             閉じる
           </button>
-          <button type="button" id="external-link-open" class="conflict-action is-primary">
+          <button type="button" id="external-link-open" class="conflict-action is-primary" data-i18n="common.open">
             開く
           </button>
         </div>
@@ -204,25 +271,28 @@
             class="editor"
             spellcheck="false"
             autocomplete="off"
+            data-i18n-aria-label="editor.aria"
             aria-label="Markdown エディタ"
             hidden
           ></textarea>
           <article id="preview" class="preview markdown-body">
-            <p class="placeholder">左のツリーから Markdown ファイルを選択してください。</p>
+            <p class="placeholder" data-i18n="preview.placeholder">左のツリーから Markdown ファイルを選択してください。</p>
           </article>
-          <aside id="toc-panel" class="toc-panel" hidden aria-label="目次">
+          <aside id="toc-panel" class="toc-panel" hidden data-i18n-aria-label="toc.panel.aria" aria-label="目次">
             <header class="toc-header">
-              <span class="toc-title">目次</span>
-              <button type="button" id="toc-close" class="toc-close" aria-label="目次を閉じる" title="閉じる">✕</button>
+              <span class="toc-title" data-i18n="toc.title">目次</span>
+              <button type="button" id="toc-close" class="toc-close" data-i18n-aria-label="toc.close.aria" aria-label="目次を閉じる" data-i18n-title="common.close" title="閉じる">✕</button>
             </header>
-            <nav id="toc-list" class="toc-list" aria-label="見出し一覧"></nav>
+            <nav id="toc-list" class="toc-list" data-i18n-aria-label="toc.list.aria" aria-label="見出し一覧"></nav>
             <footer class="toc-footer">
               <button
                 type="button"
                 id="toc-expand-toggle"
                 class="toc-expand-toggle"
                 aria-pressed="false"
+                data-i18n-title="toc.expandH4.title"
                 title="H4 以下も表示"
+                data-i18n="toc.expandH4"
               >▾ H4- 展開</button>
             </footer>
           </aside>
@@ -230,7 +300,9 @@
             type="button"
             id="toc-fab"
             class="toc-fab"
+            data-i18n-aria-label="toc.fab"
             aria-label="目次"
+            data-i18n-title="toc.fab"
             title="目次"
             disabled
           >📖</button>
