@@ -10,6 +10,18 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-07-03
+
+macOS の CI で間欠的に失敗していたファイル監視テストを決定論化しました (Issue #45)。本番挙動に変更はなく、テストの信頼性 (CI が再実行なしに安定して green になる) の改善のみです。
+
+### Fixed (Issue #45)
+
+- **watcher テストの flaky を解消**: `tests/watcher.test.ts` の自己保存マーク抑止テストが macOS の FSEvents 配信遅延・結合により間欠 fail していた。監視ロジック (拡張子フィルタ / kind マッピング / debounce 集約 / save-mark 抑止 / close) は注入フェイクイベントで決定論的に検証し、chokidar 固有挙動 (作成・ネスト・rename・削除・除外dir・depth) は実 chokidar で残しつつ固定 sleep を poll (`waitFor`) と `ready` 待ちに置換
+
+### Changed
+
+- **`createWatcher` にテスト用の注入口を追加**: `WatcherOptions.watch` (監視実装の差し替え) と `WatcherOptions.onReady` (初期スキャン完了通知)。本番は未指定のままで挙動不変
+
 ## [0.16.0] - 2026-07-02
 
 ブラウザ UI を **日本語 / English に切り替え** られるようになりました (Issue #48)。トップバー（スマホは ⋮ メニュー）の言語トグル（自動 / EN / 日本語）で、ラベル・ステータス・API エラーメッセージを含む UI 全体が即時に言語を切り替えます。「自動」はブラウザの言語（`navigator.language`）に追従し、選択は `localStorage` に保存されてリロード後も維持されます。ビルドステップは増やさず、純粋な JS メッセージ辞書で実現しています。Markdown 本文・ファイル名・パスは翻訳対象外です。

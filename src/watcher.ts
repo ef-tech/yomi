@@ -25,6 +25,19 @@ export interface WatcherOptions {
    * inotify watch 数を抑える。未指定なら無制限 (現行動作)。
    */
   depth?: number;
+  /**
+   * ファイル監視の実装を差し替える (既定は chokidar の `watch`)。テスト専用の注入口。
+   * 実 OS のファイル監視 (macOS の FSEvents はイベント配信遅延・重複/結合がある) に
+   * 依存せず、フェイクイベントで fire()→isOwnSave→onChange の経路を決定論的に検証するため。
+   * 本番では未指定 (= chokidar) のまま (Issue #45)。
+   */
+  watch?: typeof watch;
+  /**
+   * chokidar の初期スキャン完了 (ready イベント) 時に呼ばれる。テスト専用の注入口。
+   * 実 chokidar 統合テストが固定 sleep ではなく ready を待ってから書き込むことで、
+   * 初期スキャンが想定より遅い CI でもイベントを取りこぼさない (Issue #45)。
+   */
+  onReady?: () => void;
 }
 
 const DEBOUNCE_MS = 80;
@@ -96,7 +109,9 @@ export function createWatcher(
     fire(rel, kind);
   };
 
-  const watcher: FSWatcher = watch(rootDir, {
+  // 既定は chokidar の watch。テストは options.watch でフェイクを注入して決定論化する (Issue #45)。
+  const watchFn = options.watch ?? watch;
+  const watcher: FSWatcher = watchFn(rootDir, {
     ignored,
     ignoreInitial: true,
     followSymlinks: false,
@@ -108,6 +123,8 @@ export function createWatcher(
     .on("add", emit("rename"))
     .on("change", emit("change"))
     .on("unlink", emit("rename"))
+    // 初期スキャン完了。テストが固定 sleep でなく ready を待って書き込めるようにする (Issue #45)
+    .on("ready", () => options.onReady?.())
     .on("error", (err) => {
       if (closed) return; // close() 後の teardown エラーはログに出さない
       if ((err as NodeJS.ErrnoException)?.code === "ENOSPC") {
