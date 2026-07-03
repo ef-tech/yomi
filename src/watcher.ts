@@ -32,6 +32,12 @@ export interface WatcherOptions {
    * 本番では未指定 (= chokidar) のまま (Issue #45)。
    */
   watch?: typeof watch;
+  /**
+   * chokidar の初期スキャン完了 (ready イベント) 時に呼ばれる。テスト専用の注入口。
+   * 実 chokidar 統合テストが固定 sleep ではなく ready を待ってから書き込むことで、
+   * 初期スキャンが想定より遅い CI でもイベントを取りこぼさない (Issue #45)。
+   */
+  onReady?: () => void;
 }
 
 const DEBOUNCE_MS = 80;
@@ -117,6 +123,8 @@ export function createWatcher(
     .on("add", emit("rename"))
     .on("change", emit("change"))
     .on("unlink", emit("rename"))
+    // 初期スキャン完了。テストが固定 sleep でなく ready を待って書き込めるようにする (Issue #45)
+    .on("ready", () => options.onReady?.())
     .on("error", (err) => {
       if (closed) return; // close() 後の teardown エラーはログに出さない
       if ((err as NodeJS.ErrnoException)?.code === "ENOSPC") {

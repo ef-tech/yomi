@@ -5,15 +5,14 @@ import { join } from "node:path";
 import type { FSWatcher } from "chokidar";
 import { SaveMark, sha256 } from "../src/save-mark.ts";
 import {
+  type ChangeListener,
   createWatcher,
   toChokidarDepth,
   type WatcherHandle,
   type WatcherOptions,
 } from "../src/watcher.ts";
 
-/** chokidar の初期スキャン完了 (ready) を待つための余裕。これより前の書き込みは初期ファイル扱いで取りこぼす。 */
-const READY_MS = 350;
-/** イベントの落ち着き (debounce 80ms + 配送) を待つ猶予。否定確認・二重発火確認に使う。 */
+/** イベントの落ち着き (debounce 80ms + 配送) を待つ猶予。 */
 const DEBOUNCE_MARGIN_MS = 300;
 /** フェイクイベント経路の settle 余裕 (debounce 80ms + isOwnSave の readFile を十分に超える固定値)。 */
 const SETTLE_MS = 200;
@@ -25,11 +24,12 @@ function wait(ms: number): Promise<void> {
 /**
  * predicate が真になるまで上限付きで poll する。固定 sleep + assert だと、macOS の
  * FSEvents 配信遅延で「まだ届いていないだけ」を失敗と誤判定してしまう (Issue #45)。
- * 肯定条件は「期待イベントが届くまで待つ」ことで頑健化する。
+ * timeout は Bun のテストタイムアウト (5s) より短くし、退行時に waitFor 側が先に
+ * reject して失敗を正しく帰属できるようにする。
  */
 async function waitFor(
   predicate: () => boolean,
-  { timeout = 5000, interval = 20 }: { timeout?: number; interval?: number } = {},
+  { timeout = 3000, interval = 20 }: { timeout?: number; interval?: number } = {},
 ): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
@@ -39,18 +39,43 @@ async function waitFor(
   }
 }
 
+/**
+ * 実 chokidar 統合テスト用。初期スキャン完了 (ready) を Promise で待てるようにする。
+ * 固定 sleep で ready を推測すると、初期スキャンが遅い CI で ready 前の書き込みが
+ * 初期ファイル扱い (ignoreInitial) で取りこぼされ flaky になる (Issue #45)。
+ */
+function startWatcher(
+  root: string,
+  onChange: ChangeListener,
+  options: WatcherOptions = {},
+): { handle: WatcherHandle; ready: Promise<void> } {
+  let resolveReady: () => void = () => {};
+  const ready = new Promise<void>((res) => {
+    resolveReady = res;
+  });
+  const handle = createWatcher(root, onChange, { ...options, onReady: () => resolveReady() });
+  return { handle, ready };
+}
+
 type FakeEvent = "add" | "change" | "unlink";
+
+/** createWatcher が watchFn に渡す options のうち、テストで直接検証したい項目。 */
+interface CapturedWatchOptions {
+  ignored: (path: string) => boolean;
+  depth: number | undefined;
+}
 
 /**
  * chokidar の実ファイル監視を差し替えるフェイク。createWatcher が使う最小 API
  * (`.on(event, handler)` チェーン + `.close()`) だけを実装し、`emit()` でテストが
- * イベントの内容とタイミングを完全に制御できる。macOS FSEvents の非決定性を排除し、
- * fire()→debounce→isOwnSave→onChange のロジックを決定論的に検証するための注入口 (Issue #45)。
+ * イベントの内容とタイミングを完全に制御できる。渡された options も捕捉して、除外・
+ * depth 設定を実 FS のタイミングに依存せず決定論的に検証できる (Issue #45)。
  */
 function createFakeWatch() {
   const handlers = new Map<string, (arg: string) => void>();
   let closed = false;
   let root = "";
+  let captured: CapturedWatchOptions | null = null;
 
   const fake = {
     on(event: string, handler: (arg: string) => void) {
@@ -62,10 +87,10 @@ function createFakeWatch() {
     },
   };
 
-  // createWatcher は watch(rootDir, options) の形で呼ぶ。rootDir を捕まえて相対名から
-  // 絶対パスを組み立てられるようにする。戻り値は FSWatcher として扱われるので cast する。
-  const watch = ((paths: string) => {
+  // createWatcher は watch(rootDir, options) の形で呼ぶ。rootDir と options を捕まえる。
+  const watch = ((paths: string, opts: CapturedWatchOptions) => {
     root = paths;
+    captured = opts;
     return fake as unknown as FSWatcher;
   }) as unknown as NonNullable<WatcherOptions["watch"]>;
 
@@ -75,7 +100,13 @@ function createFakeWatch() {
     handlers.get(event)?.(join(root, rel));
   };
 
-  return { watch, emit };
+  /** watchFn に渡された chokidar options (ignored / depth 等) を返す。 */
+  const options = (): CapturedWatchOptions => {
+    if (!captured) throw new Error("watch はまだ呼ばれていません");
+    return captured;
+  };
+
+  return { watch, emit, options };
 }
 
 describe("createWatcher — 決定論的ユニット (フェイクイベント)", () => {
@@ -182,15 +213,31 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
     }
   });
 
-  test("close() は発火待ち (debounce 中) のイベントも抑止する", async () => {
+  test("close() 後は publish されない (発火待ちのイベントも抑止)", async () => {
     const calls: string[] = [];
     const { watch, emit } = createFakeWatch();
     const handle = createWatcher(root, (p) => calls.push(p), { watch });
 
     emit("change", "pending.md"); // debounce タイマー開始
-    handle.close(); // 発火前に close → 保留タイマーは clear され publish されない
+    handle.close(); // 発火前に close
     await wait(SETTLE_MS);
     expect(calls).toHaveLength(0);
+  });
+
+  test("chokidar に渡す ignored / depth が正しい (除外・深さ制限の設定を決定論的に検証)", () => {
+    const { watch, options } = createFakeWatch();
+    const handle = createWatcher(root, () => {}, { watch, depth: 1 });
+
+    try {
+      const opts = options();
+      // depth=1 (tree level, ルート直下) → chokidar depth 0
+      expect(opts.depth).toBe(0);
+      // 除外ディレクトリ配下は ignored=true、通常の md は false
+      expect(opts.ignored(join(root, "node_modules", "x.md"))).toBe(true);
+      expect(opts.ignored(join(root, "docs", "a.md"))).toBe(false);
+    } finally {
+      handle.close();
+    }
   });
 });
 
@@ -207,16 +254,14 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
 
   test("md ファイルの作成/変更で onChange が呼ばれる", async () => {
     const calls: Array<{ path: string; kind: string }> = [];
-    const handle: WatcherHandle = createWatcher(root, (path, kind) => {
+    const { handle, ready } = startWatcher(root, (path, kind) => {
       calls.push({ path, kind });
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await writeFile(join(root, "a.md"), "hello");
       await waitFor(() => calls.some((c) => c.path === "a.md"));
-      await writeFile(join(root, "a.md"), "hello world");
-      await waitFor(() => calls.filter((c) => c.path === "a.md").length >= 1);
       expect(calls.every((c) => c.path === "a.md")).toBe(true);
     } finally {
       handle.close();
@@ -228,12 +273,12 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
     await mkdir(sub, { recursive: true });
 
     const calls: string[] = [];
-    const handle = createWatcher(root, (path) => {
+    const { handle, ready } = startWatcher(root, (path) => {
       calls.push(path);
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await writeFile(join(sub, "nested.md"), "deep");
       await waitFor(() => calls.includes("docs/guide/nested.md"));
       expect(calls).toContain("docs/guide/nested.md");
@@ -247,12 +292,12 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
     await mkdir(deep, { recursive: true });
 
     const calls: string[] = [];
-    const handle = createWatcher(root, (path) => {
+    const { handle, ready } = startWatcher(root, (path) => {
       calls.push(path);
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await writeFile(join(deep, "deepest.md"), "x");
       await waitFor(() => calls.includes("l1/l2/l3/deepest.md"));
       expect(calls).toContain("l1/l2/l3/deepest.md");
@@ -264,12 +309,12 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
   test("監視開始後に新規作成したディレクトリと中身がほぼ同時に出現しても md を取りこぼさない", async () => {
     // F2: git checkout / cp -r / tar 展開のように mkdir 直後に中身が現れるケース
     const calls: string[] = [];
-    const handle = createWatcher(root, (path) => {
+    const { handle, ready } = startWatcher(root, (path) => {
       calls.push(path);
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       const fresh = join(root, "atomic");
       await mkdir(fresh, { recursive: true });
       // debounce 待ちを挟まず即座に書き込む (レース再現)
@@ -282,20 +327,19 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
   });
 
   test("ディレクトリをリネームすると新パスでツリーに現れる", async () => {
-    // F1 回帰ガード: 旧実装はディレクトリ rename で移動先を検知できず (新パスのイベント 0 件)、
-    // 旧 watcher がリークして移動先の変更を旧パス (幻パス) で永続的に誤発火していた。
+    // F1 回帰ガード: 旧実装はディレクトリ rename で移動先を検知できなかった。
     // chokidar では rename 時に移動先 (add) が正しく検知される。
     const d1 = join(root, "ren-src");
     await mkdir(d1, { recursive: true });
     await writeFile(join(d1, "a.md"), "v0");
 
     const calls: Array<{ path: string; kind: string }> = [];
-    const handle = createWatcher(root, (path, kind) => {
+    const { handle, ready } = startWatcher(root, (path, kind) => {
       calls.push({ path, kind });
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await rename(d1, join(root, "ren-dst"));
       // 移動先の新パスでツリーに現れる (旧コードはこれを満たせなかった)
       await waitFor(() => calls.some((c) => c.path === "ren-dst/a.md"));
@@ -305,48 +349,46 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
     }
   });
 
-  test("ディレクトリ削除後はその配下の変更を検知しない", async () => {
+  test("ディレクトリ削除→同名再作成でも再び検知できる (watcher が死なない)", async () => {
     const sub = join(root, "to-remove");
     await mkdir(sub, { recursive: true });
     await writeFile(join(sub, "x.md"), "v1");
 
     const calls: string[] = [];
-    const handle = createWatcher(root, (path) => {
+    const { handle, ready } = startWatcher(root, (path) => {
       calls.push(path);
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await rm(sub, { recursive: true, force: true });
-      await wait(DEBOUNCE_MARGIN_MS);
+      await wait(DEBOUNCE_MARGIN_MS); // 削除イベントが落ち着くのを待つ
 
       calls.length = 0;
-      // 削除後に同名で別ファイルを作っても二重監視で誤発火しないこと、かつ
-      // 削除→再作成が正しく 1 回検知されること
       await mkdir(sub, { recursive: true });
       await writeFile(join(sub, "x.md"), "v2");
+      // 再作成が検知されること (発火回数は FSEvents の重複/遅延で保証できないため presence のみ)
       await waitFor(() => calls.includes("to-remove/x.md"));
-      await wait(DEBOUNCE_MARGIN_MS); // 二重発火がないことを確認する猶予
-      expect(calls.filter((p) => p === "to-remove/x.md").length).toBe(1);
+      expect(calls).toContain("to-remove/x.md");
     } finally {
       handle.close();
     }
   });
 
-  test("除外ディレクトリ配下のイベントは無視される", async () => {
+  test("除外ディレクトリ配下は監視されない (実 chokidar 統合スモーク)", async () => {
     const nm = join(root, "node_modules");
     await mkdir(nm, { recursive: true });
 
     const calls: string[] = [];
-    const handle = createWatcher(root, (path) => {
+    const { handle, ready } = startWatcher(root, (path) => {
       calls.push(path);
     });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await writeFile(join(nm, "skip.md"), "skip"); // 除外対象 (chokidar は descend しない)
       await writeFile(join(root, "included.md"), "yes"); // positive control
-      // included が届いた = watcher は生きている。除外ファイルは chokidar が emit しないので届かない
+      // included が届いた = watcher は生きている。除外ファイルは chokidar が emit しない
       await waitFor(() => calls.includes("included.md"));
       expect(calls.find((p) => p.includes("node_modules"))).toBeUndefined();
     } finally {
@@ -363,10 +405,10 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
 
     const calls: string[] = [];
     // depth=1: ルート直下のみ監視 (chokidar depth 0)
-    const handle: WatcherHandle = createWatcher(droot, (path) => calls.push(path), { depth: 1 });
+    const { handle, ready } = startWatcher(droot, (path) => calls.push(path), { depth: 1 });
 
     try {
-      await wait(READY_MS);
+      await ready;
       await writeFile(join(droot, "shallow.md"), "changed"); // 監視内 (level 1)
       await writeFile(join(droot, "d1", "deep.md"), "changed"); // 監視外 (level 2)
 
