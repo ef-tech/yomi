@@ -58,6 +58,11 @@ describe("parseArgs", () => {
   });
 
   describe("--host", () => {
+    test("デフォルトは 127.0.0.1 (自端末のみ, Issue #51)", () => {
+      expect(parseArgs([]).host).toBe("127.0.0.1");
+      expect(DEFAULT_OPTIONS.host).toBe("127.0.0.1");
+    });
+
     test("--host addr 形式", () => {
       expect(parseArgs(["--host", "127.0.0.1"]).host).toBe("127.0.0.1");
     });
@@ -66,8 +71,42 @@ describe("parseArgs", () => {
       expect(parseArgs(["--host=192.168.1.10"]).host).toBe("192.168.1.10");
     });
 
+    test("--host 0.0.0.0 の明示指定は後方互換で許可 (Issue #51)", () => {
+      expect(parseArgs(["--host", "0.0.0.0"]).host).toBe("0.0.0.0");
+      expect(parseArgs(["--host=0.0.0.0"]).host).toBe("0.0.0.0");
+    });
+
     test("値がないとエラー", () => {
       expect(() => parseArgs(["--host"])).toThrow("--host には値が必要です");
+    });
+  });
+
+  describe("--share (Issue #51)", () => {
+    test("--share で host が 0.0.0.0 になる", () => {
+      expect(parseArgs(["--share"]).host).toBe("0.0.0.0");
+    });
+
+    test("--share を付けなければ既定は loopback のまま", () => {
+      expect(parseArgs([]).host).toBe("127.0.0.1");
+    });
+
+    test("--share と --host の同時指定はエラー (指定順に依存しない)", () => {
+      expect(() => parseArgs(["--share", "--host", "127.0.0.1"])).toThrow(
+        /--share と --host は同時に指定できません/,
+      );
+      expect(() => parseArgs(["--host", "127.0.0.1", "--share"])).toThrow(
+        /--share と --host は同時に指定できません/,
+      );
+      expect(() => parseArgs(["--share", "--host=0.0.0.0"])).toThrow(
+        /--share と --host は同時に指定できません/,
+      );
+    });
+
+    test("他オプションとは併用可", () => {
+      const opts = parseArgs(["--share", "--port", "8080", "--no-open"]);
+      expect(opts.host).toBe("0.0.0.0");
+      expect(opts.port).toBe(8080);
+      expect(opts.open).toBe(false);
     });
   });
 
