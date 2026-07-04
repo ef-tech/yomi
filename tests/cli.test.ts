@@ -110,6 +110,27 @@ describe("parseArgs", () => {
     });
   });
 
+  describe("値トークンの堅牢化 (Issue #51)", () => {
+    test("--host の直後に別オプションが来たら値エラー (--share を値として飲み込み排他を迂回しない)", () => {
+      // `--host --share` で --share が host 値に消費されると host="--share" となり
+      // 排他検証を素通りしてしまう。値エラーで fail-fast にする。
+      expect(() => parseArgs(["--host", "--share"])).toThrow("--host には値が必要です");
+      expect(() => parseArgs(["--host", "--port", "8080"])).toThrow("--host には値が必要です");
+    });
+
+    test("--host= / --host '' の空値はエラー (空 bind による LAN 露出を防ぐ)", () => {
+      // 空 host は全インターフェース bind = 無認証 API の LAN 露出につながる footgun。
+      expect(() => parseArgs(["--host="])).toThrow("--host には値が必要です");
+      expect(() => parseArgs(["--host", ""])).toThrow("--host には値が必要です");
+    });
+
+    test("単一ダッシュの負数値は従来どおり各 parser の範囲エラーになる", () => {
+      // "-1" は値として通し、port/depth の範囲検証に委ねる (値エラーにしない)。
+      expect(() => parseArgs(["--port", "-1"])).toThrow(/1〜65535/);
+      expect(() => parseArgs(["--depth", "-1"])).toThrow(/1 以上の整数/);
+    });
+  });
+
   describe("--depth / -L (Issue #44)", () => {
     test("デフォルトは null (無制限)", () => {
       expect(parseArgs([]).depth).toBeNull();

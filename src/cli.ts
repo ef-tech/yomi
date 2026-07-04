@@ -80,7 +80,14 @@ function parseDepth(value: string): number {
 
 function takeValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1];
-  if (value === undefined) throw new Error(`${flag} には値が必要です`);
+  // 値の欠損・空文字・次のオプション ("--xxx") を値として飲み込むのを拒否する。
+  // これにより `--host --share` が --share を host 値として消費して排他検証を
+  // 迂回する問題や、`--host=` の空値が空 bind (全インターフェース公開 = LAN 露出)
+  // になる footgun を、明確なエラーで fail-fast にする (Issue #51)。
+  // 単一ダッシュ ("-1" 等) は負数の値としてそのまま通し、各 parser の範囲検証に委ねる。
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${flag} には値が必要です`);
+  }
   return value;
 }
 
