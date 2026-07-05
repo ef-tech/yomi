@@ -1,5 +1,3 @@
-import DOMPurify from "https://cdn.jsdelivr.net/npm/dompurify@3/+esm";
-import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 import { applyI18n, ERROR_CODE_KEYS, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import {
   isAnchor,
@@ -22,6 +20,12 @@ import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
+// DOMPurify / Mermaid は配布物へ同梱した vendor bundle から読み込む (Issue #52)。
+// jsDelivr への実行時依存を排し、オフライン / CDN 障害 / CSP 下でも動作させる。
+// bundle は `bun run build` で生成 (scripts/build-vendor.ts)。app.js は /assets/app.js
+// で配信されるため、相対 ./vendor/... は /assets/vendor/... に解決される。
+import DOMPurify from "./vendor/dompurify.js";
+import mermaid from "./vendor/mermaid.js";
 
 const els = {
   sidebar: document.getElementById("sidebar"),
