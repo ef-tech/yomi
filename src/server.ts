@@ -105,7 +105,11 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
-        return serveAsset("index.html");
+        const res = await serveAsset("index.html");
+        // CSP は HTML ドキュメントにのみ付与する (JS/CSS レスポンスには不要)。
+        // meta ではなく HTTP ヘッダで返し、パース開始前に効かせる (Issue #52)。
+        if (res.status === 200) res.headers.set("Content-Security-Policy", buildCsp(req));
+        return res;
       }
 
       if (url.pathname.startsWith("/assets/")) {
@@ -176,6 +180,34 @@ export function checkOrigin(req: Request): boolean {
 
 function forbidden(message: string, code?: string): Response {
   return Response.json({ error: message, code }, { status: 403 });
+}
+
+/** Host ヘッダとして妥当な文字だけ (hostname / IPv4 / IPv6 / :port)。CSP へのヘッダ注入を防ぐ。 */
+const HOST_PATTERN = /^[a-zA-Z0-9.\-:[\]]+$/;
+
+/**
+ * index.html に付与する Content-Security-Policy (Issue #52)。
+ * - `script-src 'self'`: 外部 script を禁止 (jsDelivr 依存を排し vendor bundle のみ許可)
+ * - `style-src 'unsafe-inline'`: Mermaid が生成する SVG の inline style / <style> に必要
+ * - `img-src ... http: https:`: user markdown 内のリモート画像は維持 (閲覧を壊さない)
+ * - `connect-src 'self' ws://<host>`: 同一オリジンの API と ライブリロード WebSocket (/ws)。
+ *   'self' だけでは一部ブラウザで ws:// が通らないため Host から明示的に許可する。
+ */
+export function buildCsp(req: Request): string {
+  const host = req.headers.get("host");
+  const wsSelf = host && HOST_PATTERN.test(host) ? ` ws://${host}` : "";
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: http: https:",
+    "font-src 'self' data:",
+    `connect-src 'self'${wsSelf}`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join("; ");
 }
 
 async function serveAsset(name: string): Promise<Response> {
