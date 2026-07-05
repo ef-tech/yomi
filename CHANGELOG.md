@@ -10,6 +10,10 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-06
+
+DOMPurify と Mermaid を **配布物へ同梱** し、jsDelivr への実行時依存を排除しました (Issue #52)。オフライン / CDN 障害 / ネットワーク制限下でもプレビューのサニタイズと Mermaid 描画が動作します。あわせてプレビュー HTML に **Content-Security-Policy** を付与し、外部 script を禁止 (`script-src 'self'`) しました。`bun run build` で `public/vendor/*.js` を生成し、CI で鮮度・改竄を検証します。
+
 ### Changed (Issue #52)
 
 - **DOMPurify と Mermaid を配布物へ同梱し CDN 依存を排除**: これまで `public/app.js` は DOMPurify と Mermaid を jsDelivr から実行時 import していた。オフライン / CDN 障害 / ネットワーク制限下ではサニタイズや Mermaid 描画が動かず、外部コードの自動更新で再現性も低下していた。両ライブラリをバージョン固定の devDependencies として `bun build` で `public/vendor/*.js` に bundle し、`app.js` はローカルの `./vendor/dompurify.js` / `./vendor/mermaid.js` を import するよう変更。`public/` は npm の files に含まれるため GitHub からの global install でもそのまま同梱される
