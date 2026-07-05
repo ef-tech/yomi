@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "bun run bin/yomi.ts",
+    "build": "bun run scripts/build-vendor.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check",
@@ -30,6 +31,8 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@types/bun": "latest",
+    "dompurify": "3.4.11",
+    "mermaid": "11.16.0",
     "typescript": "^6.0.3"
   },
   "repository": {

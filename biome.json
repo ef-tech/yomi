@@ -5,6 +5,7 @@
       "bin/**/*.ts",
       "src/**/*.ts",
       "tests/**/*.ts",
+      "scripts/**/*.ts",
       "public/**/*.js",
       "public/**/*.html",
       "public/**/*.css",
@@ -12,6 +13,7 @@
       "!node_modules",
       "!dist",
       "!build",
+      "!public/vendor",
       "!bun.lock",
       "!package-lock.json"
     ]
