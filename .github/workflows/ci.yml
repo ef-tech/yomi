@@ -28,21 +28,28 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3"
+          # vendor bundle の鮮度検証 (git diff --exit-code) を決定的にするため patch まで固定。
+          # dompurify/mermaid を更新したら bun run build で再生成しコミットする (README 参照)。
+          bun-version: "1.3.12"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Issue #52: vendor bundle (DOMPurify / Mermaid) のビルド健全性を検証する。
+      # Issue #52: vendor bundle (DOMPurify / Mermaid) の健全性と鮮度を検証する。
       # build-vendor.ts が CDN 参照・余計なチャンクの残存を検出して throw する。
-      # 生成物の未コミット/欠落も検出する (minifier のパッチ版差によるバイト差は許容し、
-      # 依存 bump 時の再ビルド忘れは vendor-bundle テストの版数一致で検出)。
+      # さらに、コミット済みの public/vendor が固定 bun での再ビルド結果とバイト一致する
+      # ことを git diff --exit-code で検証する。これにより (a) 依存 bump 時の再生成忘れ
+      # (例: dependabot が dompurify/mermaid を上げるが vendor 未再ビルド → 陳腐化/CVE 版が
+      # 配布される) と (b) 生成物の改竄 を検出する。bun 版を固定してビルドを決定的にし、
+      # cross-OS の minifier 差を避けるため厳密比較は ubuntu-latest のみで行う。
       - name: Build & verify vendor bundle
         run: |
           bun run build
-          if git status --porcelain public/vendor | grep -E '^\?\?|^.?D'; then
-            echo "::error::public/vendor に未コミット/欠落の生成物があります。'bun run build' 後にコミットしてください。"
-            exit 1
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            git diff --exit-code -- public/vendor || {
+              echo "::error::public/vendor がコミット済みと固定 bun での再ビルド結果で不一致です。dompurify/mermaid を更新したら 'bun run build' を実行してコミットしてください。"
+              exit 1
+            }
           fi
 
       - name: Lint & format check
