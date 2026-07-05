@@ -190,17 +190,20 @@ const HOST_PATTERN = /^[a-zA-Z0-9.\-:[\]]+$/;
  * - `script-src 'self'`: 外部 script を禁止 (jsDelivr 依存を排し vendor bundle のみ許可)
  * - `style-src 'unsafe-inline'`: Mermaid が生成する SVG の inline style / <style> に必要
  * - `img-src ... http: https:`: user markdown 内のリモート画像は維持 (閲覧を壊さない)
- * - `connect-src 'self' ws://<host>`: 同一オリジンの API と ライブリロード WebSocket (/ws)。
- *   'self' だけでは一部ブラウザで ws:// が通らないため Host から明示的に許可する。
+ * - `media-src ... http: https:`: 同様に user markdown 内のリモート <video>/<audio> を維持
+ * - `connect-src 'self' ws://<host> wss://<host>`: 同一オリジンの API と ライブリロード
+ *   WebSocket (/ws)。'self' だけでは一部ブラウザで ws:// が通らないため Host から明示許可。
+ *   TLS リバースプロキシ配下 (https) ではクライアントが wss:// を使うため両方を許可する。
  */
 export function buildCsp(req: Request): string {
   const host = req.headers.get("host");
-  const wsSelf = host && HOST_PATTERN.test(host) ? ` ws://${host}` : "";
+  const wsSelf = host && HOST_PATTERN.test(host) ? ` ws://${host} wss://${host}` : "";
   return [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: http: https:",
+    "media-src 'self' http: https:",
     "font-src 'self' data:",
     `connect-src 'self'${wsSelf}`,
     "object-src 'none'",

@@ -22,15 +22,18 @@ describe("buildCsp (Issue #52)", () => {
     expect(buildCsp(reqWithHost("127.0.0.1:3939"))).toContain("style-src 'self' 'unsafe-inline'");
   });
 
-  test("user markdown のリモート画像を壊さない (img-src に http/https)", () => {
-    expect(buildCsp(reqWithHost("127.0.0.1:3939"))).toContain("img-src 'self' data: http: https:");
+  test("user markdown のリモート画像/メディアを壊さない (img-src / media-src に http/https)", () => {
+    const csp = buildCsp(reqWithHost("127.0.0.1:3939"));
+    expect(csp).toContain("img-src 'self' data: http: https:");
+    expect(csp).toContain("media-src 'self' http: https:");
   });
 
-  test("connect-src に Host 由来の ws:// を明示する (ライブリロード /ws)", () => {
-    expect(buildCsp(reqWithHost("127.0.0.1:3939"))).toContain(
-      "connect-src 'self' ws://127.0.0.1:3939",
-    );
-    expect(buildCsp(reqWithHost("192.168.0.100:3939"))).toContain("ws://192.168.0.100:3939");
+  test("connect-src に Host 由来の ws:// と wss:// を明示する (ライブリロード /ws, TLS プロキシ対応)", () => {
+    const csp = buildCsp(reqWithHost("127.0.0.1:3939"));
+    expect(csp).toContain("connect-src 'self' ws://127.0.0.1:3939 wss://127.0.0.1:3939");
+    const lan = buildCsp(reqWithHost("192.168.0.100:3939"));
+    expect(lan).toContain("ws://192.168.0.100:3939");
+    expect(lan).toContain("wss://192.168.0.100:3939");
   });
 
   test("clickjacking / object 埋め込みを禁止する", () => {
