@@ -10,6 +10,15 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Changed (Issue #52)
+
+- **DOMPurify と Mermaid を配布物へ同梱し CDN 依存を排除**: これまで `public/app.js` は DOMPurify と Mermaid を jsDelivr から実行時 import していた。オフライン / CDN 障害 / ネットワーク制限下ではサニタイズや Mermaid 描画が動かず、外部コードの自動更新で再現性も低下していた。両ライブラリをバージョン固定の devDependencies として `bun build` で `public/vendor/*.js` に bundle し、`app.js` はローカルの `./vendor/dompurify.js` / `./vendor/mermaid.js` を import するよう変更。`public/` は npm の files に含まれるため GitHub からの global install でもそのまま同梱される
+- **`bun run build` を追加**: `scripts/build-vendor.ts` が vendor bundle を生成する。CDN 参照・余計なチャンクの残存を検出して fail する。CI で build 健全性と生成物の未コミット/欠落を検証する
+
+### Added (Issue #52)
+
+- **プレビュー HTML に Content-Security-Policy を付与**: `script-src 'self'` で外部 script を禁止（同梱 bundle のみ許可）。Mermaid の inline style 用に `style-src 'unsafe-inline'`、user markdown のリモート画像を壊さないよう `img-src` に `http:`/`https:`、ライブリロード用に `connect-src` へ Host 由来の `ws://` を明示。`object-src 'none'` / `frame-ancestors 'none'` / `base-uri 'self'` / `form-action 'self'` も付与
+
 ## [0.17.0] - 2026-07-06
 
 既定の bind アドレスを **自端末のみ (`127.0.0.1`)** に変更し、LAN 公開を明示フラグ **`--share`** に限定しました (Issue #51)。これまで引数なし起動は `0.0.0.0` にバインドし、認証のない読み書き API が同一 LAN に公開されていました。安全側の既定値に改め、LAN 共有は意図した操作でのみ有効化されます。設計書の「localhost バインドのみ」方針にコードを揃え直したものです。

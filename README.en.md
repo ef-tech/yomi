@@ -286,6 +286,18 @@ bun test tests/safepath     # filter by file name
 bun run typecheck
 ```
 
+### Vendored bundle (DOMPurify / Mermaid)
+
+Preview sanitization (DOMPurify) and Mermaid rendering load from a **bundle vendored into the distribution**, not from a CDN (Issue #52). This keeps them working offline / during CDN outages / on restricted networks, and no requests go to external hosts (jsdelivr, etc.). The preview HTML is served with a Content-Security-Policy including `script-src 'self'`.
+
+`dompurify` / `mermaid` are version-pinned devDependencies, and `public/vendor/*.js` is committed as a generated artifact. **When you bump a dependency version, regenerate and commit the bundle:**
+
+```bash
+bun run build   # regenerate public/vendor/dompurify.js / mermaid.js
+```
+
+CI runs `bun run build` to verify build integrity (no CDN references or stray chunks remain, and the generated artifacts are committed).
+
 ## Troubleshooting
 
 ### Live reload and the watch limit (Linux)
