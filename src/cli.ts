@@ -9,11 +9,14 @@ export interface CliOptions {
 
 export const DEFAULT_OPTIONS: CliOptions = {
   port: null,
-  host: "0.0.0.0",
+  host: "127.0.0.1",
   open: true,
   help: false,
   depth: null,
 };
+
+/** --share を指定したときにバインドする全インターフェースアドレス (Issue #51) */
+export const SHARE_HOST = "0.0.0.0";
 
 export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
 
@@ -23,19 +26,21 @@ export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
 オプション:
   --port <n>      ポートを指定（デフォルト: 3939 から自動探索）
   --no-open       ブラウザを自動で開かない
-  --host <addr>   バインドアドレス（デフォルト: 0.0.0.0、同 LAN から閲覧可）
-                  ローカル限定にするには --host 127.0.0.1
+  --host <addr>   バインドアドレス（デフォルト: 127.0.0.1、自端末からのみ）
+  --share         同 LAN の別端末からも閲覧できるよう 0.0.0.0 にバインド
+                  （認証なしで公開されるため信頼できるネットワークでのみ）
+                  --host とは同時に指定できない
   --depth <n>, -L <n>
                   読み込む階層の深さを制限（tree -L 相当。デフォルト: 無制限）
                   1 でルート直下のみ。深い md は読み込まず監視もしない
   --help, -h      このヘルプを表示
 
 例:
-  cd /path/to/docs && yomi
+  cd /path/to/docs && yomi              # 自端末からのみ (127.0.0.1)
   yomi --port 8080 --no-open
-  yomi --host 127.0.0.1            # 自端末からのみ
-  yomi --depth 2                   # 2 階層までスキャン
-  yomi -L 1                        # ルート直下のみ
+  yomi --share                          # 同 LAN の別端末からも閲覧可
+  yomi --depth 2                        # 2 階層までスキャン
+  yomi -L 1                             # ルート直下のみ
 `;
 
 /** "--name=value" 形式を "--name" "value" に分割し、引数列を統一形式に正規化する */
@@ -75,13 +80,25 @@ function parseDepth(value: string): number {
 
 function takeValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1];
-  if (value === undefined) throw new Error(`${flag} には値が必要です`);
+  // 値の欠損・空文字・次のオプション ("--xxx") を値として飲み込むのを拒否する。
+  // これにより `--host --share` が --share を host 値として消費して排他検証を
+  // 迂回する問題や、`--host=` の空値が空 bind (全インターフェース公開 = LAN 露出)
+  // になる footgun を、明確なエラーで fail-fast にする (Issue #51)。
+  // 単一ダッシュ ("-1" 等) は負数の値としてそのまま通し、各 parser の範囲検証に委ねる。
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${flag} には値が必要です`);
+  }
   return value;
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
   const opts: CliOptions = { ...DEFAULT_OPTIONS };
   const args = normalize(argv);
+
+  // --host と --share は排他 (Issue #51)。指定順に依存せず判定するため、
+  // ループ後にまとめて解決する。
+  let hostExplicit = false;
+  let share = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -99,7 +116,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         break;
       case "--host":
         opts.host = takeValue(args, i, "--host");
+        hostExplicit = true;
         i++;
+        break;
+      case "--share":
+        share = true;
         break;
       case "--depth":
       case "-L":
@@ -109,6 +130,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       default:
         throw new Error(`不明なオプション: ${arg}`);
     }
+  }
+
+  if (share) {
+    if (hostExplicit) {
+      throw new Error(
+        "--share と --host は同時に指定できません（--share は 0.0.0.0 バインドの明示指定です）",
+      );
+    }
+    opts.host = SHARE_HOST;
   }
 
   return opts;

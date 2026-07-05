@@ -18,7 +18,7 @@ A local Markdown viewer. A command-line tool that recursively collects the `.md`
 - Inline rendering of Mermaid diagrams
 - Auto-reload on file save (live preview)
 - GitHub-style CSS, follows the system dark/light setting
-- Viewable from other devices on the same LAN (`--host 127.0.0.1` for local only)
+- Local-only by default (`127.0.0.1`); use `--share` to view from other devices on the same LAN
 - In-browser Markdown editing (save with Ctrl/Cmd+S)
 - Table of contents (TOC) panel generated from headings (with scroll-following highlight)
 - Link navigation inside the preview: relative md jumps within yomi, external URLs get a warning
@@ -87,8 +87,10 @@ The browser opens automatically.
 yomi [options]
   --port <n>      Specify the port (default: auto-discovery from 3939)
   --no-open       Do not open the browser automatically
-  --host <addr>   Bind address (default: 0.0.0.0, viewable from the same LAN)
-                  For local only, use --host 127.0.0.1
+  --host <addr>   Bind address (default: 127.0.0.1, local only)
+  --share         Bind to 0.0.0.0 so other devices on the same LAN can view
+                  (exposed without authentication; trusted networks only)
+                  Cannot be combined with --host
   --depth <n>, -L <n>
                   Limit the scan depth (equivalent to tree -L; default: unlimited)
                   1 = root level only. Deeper md files are neither loaded nor watched
@@ -233,15 +235,20 @@ You can create a new Markdown file in place from the left tree.
 
 #### Security when editing over the LAN
 
-Adding editing means yomi now has an **endpoint writable by anyone on the LAN**. As a CSRF defense, yomi performs **`Origin` header validation** and accepts only requests from the same origin as yomi itself. This rejects POSTs from attacker pages via the browser with 403. However, note the following:
+Adding editing means yomi now has a **writable endpoint**. As a CSRF defense, yomi performs **`Origin` header validation** and accepts only requests from the same origin as yomi itself. This rejects POSTs from attacker pages via the browser with 403. However, note the following:
 
-- Starting with `0.0.0.0` binding on an **untrusted network** (public Wi-Fi, etc.) is not recommended. Use `--host 127.0.0.1` for local only
+- **By default it binds to your own device (`127.0.0.1`) only**, so other devices on the LAN cannot reach it. The following only matters when you expose it with `--share`
+- On an **untrusted network** (public Wi-Fi, etc.), do not pass `--share`. Doing so exposes the read/write API to the LAN without authentication
 - Clients that do not send an `Origin` header (curl, Postman, etc.) are allowed. This is intended for API use and is outside the browser CSRF threat model
-- yomi has no authentication. LAN editing is only valid on the assumption that "everyone on the LAN is trusted"
+- yomi has no authentication. LAN editing via `--share` is only valid on the assumption that "everyone on the LAN is trusted"
 
 ### Viewing from the LAN
 
-By default it binds to `0.0.0.0`, so you can access it from smartphones or other devices on the same network via the LAN IP URL shown at startup.
+By default it binds to your own device (`127.0.0.1`) only. To view from smartphones or other devices on the same network, start it with `--share`; it then binds to `0.0.0.0`, and you can access it via the LAN IP URL shown at startup.
+
+```
+yomi --share
+```
 
 ```
 yomi has started
@@ -249,7 +256,7 @@ yomi has started
   LAN     http://192.168.0.100:3939
 ```
 
-**Note**: since there is no authentication, restrict to your own device with `--host 127.0.0.1` on untrusted networks.
+**Note**: since there is no authentication, use `--share` only on trusted networks. To pin a specific address, `--host <addr>` still works (cannot be combined with `--share`).
 
 > The startup banner and other terminal output are shown in Japanese. Only the browser UI is bilingual.
 

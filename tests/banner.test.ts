@@ -18,6 +18,26 @@ describe("buildStartupBanner", () => {
     expect(banner).not.toContain("--host 127.0.0.1");
   });
 
+  test("既定 host 127.0.0.1 (Issue #51: 自端末のみ) では公開警告を出さない", () => {
+    // 引数なし起動の既定 bind。loopback なので LAN 公開警告は出ない。
+    const banner = buildStartupBanner({
+      rootDir: "/tmp/docs",
+      host: "127.0.0.1",
+      port: 3939,
+    });
+    expect(banner).not.toContain("認証なし");
+    expect(banner).not.toContain("ネットワークに公開");
+  });
+
+  test("--share 相当 (0.0.0.0) では LAN 公開警告を出す (Issue #51)", () => {
+    const banner = buildStartupBanner({
+      rootDir: "/tmp/docs",
+      host: "0.0.0.0",
+      port: 3939,
+    });
+    expect(banner).toContain("認証なしでネットワークに公開");
+  });
+
   test("0.0.0.0 (wildcard) は LAN 警告とローカル限定 hint を含む", () => {
     const banner = buildStartupBanner({
       rootDir: "/tmp/docs",
