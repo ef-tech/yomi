@@ -284,6 +284,18 @@ bun test tests/safepath     # ファイル名で絞り込み
 bun run typecheck
 ```
 
+### ベンダー bundle (DOMPurify / Mermaid)
+
+プレビューのサニタイズ (DOMPurify) と Mermaid 描画は、CDN ではなく**配布物へ同梱した bundle** から読み込みます (Issue #52)。そのためオフライン / CDN 障害 / ネットワーク制限下でも動作し、外部ホスト (jsdelivr 等) へのリクエストは発生しません。プレビュー HTML には `script-src 'self'` を含む Content-Security-Policy を付与しています。
+
+`dompurify` / `mermaid` はバージョン固定の devDependencies で、`public/vendor/*.js` は生成物としてコミットされています。**依存のバージョンを上げたときは bundle を再生成してコミットしてください**。
+
+```bash
+bun run build   # public/vendor/dompurify.js / mermaid.js を再生成
+```
+
+CI は `bun run build` を実行してビルド健全性（CDN 参照・余計なチャンクの残存がないこと、生成物の未コミット/欠落がないこと）を検証します。
+
 ## トラブルシューティング
 
 ### ライブリロードと監視上限 (Linux)
