@@ -6,6 +6,7 @@ import {
   resolveRelativePath,
   splitHrefHash,
 } from "./link-resolver.js";
+import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
 import {
   buildUrl,
   currentNavIndex,
@@ -115,6 +116,13 @@ function initMermaid(mode) {
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
+    // Issue #59: init directive (`%%{init: ...}%%`) による CSS 注入を防ぐ。
+    // securityLevel:"strict" の既定 secure リストは themeCSS 等の CSS 系キーを保護しないため、
+    // 悪意ある md が themeCSS を上書きすると mermaid.run() が sanitize 後に生成する SVG の
+    // <style> に任意 CSS が入る。インライン SVG の <style> は文書全体へ作用するため、
+    // 属性セレクタ + background:url(...) で CSS exfiltration が成立してしまう。
+    // 既定 secure (mermaid 11.x) に CSS 系キーを加えて directive での上書きを禁止する。
+    secure: [...MERMAID_SECURE_KEYS],
     theme: effectiveTheme(mode) === "dark" ? "dark" : "default",
   });
 }
