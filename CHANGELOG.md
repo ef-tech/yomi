@@ -10,6 +10,16 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-07-08
+
+プレビューのサニタイザに起因する **CSS exfiltration 脆弱性を修正** しました (Issue #59)。悪意ある Markdown を開くと、`<style>` タグ・`style` 属性、および Mermaid の `themeCSS` init directive 経由で文書全体に CSS を注入でき、属性セレクタ + `background: url(...)` でファイルパス等の推測・外部送信が可能でした。sanitizer 経路と Mermaid 経路の両方を塞いで遮断します。
+
+### Security (Issue #59)
+
+- **サニタイザで `<style>` タグと `style` 属性を禁止**: `SANITIZE_CONFIG`（`public/sanitize-config.js` に切り出し）に `FORBID_TAGS: ["style"]` と `FORBID_ATTR` へ `style` を追加。DOMPurify の html profile が既定でこれらを許可していたため、悪意ある md が文書全体へ CSS を注入できた。marked の table 配置は `align` 属性、コードブロックは class ベース、Mermaid 図は sanitize 後に SVG を生成するため、いずれも影響を受けない
+- **Mermaid の `themeCSS` init directive による post-sanitize CSS 注入を遮断**: `securityLevel: "strict"` の既定 secure リストは `themeCSS`/`fontFamily` を保護しないため、`%%{init: {themeCSS: ...}}%%` で mermaid.run() が sanitize 後に生成する SVG の `<style>` に任意 CSS を注入でき（インライン SVG の `<style>` は文書全体へ作用）、同種の exfiltration が成立した。`mermaid.initialize` の `secure` に `themeCSS`/`fontFamily`/`altFontFamily` を追加し directive での上書きを禁止。正当な `theme`/`themeVariables` directive は従来どおり動作する
+- **jsdom による行動検証テストを追加**: 実 DOMPurify / 実 Mermaid で `<style>`/`style`/themeCSS の遮断（対照込み）と正当機能の維持を CI で回帰検知する
+
 ## [0.18.0] - 2026-07-06
 
 DOMPurify と Mermaid を **配布物へ同梱** し、jsDelivr への実行時依存を排除しました (Issue #52)。オフライン / CDN 障害 / ネットワーク制限下でもプレビューのサニタイズと Mermaid 描画が動作します。あわせてプレビュー HTML に **Content-Security-Policy** を付与し、外部 script を禁止 (`script-src 'self'`) しました。`bun run build` で `public/vendor/*.js` を生成し、CI で鮮度・改竄を検証します。
