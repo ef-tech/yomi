@@ -16,6 +16,7 @@ import {
 } from "./navigation.js";
 import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
+import { SANITIZE_CONFIG } from "./sanitize-config.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
@@ -76,32 +77,10 @@ const els = {
   externalLinkOpen: document.getElementById("external-link-open"),
 };
 
-/**
- * DOMPurify による innerHTML サニタイズ設定 (Issue #21)。
- *
- * marked 出力の標準 HTML + GFM 拡張 (table / task list / code) + Mermaid 用
- * `<pre class="mermaid">` を保持しつつ、悪意ある md に含まれ得る:
- *   - <script> / <object> / <iframe> / <embed> / <frame> 系
- *   - inline event handler (onerror / onload / onclick 等)
- *   - <a href="javascript:..."> / <a href="vbscript:..."> 等の危険スキーム
- *   - <svg> 内の <script> や <foreignObject> 経由の script
- * を除去する。
- *
- * Mermaid 図は `<pre class="mermaid">` のテキストを mermaid.run() が後から
- * SVG に変換する。Mermaid 側は securityLevel: "strict" で初期化されており、
- * Mermaid 自身のサニタイズ層に依存する (DOMPurify はテキスト段階のみ通過)。
- */
-const SANITIZE_CONFIG = {
-  USE_PROFILES: { html: true },
-  ADD_ATTR: ["target", "rel"],
-  // data-* 属性 (data-task-index 等) は DOMPurify デフォルトで保持。
-  // ただし data-i18n* は禁止する (Issue #48): プレビュー内の md に紛れ込むと
-  // applyI18n(document) が言語切替時にその要素の textContent/属性を辞書値で
-  // 上書きしてしまうため、i18n 機構がユーザーコンテンツに漏れないようにする。
-  FORBID_ATTR: ["data-i18n", "data-i18n-title", "data-i18n-aria-label", "data-i18n-placeholder"],
-};
-
 function sanitize(html) {
+  // サニタイズ設定は public/sanitize-config.js に切り出し (Issue #59)。
+  // `<style>` タグ / style 属性を禁止し CSS インジェクション (exfiltration) を防ぐ。
+  // Mermaid 図は sanitize 後に mermaid.run() が SVG を生成する (再 sanitize しない)。
   return DOMPurify.sanitize(html ?? "", SANITIZE_CONFIG);
 }
 
