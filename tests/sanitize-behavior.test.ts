@@ -71,4 +71,19 @@ describe("sanitize() の実挙動 (Issue #59)", () => {
     expect(out).toContain('class="mermaid"');
     expect(out).toContain("graph LR");
   });
+
+  test("他の CSS/情報送信経路も除去する (link/meta/base/svg image, 前方防御)", () => {
+    // 現状 USE_PROFILES:{html:true} により許可リスト外だが、将来 svg:true 等で
+    // 経路が再開しないよう明示的に回帰アサーションを置く (Claude review 提案)。
+    const vectors = [
+      '<link rel="stylesheet" href="https://attacker.example/x.css">',
+      '<meta http-equiv="refresh" content="0;url=https://attacker.example/">',
+      '<base href="https://attacker.example/">',
+      '<svg><image href="https://attacker.example/leak"></image></svg>',
+      "<svg><style>.x{background:url(https://attacker.example/leak)}</style></svg>",
+    ];
+    for (const v of vectors) {
+      expect(sanitize(v)).not.toContain("attacker.example");
+    }
+  });
 });
