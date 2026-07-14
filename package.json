@@ -1,6 +1,6 @@
 {
   "name": "yomi",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "ローカル Markdown ビューア — 2 ペイン UI + Mermaid + ライブリロード",
   "type": "module",
   "bin": {
@@ -31,7 +31,9 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@types/bun": "latest",
+    "@types/jsdom": "^28.0.3",
     "dompurify": "3.4.11",
+    "jsdom": "^29.1.1",
     "mermaid": "11.16.0",
     "typescript": "^6.0.3"
   },
