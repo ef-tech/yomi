@@ -141,6 +141,7 @@ Behavior when clicking `<a href>` links inside the preview:
 | Relative md path | `[X](other.md)` `[Y](../bar.md)` | Navigate to that file within yomi (same as selecting it in the left tree) |
 | Extensionless relative | `[X](foo)` | Search in the order `foo.md` → `.markdown` → `.mdx` and navigate |
 | Relative PDF path | `[X](return_voucher.pdf)` | Open `/api/asset?path=...` in a new tab and show it in the browser's built-in PDF viewer (Issue #37) |
+| Relative csv / data file | `[X](sales.csv)` `[Y](../data/report.xlsx)` | Download it from `/api/asset?path=...` (Issue #64) |
 | Anchor | `[B](#usage)` | Keep the existing heading-jump behavior |
 | External URL | `[G](https://...)` `[M](mailto:...)` | Warning banner → "Open" opens a new tab, "Close" cancels |
 | `javascript:` scheme | `[X](javascript:...)` | **Blocked unconditionally** |
@@ -157,13 +158,27 @@ Relative paths in Markdown `![alt](foo.png)` are served by yomi via `GET /api/as
 | Relative-path image | `![X](foo.png)` `![Y](../img/logo.svg)` | Resolved from the current md's directory and displayed |
 | External URL | `![X](https://example.com/x.png)` `![Y](data:image/png;base64,...)` | Passed straight to `<img src>` |
 | `javascript:` scheme | `![X](javascript:...)` | **Blocked unconditionally** (rewritten to empty src) |
-| Non-image extension | `![X](note.md)` | 400 on the `/api/asset` side (read rejected) |
+| Extension not in the allowlist | `![X](note.md)` `![X](page.html)` | 400 on the `/api/asset` side (read rejected) |
 | `..` outside root / absolute path | `![X](/etc/passwd)` `![X](../../../etc/passwd)` | 400 via `resolveSafe` |
 | Over size (>50 MB) | Large image | 413 |
 
 Supported extensions: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`. SVG is served with `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` to suppress XSS via MIME sniffing. A strong ETag (`"<sha256-prefix>"`) + `Cache-Control: no-cache` is returned, so the browser uses `If-None-Match` 304 caching while re-fetching on the next request whenever the image is edited (Issue #22 switched to content-based ETag, so even rewrites that preserve mtime + size via `cp -a` are reliably detected). The file is read via an fd obtained with `fs.open`, doing stat + read through that same fd, so even a symlink swap after resolveSafe (TOCTOU) cannot cause an unintended file to be served.
 
 Clicking an image in the preview opens that image URL in a new tab (the `<img>` is wrapped in `<a target="_blank" rel="noopener noreferrer">`). The browser's native image view provides full-size / zoom / save. A `cursor: zoom-in` shows on hover. An image wrapped in a link in markdown like `[![](foo.png)](url)` prioritizes the link target and does not trigger the image jump.
+
+### Attachment downloads (Issue #64)
+
+Data files linked from Markdown (e.g. `[Sales](data/sales.csv)`) are served from `/api/asset?path=...` with `Content-Disposition: attachment`, so a click saves them directly.
+
+| Kind | Extensions | Disposition |
+|---|---|---|
+| Image | `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico` | `inline` (shown in the preview / full size in a new tab) |
+| PDF | `.pdf` | `inline` (browser's built-in PDF viewer) |
+| Data / document / archive | `.csv` / `.tsv` / `.txt` / `.json` / `.yaml` / `.yml` / `.zip` / `.xlsx` / `.docx` / `.pptx` | `attachment` (download) |
+
+- The filename is sent in `filename*=UTF-8''` form, so non-ASCII filenames are preserved.
+- **Extensions outside the allowlist are not served** (400). `.html` / `.htm` / `.xhtml` / `.js` / `.mjs` are deliberately excluded because serving them would open a script-execution / HTML-rendering path (the Issue #21 / #22 XSS hardening).
+- Root-escape rejection via `resolveSafe`, the 50 MB size cap, `X-Content-Type-Options: nosniff`, and the strong ETag are shared with images and PDFs.
 
 ### Scroll sync in split mode (Issue #9)
 
