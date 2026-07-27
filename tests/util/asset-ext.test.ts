@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assetContentType, isAssetExtension } from "../../src/util/asset-ext.ts";
+import { assetContentType, assetDisposition, isAssetExtension } from "../../src/util/asset-ext.ts";
 
 describe("isAssetExtension", () => {
   test("画像拡張子は許可される", () => {
@@ -13,10 +13,30 @@ describe("isAssetExtension", () => {
     expect(isAssetExtension("dir/bar.PDF")).toBe(true);
   });
 
+  test("Issue #64: データ / 文書 / アーカイブ形式が許可される", () => {
+    expect(isAssetExtension("sales.csv")).toBe(true);
+    expect(isAssetExtension("dir/report.TSV")).toBe(true);
+    expect(isAssetExtension("a.txt")).toBe(true);
+    expect(isAssetExtension("a.json")).toBe(true);
+    expect(isAssetExtension("a.yaml")).toBe(true);
+    expect(isAssetExtension("a.yml")).toBe(true);
+    expect(isAssetExtension("a.zip")).toBe(true);
+    expect(isAssetExtension("a.xlsx")).toBe(true);
+    expect(isAssetExtension("a.docx")).toBe(true);
+    expect(isAssetExtension("a.pptx")).toBe(true);
+  });
+
+  test("Issue #64: 実行 / 描画される形式は許可しない (許可リスト方式の維持)", () => {
+    expect(isAssetExtension("a.html")).toBe(false);
+    expect(isAssetExtension("a.htm")).toBe(false);
+    expect(isAssetExtension("a.xhtml")).toBe(false);
+    expect(isAssetExtension("a.js")).toBe(false);
+    expect(isAssetExtension("a.mjs")).toBe(false);
+  });
+
   test("非対応は false", () => {
     expect(isAssetExtension("a.md")).toBe(false);
-    expect(isAssetExtension("a.txt")).toBe(false);
-    expect(isAssetExtension("a.docx")).toBe(false);
+    expect(isAssetExtension("a.exe")).toBe(false);
     expect(isAssetExtension("noext")).toBe(false);
     expect(isAssetExtension("")).toBe(false);
   });
@@ -48,14 +68,49 @@ describe("assetContentType", () => {
     expect(assetContentType("D.PDF")).toBe("application/pdf");
   });
 
+  test("Issue #64: 追加した形式の Content-Type", () => {
+    expect(assetContentType("a.csv")).toBe("text/csv; charset=utf-8");
+    expect(assetContentType("a.tsv")).toBe("text/tab-separated-values; charset=utf-8");
+    expect(assetContentType("a.txt")).toBe("text/plain; charset=utf-8");
+    expect(assetContentType("a.json")).toBe("application/json; charset=utf-8");
+    expect(assetContentType("a.yml")).toBe("application/yaml; charset=utf-8");
+    expect(assetContentType("a.zip")).toBe("application/zip");
+    expect(assetContentType("B.XLSX")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+  });
+
   test("非対応は null", () => {
     expect(assetContentType("a.md")).toBeNull();
-    expect(assetContentType("a.zip")).toBeNull();
+    expect(assetContentType("a.html")).toBeNull();
     expect(assetContentType("noext")).toBeNull();
   });
 
   test("Object.prototype 継承キーは null (プロトタイプ汚染防御)", () => {
     expect(assetContentType("foo.toString")).toBeNull();
     expect(assetContentType("foo.__proto__")).toBeNull();
+  });
+});
+
+describe("assetDisposition (Issue #64)", () => {
+  test("画像 / PDF は inline", () => {
+    expect(assetDisposition("a.png")).toBe("inline");
+    expect(assetDisposition("b.svg")).toBe("inline");
+    expect(assetDisposition("c.pdf")).toBe("inline");
+    expect(assetDisposition("D.PDF")).toBe("inline");
+  });
+
+  test("データ / 文書 / アーカイブ形式は attachment", () => {
+    expect(assetDisposition("a.csv")).toBe("attachment");
+    expect(assetDisposition("a.txt")).toBe("attachment");
+    expect(assetDisposition("a.zip")).toBe("attachment");
+    expect(assetDisposition("A.DOCX")).toBe("attachment");
+  });
+
+  test("許可リスト外・拡張子なしは安全側の attachment に倒す", () => {
+    expect(assetDisposition("a.html")).toBe("attachment");
+    expect(assetDisposition("noext")).toBe("attachment");
+    expect(assetDisposition("foo.")).toBe("attachment");
+    expect(assetDisposition("foo.__proto__")).toBe("attachment");
   });
 });

@@ -470,6 +470,9 @@ describe("server - /api/asset (Issue #19)", () => {
   // Issue #37: PDF を /api/asset で配信できることを検証
   const PDF_BYTES = Buffer.from("%PDF-1.4\n%test pdf body\n%%EOF\n", "utf-8");
 
+  // Issue #64: csv 等を attachment で配信できることを検証
+  const CSV_BYTES = Buffer.from("id,name\n1,りんご\n", "utf-8");
+
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-asset-"));
     await writeFile(join(root, "pic.png"), PNG_BYTES);
@@ -478,7 +481,12 @@ describe("server - /api/asset (Issue #19)", () => {
     // サブディレクトリ
     await mkdir(join(root, "images"), { recursive: true });
     await writeFile(join(root, "images", "x.png"), PNG_BYTES);
-    await writeFile(join(root, "danger.txt"), "secret");
+    // Issue #64: 実行・描画される形式は許可リストに入れない (拒否され続けること)
+    await writeFile(join(root, "danger.html"), "<script>alert(1)</script>");
+    await writeFile(join(root, "danger.js"), "alert(1)");
+    await writeFile(join(root, "sales.csv"), CSV_BYTES);
+    await writeFile(join(root, "売上 データ.csv"), CSV_BYTES);
+    await writeFile(join(root, "notes.txt"), "secret");
     await writeFile(join(root, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
     // 画像拡張子に見えるディレクトリ (isFile() 偽の経路)
     await mkdir(join(root, "dir.png"), { recursive: true });
@@ -537,10 +545,17 @@ describe("server - /api/asset (Issue #19)", () => {
   });
 
   test("対応していない拡張子は 400 + エラー文言", async () => {
-    const res = await fetch(`${ctx.url}/api/asset?path=danger.txt`);
+    const res = await fetch(`${ctx.url}/api/asset?path=danger.html`);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("対応していない拡張子です");
+  });
+
+  test("Issue #64: 許可リストを広げても実行される形式 (.html / .js) は拒否されたまま", async () => {
+    for (const path of ["danger.html", "danger.js"]) {
+      const res = await fetch(`${ctx.url}/api/asset?path=${path}`);
+      expect(res.status).toBe(400);
+    }
   });
 
   test("Issue #37: PDF が application/pdf + inline で配信される", async () => {
@@ -552,6 +567,51 @@ describe("server - /api/asset (Issue #19)", () => {
     expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
     const buf = Buffer.from(await res.arrayBuffer());
     expect(buf.equals(PDF_BYTES)).toBe(true);
+  });
+
+  test("Issue #64: csv が text/csv + attachment で配信される", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=sales.csv`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename="sales.csv"; filename*=UTF-8''sales.csv`,
+    );
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.equals(CSV_BYTES)).toBe(true);
+  });
+
+  test("Issue #64: 日本語ファイル名は filename*=UTF-8'' で壊れず、fallback は ASCII 化される", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=${encodeURIComponent("売上 データ.csv")}`);
+    expect(res.status).toBe(200);
+    const cd = res.headers.get("content-disposition") ?? "";
+    expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent("売上 データ.csv")}`);
+    // fallback は非 ASCII を `_` に落とす (引用符・改行がヘッダに載らない)
+    expect(cd).toContain('filename="__ ___.csv"');
+  });
+
+  test("Issue #64: サブディレクトリの csv も basename だけがファイル名になる", async () => {
+    await mkdir(join(root, "data"), { recursive: true });
+    await writeFile(join(root, "data", "nested.csv"), CSV_BYTES);
+    const res = await fetch(`${ctx.url}/api/asset?path=data/nested.csv`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename="nested.csv"; filename*=UTF-8''nested.csv`,
+    );
+  });
+
+  test("Issue #64: txt も attachment で配信される (inline は画像 / PDF のみ)", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=notes.txt`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(res.headers.get("content-disposition")?.startsWith("attachment;")).toBe(true);
+  });
+
+  test("Issue #64: 画像は inline のまま (既存の表示挙動を変えない)", async () => {
+    const res = await fetch(`${ctx.url}/api/asset?path=pic.png`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe("inline");
   });
 
   test("Issue #37: PDF も path traversal は拒否 (画像と同じ resolveSafe を継承)", async () => {

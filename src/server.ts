@@ -1,12 +1,13 @@
 import type { FileHandle } from "node:fs/promises";
 import { open, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
-import { assetContentType, isAssetExtension } from "./util/asset-ext.ts";
+import { assetContentType, assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
+import { buildContentDisposition } from "./util/content-disposition.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES } from "./util/image-ext.ts";
@@ -535,8 +536,13 @@ async function handleAssetRead(
       ETag: etag,
       // MIME sniff 経由の XSS を抑制 (特に SVG)
       "X-Content-Type-Options": "nosniff",
-      // <img src> から参照されたときに download にならないよう inline を明示
-      "Content-Disposition": "inline",
+      // 画像 / PDF は <img src> や内蔵ビューアで表示するため inline を明示。
+      // Issue #64: csv 等の表示に向かない形式は attachment + ファイル名で
+      // ダウンロードさせる (日本語名は filename*=UTF-8'' で壊さない)。
+      "Content-Disposition": buildContentDisposition(
+        assetDisposition(safe.rel),
+        basename(safe.rel),
+      ),
     };
 
     if (req.headers.get("if-none-match") === etag) {
