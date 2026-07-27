@@ -10,6 +10,7 @@ import {
   splitHrefHash,
 } from "../public/link-resolver.js";
 import { parseFrontmatter, renderFrontmatter } from "./frontmatter.ts";
+import { assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
 import { escapeHtml } from "./util/html.ts";
 import { isImageExtension } from "./util/image-ext.ts";
 import { slugify, uniqueSlug } from "./util/slugify.ts";
@@ -55,8 +56,9 @@ export function rewriteImageHref(href: string, currentPath?: string): string {
 }
 
 /**
- * Issue #37: Markdown の `[X](foo.pdf)` の href を `/api/asset?path=...` に
- * 書き換えて `target="_blank" rel="noopener noreferrer"` を付与する。
+ * Issue #37 / #64: Markdown の `[X](foo.pdf)` `[Y](data.csv)` の href を
+ * `/api/asset?path=...` に書き換えて `target="_blank" rel="noopener noreferrer"`
+ * を付与する。
  *
  * 戻り値 null は「rewrite 対象外、default renderer に任せる」シグナル。
  *
@@ -65,20 +67,24 @@ export function rewriteImageHref(href: string, currentPath?: string): string {
  * - href がアンカー (`#...`) でない
  * - href が javascript: 等の危険スキームでも、絶対 URL / mailto / tel 等の
  *   外部スキームでもない (相対 path 限定)
- * - 拡張子が `.pdf`
+ * - 拡張子が `/api/asset` で配信できるもの (ASSET_CONTENT_TYPES)
+ *
+ * Issue #37 では `.pdf` 決め打ちだったが、配信できる拡張子が増えた以上
+ * 判定は allowlist (isAssetExtension) に一本化する。ここで rewrite しないと
+ * app.js が内部 md ナビゲーションとして扱い「ファイルが見つかりません」になる。
  *
  * `<a target="_blank">` を返すことで、左クリックだけでなく中クリック /
  * Ctrl-クリック / 右クリック「リンクを新しいタブで開く」/「リンクアドレスを
  * コピー」もブラウザネイティブで動作する。クライアント側の app.js は
  * `a.target === "_blank"` を見て click を素通りさせる。
  */
-export function rewritePdfLinkHref(href: string, currentPath: string | undefined): string | null {
+export function rewriteAssetLinkHref(href: string, currentPath: string | undefined): string | null {
   if (!href || !currentPath) return null;
   if (isAnchor(href)) return null;
   if (isJavascriptUrl(href) || isUnsafeScheme(href)) return null;
   if (hasScheme(href)) return null;
   const { path: hrefPath, hash } = splitHrefHash(href);
-  if (!/\.pdf$/i.test(hrefPath)) return null;
+  if (!isAssetExtension(hrefPath)) return null;
   const resolved = resolveRelativePath(currentPath, hrefPath);
   if (!resolved) return null;
   const base = `/api/asset?path=${encodePathForUrl(resolved)}`;
@@ -162,12 +168,20 @@ function createMarked(opts: RenderOptions, source: string, body: string): Marked
         return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${img}</a>`;
       },
       link(token) {
-        // Issue #37: PDF 相対リンクのみ rewrite。それ以外は default renderer。
-        const rewritten = rewritePdfLinkHref(token.href ?? "", opts.currentPath);
+        // Issue #37 / #64: 配信できるアセット (画像 / PDF / csv 等) への
+        // 相対リンクのみ rewrite。それ以外は default renderer。
+        const href = token.href ?? "";
+        const rewritten = rewriteAssetLinkHref(href, opts.currentPath);
         if (rewritten === null) return false;
         const inner = this.parser.parseInline(token.tokens);
         const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : "";
-        return `<a href="${escapeHtml(rewritten)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${inner}</a>`;
+        // Issue #64: attachment で配信する形式 (csv 等) は download 属性を付け、
+        // 空タブを開かずそのまま保存させる。target="_blank" は残す
+        // (app.js の click ハンドラが target === "_blank" を素通り条件にしており、
+        // 外すと内部 md ナビゲーション扱いになってダウンロードが起きない)。
+        const downloadAttr =
+          assetDisposition(splitHrefHash(href).path) === "attachment" ? " download" : "";
+        return `<a href="${escapeHtml(rewritten)}" target="_blank" rel="noopener noreferrer"${downloadAttr}${titleAttr}>${inner}</a>`;
       },
     },
   });

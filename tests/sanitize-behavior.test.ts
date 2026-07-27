@@ -52,6 +52,12 @@ describe("sanitize() の実挙動 (Issue #59)", () => {
     expect(out).toContain("noopener");
   });
 
+  test("Issue #64: リンクの download 属性は維持する (csv 等のダウンロードを壊さない)", () => {
+    const out = sanitize('<a href="/api/asset?path=sales.csv" target="_blank" download>x</a>');
+    expect(out).toContain("download");
+    expect(out).toContain('target="_blank"');
+  });
+
   test("コードブロック (class ベース) は維持する", () => {
     const out = sanitize('<pre><code class="language-js">const x = 1;</code></pre>');
     expect(out).toContain('class="language-js"');

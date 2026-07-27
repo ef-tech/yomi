@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderMarkdown, rewriteImageHref, rewritePdfLinkHref } from "../src/renderer.ts";
+import { renderMarkdown, rewriteAssetLinkHref, rewriteImageHref } from "../src/renderer.ts";
 
 describe("renderMarkdown", () => {
   test("見出しと段落をレンダリング (h1 に id 付与)", async () => {
@@ -291,51 +291,62 @@ describe("rewriteImageHref (unit)", () => {
   });
 });
 
-describe("rewritePdfLinkHref (Issue #37, unit)", () => {
+describe("rewriteAssetLinkHref (Issue #37 / #64, unit)", () => {
   test("currentPath 未指定なら null (default renderer)", () => {
-    expect(rewritePdfLinkHref("foo.pdf", undefined)).toBeNull();
+    expect(rewriteAssetLinkHref("foo.pdf", undefined)).toBeNull();
   });
 
   test("空文字は null", () => {
-    expect(rewritePdfLinkHref("", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("", "a.md")).toBeNull();
   });
 
   test("アンカー (`#sec`) は null", () => {
-    expect(rewritePdfLinkHref("#sec", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("#sec", "a.md")).toBeNull();
   });
 
   test("外部 URL は null (default renderer のバナー処理に任せる)", () => {
-    expect(rewritePdfLinkHref("https://example.com/foo.pdf", "a.md")).toBeNull();
-    expect(rewritePdfLinkHref("http://example.com/foo.pdf", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("https://example.com/foo.pdf", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("http://example.com/foo.pdf", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("https://example.com/data.csv", "a.md")).toBeNull();
   });
 
   test("javascript: / vbscript: / data: は null (default renderer 側でブロック)", () => {
-    expect(rewritePdfLinkHref("javascript:alert(1)", "a.md")).toBeNull();
-    expect(rewritePdfLinkHref("vbscript:msgbox(1)", "a.md")).toBeNull();
-    expect(rewritePdfLinkHref("data:application/pdf;base64,AAA", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("javascript:alert(1)", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("vbscript:msgbox(1)", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("data:application/pdf;base64,AAA", "a.md")).toBeNull();
   });
 
-  test("拡張子が pdf 以外は null", () => {
-    expect(rewritePdfLinkHref("foo.md", "a.md")).toBeNull();
-    expect(rewritePdfLinkHref("foo.png", "a.md")).toBeNull();
-    expect(rewritePdfLinkHref("foo", "a.md")).toBeNull();
+  test("配信できない拡張子は null (md / 拡張子なし / html)", () => {
+    expect(rewriteAssetLinkHref("foo.md", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("foo", "a.md")).toBeNull();
+    expect(rewriteAssetLinkHref("foo.html", "a.md")).toBeNull();
   });
 
   test("相対 PDF は /api/asset URL に rewrite", () => {
-    expect(rewritePdfLinkHref("foo.pdf", "docs/a.md")).toBe("/api/asset?path=docs/foo.pdf");
+    expect(rewriteAssetLinkHref("foo.pdf", "docs/a.md")).toBe("/api/asset?path=docs/foo.pdf");
   });
 
   test("大文字 PDF も rewrite", () => {
-    expect(rewritePdfLinkHref("FOO.PDF", "docs/a.md")).toBe("/api/asset?path=docs/FOO.PDF");
+    expect(rewriteAssetLinkHref("FOO.PDF", "docs/a.md")).toBe("/api/asset?path=docs/FOO.PDF");
+  });
+
+  test("Issue #64: csv 等の相対リンクも rewrite", () => {
+    expect(rewriteAssetLinkHref("sales.csv", "docs/a.md")).toBe("/api/asset?path=docs/sales.csv");
+    expect(rewriteAssetLinkHref("data.json", "a.md")).toBe("/api/asset?path=data.json");
+    expect(rewriteAssetLinkHref("archive.zip", "a.md")).toBe("/api/asset?path=archive.zip");
+  });
+
+  test("Issue #64: 画像へのテキストリンクも rewrite (従来は壊れリンクだった)", () => {
+    expect(rewriteAssetLinkHref("foo.png", "a.md")).toBe("/api/asset?path=foo.png");
   });
 
   test("hash (#page=N) を保持", () => {
     // splitHrefHash で decode 済みの hash がそのまま付く
-    expect(rewritePdfLinkHref("foo.pdf#page=3", "a.md")).toBe("/api/asset?path=foo.pdf#page=3");
+    expect(rewriteAssetLinkHref("foo.pdf#page=3", "a.md")).toBe("/api/asset?path=foo.pdf#page=3");
   });
 
   test("../ で親ディレクトリ参照も解決", () => {
-    expect(rewritePdfLinkHref("../shared/spec.pdf", "docs/api.md")).toBe(
+    expect(rewriteAssetLinkHref("../shared/spec.pdf", "docs/api.md")).toBe(
       "/api/asset?path=shared/spec.pdf",
     );
   });
@@ -352,6 +363,26 @@ describe("rewritePdfLinkHref (Issue #37, unit)", () => {
     expect(html).toContain('href="/api/asset?path=report.pdf#page=3"');
   });
 
+  test("Issue #64: attachment 配信の形式には download 属性が付く", async () => {
+    const html = await renderMarkdown("[売上](data/sales.csv)", { currentPath: "docs/a.md" });
+    expect(html).toContain('<a href="/api/asset?path=docs/data/sales.csv"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain(" download>");
+  });
+
+  test("Issue #64: inline 配信 (画像 / PDF) には download 属性を付けない", async () => {
+    const pdf = await renderMarkdown("[Report](report.pdf)", { currentPath: "a.md" });
+    expect(pdf).not.toContain(" download");
+    const png = await renderMarkdown("[Pic](pic.png)", { currentPath: "a.md" });
+    expect(png).not.toContain(" download");
+  });
+
+  test("Issue #64: hash 付き csv でも拡張子判定が hash に引きずられない", async () => {
+    const html = await renderMarkdown("[CSV](sales.csv#row=2)", { currentPath: "a.md" });
+    expect(html).toContain('href="/api/asset?path=sales.csv#row=2"');
+    expect(html).toContain(" download>");
+  });
+
   test("renderMarkdown は md / 外部 URL リンクは rewrite しない (default 出力維持)", async () => {
     const md = await renderMarkdown("[X](other.md)", { currentPath: "a.md" });
     expect(md).toContain('<a href="other.md">X</a>');
@@ -359,5 +390,12 @@ describe("rewritePdfLinkHref (Issue #37, unit)", () => {
     const ext = await renderMarkdown("[G](https://example.com/x.pdf)", { currentPath: "a.md" });
     expect(ext).toContain('<a href="https://example.com/x.pdf">G</a>');
     expect(ext).not.toContain("target=");
+  });
+
+  test("Issue #64: 画像をリンクで囲んだ場合はリンク先が優先される (既存挙動の維持)", async () => {
+    const html = await renderMarkdown("[![alt](pic.png)](other.md)", { currentPath: "a.md" });
+    // リンク先 other.md は rewrite 対象外 → default renderer の <a href="other.md">
+    expect(html).toContain('<a href="other.md">');
+    expect(html).toContain('<img src="/api/asset?path=pic.png"');
   });
 });
