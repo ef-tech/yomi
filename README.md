@@ -141,6 +141,7 @@ yomi [options]
 | 相対 md パス | `[X](other.md)` `[Y](../bar.md)` | yomi 内で該当ファイルに遷移 (左ツリー選択と同等) |
 | 拡張子なし相対 | `[X](foo)` | `foo.md` → `.markdown` → `.mdx` の順に探索して遷移 |
 | 相対 PDF パス | `[X](return_voucher.pdf)` | `/api/asset?path=...` を新規タブで開き、ブラウザ内蔵 PDF ビューアで表示 (Issue #37) |
+| 相対 csv / データファイル | `[X](sales.csv)` `[Y](../data/report.xlsx)` | `/api/asset?path=...` からダウンロード (Issue #64) |
 | アンカー | `[B](#使い方)` | 既存の見出しジャンプ動作を維持 |
 | 外部 URL | `[G](https://...)` `[M](mailto:...)` | 警告バナー → 「開く」で新規タブ、「閉じる」でキャンセル |
 | `javascript:` スキーム | `[X](javascript:...)` | **無条件ブロック** |
@@ -157,13 +158,27 @@ Markdown 内の `![alt](foo.png)` の相対パスは、yomi が `GET /api/asset?
 | 相対パス画像 | `![X](foo.png)` `![Y](../img/logo.svg)` | カレント md のディレクトリから解決して表示 |
 | 外部 URL | `![X](https://example.com/x.png)` `![Y](data:image/png;base64,...)` | そのまま `<img src>` に渡す |
 | `javascript:` スキーム | `![X](javascript:...)` | **無条件ブロック**（空 src に書き換え） |
-| 画像以外の拡張子 | `![X](note.md)` | `/api/asset` 側で 400（読み取り拒否） |
+| 許可されていない拡張子 | `![X](note.md)` `![X](page.html)` | `/api/asset` 側で 400（読み取り拒否） |
 | ルート外への `..` / 絶対パス | `![X](/etc/passwd)` `![X](../../../etc/passwd)` | `resolveSafe` で 400 |
 | サイズ超過 (>50 MB) | 大きな画像 | 413 |
 
 対応拡張子: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico`。SVG は `X-Content-Type-Options: nosniff` + `Content-Disposition: inline` で MIME sniff 経由の XSS を抑制しています。強 ETag (`"<sha256-prefix>"`) + `Cache-Control: no-cache` を返すので、ブラウザは `If-None-Match` 304 でキャッシュを使いつつ、画像を編集すれば次のリクエストで再フェッチされます (Issue #22 で内容ベース ETag に変更、`cp -a` 等で mtime + size を保ったまま書き換えても確実に検出)。ファイル取得は `fs.open` で取った fd 経由で stat + read を行うので、resolveSafe 後の symlink swap (TOCTOU) でも意図しないファイルが配信される経路は塞いでいます。
 
 プレビュー内の画像をクリックすると、その画像 URL が新しいタブで開きます（`<img>` を `<a target="_blank" rel="noopener noreferrer">` で wrap）。ブラウザネイティブの画像表示で原寸 / ズーム / 保存ができます。hover で `cursor: zoom-in` を表示。markdown で `[![](foo.png)](url)` のようにリンクで囲んだ画像はリンク先が優先され、画像ジャンプは発火しません。
+
+### 添付ファイルのダウンロード (Issue #64)
+
+Markdown からリンクしたデータファイル (`[売上](data/sales.csv)` など) は、`/api/asset?path=...` から `Content-Disposition: attachment` で配信され、クリックでそのまま保存できます。
+
+| 種別 | 拡張子 | 配信方法 |
+|---|---|---|
+| 画像 | `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.avif` / `.bmp` / `.ico` | `inline`（プレビュー内に表示 / 新規タブで原寸表示） |
+| PDF | `.pdf` | `inline`（ブラウザ内蔵 PDF ビューア） |
+| データ / 文書 / アーカイブ | `.csv` / `.tsv` / `.txt` / `.json` / `.yaml` / `.yml` / `.zip` / `.xlsx` / `.docx` / `.pptx` | `attachment`（ダウンロード） |
+
+- ファイル名は `filename*=UTF-8''` 形式で渡すので、日本語ファイル名でも保存名が壊れません。
+- **許可リストに無い拡張子は配信しません**（400）。特に `.html` / `.htm` / `.xhtml` / `.js` / `.mjs` は、配信するとスクリプト実行や HTML 描画の経路になるため意図的に除外しています（Issue #21 / #22 の XSS 対策）。
+- `resolveSafe` によるルート外拒否、50 MB のサイズ上限、`X-Content-Type-Options: nosniff`、強 ETag は画像・PDF と共通です。
 
 ### 並列モードのスクロール同期 (Issue #9)
 

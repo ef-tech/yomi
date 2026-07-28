@@ -42,3 +42,4 @@ coverage/
 # Claude Code 作業ファイル
 .claude/
 .gstack/
+.ef/

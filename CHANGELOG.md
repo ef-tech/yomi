@@ -10,6 +10,17 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #64)
+
+- **リンクした csv 等をダウンロードできるようにした**: `/api/asset` の許可拡張子に、ブラウザが実行も描画もしないデータ / 文書 / アーカイブ形式 (`.csv` / `.tsv` / `.txt` / `.json` / `.yaml` / `.yml` / `.zip` / `.xlsx` / `.docx` / `.pptx`) を追加。これまでは許可リストが画像 + `.pdf` のみだったため、`[売上](data/sales.csv)` のようなリンクは 400 で弾かれ保存できなかった
+- **表示できる形式は inline、それ以外は attachment で配信**: 画像と PDF は従来どおり `Content-Disposition: inline`（プレビュー表示 / 内蔵 PDF ビューア）を維持し、新たに追加した形式は `attachment` でダウンロードさせる。ファイル名は `filename*=UTF-8''` で渡すため日本語名でも保存名が壊れない（ASCII fallback も併記）
+- **許可リスト方式は維持**: `.html` / `.htm` / `.xhtml` / `.js` / `.mjs` は追加していない。配信するとスクリプト実行・HTML 描画の経路になり、Issue #21 / #22 の XSS 対策を迂回するため
+
+### Changed (Issue #64)
+
+- **リンク書き換えを `.pdf` 決め打ちから allowlist 判定へ一般化**: `rewritePdfLinkHref` を `rewriteAssetLinkHref` に改名し、判定を `isAssetExtension()` に一本化した。配信できる拡張子が増えても renderer 側の正規表現を都度足す必要がなくなる。attachment 対象のリンクには `download` 属性を付与し、空タブを開かずそのまま保存させる（`target="_blank"` は app.js の click ハンドラが素通り条件にしているため維持）
+- **画像へのテキストリンクも解決されるようになった**: `[図を見る](foo.png)` のような画像へのリンクは、これまで内部 md ナビゲーション扱いで「ファイルが見つかりません」になっていたが、`/api/asset` 経由で新規タブに表示される
+
 ## [0.18.1] - 2026-07-08
 
 プレビューのサニタイザに起因する **CSS exfiltration 脆弱性を修正** しました (Issue #59)。悪意ある Markdown を開くと、`<style>` タグ・`style` 属性、および Mermaid の `themeCSS` init directive 経由で文書全体に CSS を注入でき、属性セレクタ + `background: url(...)` でファイルパス等の推測・外部送信が可能でした。sanitizer 経路と Mermaid 経路の両方を塞いで遮断します。
