@@ -356,6 +356,29 @@ bun run build   # regenerate public/vendor/dompurify.js / mermaid.js
 
 CI runs `bun run build` to verify build integrity (no CDN references or stray chunks remain, and the generated artifacts are committed).
 
+### Dependabot and bun.lock (Issue #72)
+
+Dependabot can only edit `package.json` and never updates `bun.lock`, so dependency-update PRs always fail CI at `bun install --frozen-lockfile`. [`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) resolves this automatically: once CI completes, it regenerates `bun.lock` and appends it to the PR.
+
+**The workflow stays inactive until a PAT is registered.** This one-time setup is required:
+
+1. Create a fine-grained personal access token
+   - Repository access: this repository only
+   - Permissions: **Contents: Read and write**
+2. Add it under **Settings → Secrets and variables → Actions** as `DEPENDABOT_LOCKFILE_TOKEN`
+   - Put it in **Actions secrets, not Dependabot secrets**. The workflow runs on `workflow_run`, outside the Dependabot context, so it reads ordinary Actions secrets
+3. Comment `@dependabot rebase` on an existing failing PR to confirm the append works
+
+The PAT is required because of how GitHub works: the `GITHUB_TOKEN` in a Dependabot-triggered workflow is forced to read-only and cannot be elevated via `permissions:`, and a push made with `GITHUB_TOKEN` leaves the PR checks in an approval-required state, so required status checks never complete. If the token expires the workflow fails with "PAT not registered" — reissue and replace it.
+
+To fix a PR by hand, run this on the branch:
+
+```bash
+git switch dependabot/npm_and_yarn/<package>-<version>
+bun install
+git add bun.lock && git commit -m "chore: 📦 regenerate bun.lock" && git push
+```
+
 ## Troubleshooting
 
 ### Live reload and the watch limit (Linux)

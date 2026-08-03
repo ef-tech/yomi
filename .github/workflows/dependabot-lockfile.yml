@@ -1,0 +1,97 @@
+name: Dependabot lockfile
+
+# dependabot は package.json しか書き換えず bun.lock を更新できないため、CI の
+# `bun install --frozen-lockfile` が必ず落ちる (Issue #72)。ここで lockfile を
+# 再生成して dependabot の PR に追記し、そのまま green にできるようにする。
+#
+# **なぜ workflow_run なのか**
+# dependabot が起こした pull_request / pull_request_target の GITHUB_TOKEN は
+# read-only に固定され、`permissions:` で昇格できない (fork PR と同じ扱い)。
+# workflow_run は既定ブランチのコンテキストで動くのでこの制限を受けず、通常の
+# Actions secrets と write 権限を使える。
+#
+# **なぜ PAT が要るのか**
+# GITHUB_TOKEN で push すると、その PR の check は approval-required 状態で
+# 止まり、人が UI で承認するまで required status checks が進まない。PAT で
+# push すれば通常の synchronize として CI が走り、そのまま green にできる。
+#
+# **必要な準備 (人間の作業)**
+# fine-grained PAT (このリポジトリの Contents: Read and write) を発行し、
+# **Actions secrets** に `DEPENDABOT_LOCKFILE_TOKEN` として登録する。
+# Dependabot secrets ではない — このワークフローは dependabot コンテキストで
+# 動かないため、通常の Actions secrets を読む。手順は README の「開発」を参照。
+#
+# **採らなかった案**
+# - CI 側で dependabot PR だけ --frozen-lockfile を外す: PR は通るが main の
+#   lockfile が package.json と食い違ったまま残り、次の通常 PR が落ちる
+# - main へ直接 lockfile を push する: ブランチ保護 (required status checks)
+#   に阻まれる
+# - Renovate へ移行する: bun.lock をネイティブに扱えるが、移行そのものが
+#   この Issue のスコープを超える
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read # 実際の push は PAT で行うので GITHUB_TOKEN に write は要らない
+
+# 同じ dependabot ブランチで CI が続けて走ったとき (rebase・force-push) に、
+# 2 つのジョブが同じブランチへ push し合って non-fast-forward で落ちるのを避ける。
+# キャンセルはしない — 走っている追記を途中で止めると lockfile が中途半端に残る。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  sync-lockfile:
+    # dependabot の PR に対する CI の完了だけを拾う。PAT で push し直した後の
+    # 実行は actor が変わるため再入しないが、下の差分判定でも二重に止めている。
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    env:
+      # run: のシェルへ ${{ }} を直接埋めず、env 経由で渡す (ブランチ名は外部入力)
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      TOKEN: ${{ secrets.DEPENDABOT_LOCKFILE_TOKEN }}
+    steps:
+      - name: PAT の登録を確認する
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Actions secret DEPENDABOT_LOCKFILE_TOKEN が未登録です。fine-grained PAT (このリポジトリの Contents: Read and write) を発行し、Actions secrets に登録してください (README の「開発」を参照)。"
+            exit 1
+          fi
+
+      - name: Checkout dependabot branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BRANCH }}
+          token: ${{ env.TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # ci.yml と同じ版に固定する。版がずれると lockfile の内容が変わり、
+          # 追記した直後の CI がまた --frozen-lockfile で落ちる。
+          bun-version: "1.3.12"
+
+      # --ignore-scripts: PAT を持った環境で依存の lifecycle script を実行しない
+      # (更新先パッケージ経由の任意コード実行を避ける)。lockfile は依存解決の
+      # 結果なので、スクリプトを走らせなくても内容は変わらない。
+      - name: Regenerate bun.lock
+        run: bun install --ignore-scripts
+
+      - name: Commit and push if changed
+        run: |
+          if git diff --quiet -- bun.lock; then
+            echo "bun.lock は最新です。追記しません"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bun.lock
+          git commit -m "chore: 📦 dependabot の更新に合わせて bun.lock を再生成"
+          git push origin "HEAD:$BRANCH"
