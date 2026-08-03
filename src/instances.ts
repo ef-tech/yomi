@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -51,16 +51,31 @@ export function logPath(port: number, paths: RegistryPaths = resolvePaths()): st
 }
 
 export async function ensureDirs(paths: RegistryPaths = resolvePaths()): Promise<void> {
-  await mkdir(paths.instances, { recursive: true });
-  await mkdir(paths.logs, { recursive: true });
+  // 起動中のディレクトリ一覧は本人以外に見せる必要がない
+  await mkdir(paths.instances, { recursive: true, mode: 0o700 });
+  await mkdir(paths.logs, { recursive: true, mode: 0o700 });
 }
 
+/**
+ * インスタンスを記録する。
+ * 一時ファイルへ書いてから rename する — 書き込みの途中で電源が落ちると
+ * 壊れた JSON が残り、その記録は読み飛ばされる = 生きているプロセスが
+ * down からも list からも辿れない孤児になる。rename は同一ディレクトリ内なら原子的。
+ */
 export async function saveInstance(
   record: InstanceRecord,
   paths: RegistryPaths = resolvePaths(),
 ): Promise<void> {
   await ensureDirs(paths);
-  await writeFile(recordPath(record.port, paths), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  const target = recordPath(record.port, paths);
+  const temp = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await rename(temp, target);
+  } catch (err) {
+    await rm(temp, { force: true });
+    throw err;
+  }
 }
 
 export async function removeInstance(
