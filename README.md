@@ -311,6 +311,29 @@ bun run build   # public/vendor/dompurify.js / mermaid.js を再生成
 
 CI は `bun run build` を実行してビルド健全性（CDN 参照・余計なチャンクの残存がないこと、生成物の未コミット/欠落がないこと）を検証します。
 
+### dependabot と bun.lock (Issue #72)
+
+dependabot は `package.json` しか書き換えられず `bun.lock` を更新しないため、放っておくと依存更新 PR が CI の `bun install --frozen-lockfile` で必ず落ちます。これを自動で解消するのが [`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) で、CI の完了を契機に `bun.lock` を再生成して PR へ追記します。
+
+**このワークフローは PAT の登録が済むまで動きません。** セットアップは 1 回だけ必要です:
+
+1. fine-grained personal access token を発行する
+   - Repository access: このリポジトリのみ
+   - Permissions: **Contents: Read and write**
+2. リポジトリの **Settings → Secrets and variables → Actions** に `DEPENDABOT_LOCKFILE_TOKEN` として登録する
+   - **Dependabot secrets ではなく Actions secrets** に入れてください。このワークフローは `workflow_run` で動くため dependabot コンテキストではなく、通常の Actions secrets を読みます
+3. 既存の落ちている dependabot PR に `@dependabot rebase` とコメントして、追記が動くことを確認する
+
+PAT が要るのは GitHub の仕様上の制約です。dependabot がトリガーした workflow の `GITHUB_TOKEN` は read-only に固定されて `permissions:` でも昇格できず、また `GITHUB_TOKEN` で push した場合は PR の check が approval-required 状態で止まり required status checks が進みません。トークンの有効期限が切れるとワークフローが「PAT が未登録」で失敗するので、そのときは再発行して差し替えてください。
+
+手で直したいときは、対象ブランチで次を実行すれば同じ結果になります。
+
+```bash
+git switch dependabot/npm_and_yarn/<package>-<version>
+bun install
+git add bun.lock && git commit -m "chore: 📦 bun.lock を再生成" && git push
+```
+
 ## トラブルシューティング
 
 ### ライブリロードと監視上限 (Linux)
