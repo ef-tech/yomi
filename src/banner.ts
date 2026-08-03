@@ -6,11 +6,22 @@ export interface BannerOptions {
   port: number;
   /** 走査階層の上限 (Issue #44)。null / 未指定なら無制限で表示しない。 */
   depth?: number | null;
+  /**
+   * バックグラウンド起動に関する情報 (Issue #68)。未指定 / null ならフォアグラウンド。
+   * 親が起動報告として出すときは pid と logPath を渡す。切り離された子が自分の
+   * ログ先頭に出すときは pid だけ渡す (ログの中でログパスを案内しても仕方ない)。
+   */
+  detached?: { pid: number; logPath?: string } | null;
 }
 
 /** 起動時にコンソールへ表示するバナーを組み立てる (改行区切り 1 文字列) */
 export function buildStartupBanner(opts: BannerOptions): string {
-  const lines: string[] = ["yomi が起動しました"];
+  const detached = opts.detached ?? null;
+  const lines: string[] = [
+    detached
+      ? `yomi をバックグラウンドで起動しました (pid ${detached.pid})`
+      : "yomi が起動しました",
+  ];
 
   for (const u of buildAccessibleUrls(opts.host, opts.port)) {
     lines.push(`  ${u.label.padEnd(6)} ${u.url}`);
@@ -20,6 +31,10 @@ export function buildStartupBanner(opts: BannerOptions): string {
 
   if (opts.depth != null) {
     lines.push(`走査階層: 深さ ${opts.depth} まで (--depth ${opts.depth})`);
+  }
+
+  if (detached?.logPath) {
+    lines.push(`ログ: ${detached.logPath}`);
   }
 
   if (!isLoopback(opts.host)) {
@@ -32,7 +47,7 @@ export function buildStartupBanner(opts: BannerOptions): string {
     }
   }
 
-  lines.push("停止するには Ctrl+C");
+  lines.push(detached ? "停止するには yomi down" : "停止するには Ctrl+C");
   return lines.join("\n");
 }
 

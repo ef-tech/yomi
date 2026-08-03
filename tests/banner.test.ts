@@ -71,6 +71,56 @@ describe("buildStartupBanner", () => {
     expect(banner).toContain("http://127.0.0.1:12345");
   });
 
+  describe("バックグラウンド起動の表示 (Issue #68)", () => {
+    test("親の起動報告は pid・ログパス・yomi down を示す", () => {
+      const banner = buildStartupBanner({
+        rootDir: "/tmp/docs",
+        host: "127.0.0.1",
+        port: 3939,
+        detached: { pid: 4242, logPath: "/state/yomi/logs/3939.log" },
+      });
+      expect(banner).toContain("yomi をバックグラウンドで起動しました (pid 4242)");
+      expect(banner).toContain("ログ: /state/yomi/logs/3939.log");
+      expect(banner).toContain("停止するには yomi down");
+      // 切り離されているので Ctrl+C は届かない
+      expect(banner).not.toContain("Ctrl+C");
+    });
+
+    test("子がログへ出すときは logPath 行を出さない (ログの中でログを案内しない)", () => {
+      const banner = buildStartupBanner({
+        rootDir: "/tmp/docs",
+        host: "127.0.0.1",
+        port: 3939,
+        detached: { pid: 4242 },
+      });
+      expect(banner).toContain("yomi をバックグラウンドで起動しました (pid 4242)");
+      expect(banner).not.toContain("ログ:");
+      expect(banner).toContain("停止するには yomi down");
+    });
+
+    test("detached: null はフォアグラウンド表示のまま", () => {
+      const banner = buildStartupBanner({
+        rootDir: "/tmp/docs",
+        host: "127.0.0.1",
+        port: 3939,
+        detached: null,
+      });
+      expect(banner).toContain("yomi が起動しました");
+      expect(banner).toContain("停止するには Ctrl+C");
+    });
+
+    test("バックグラウンドでも公開時は警告を出す", () => {
+      const banner = buildStartupBanner({
+        rootDir: "/tmp/docs",
+        host: "0.0.0.0",
+        port: 3939,
+        detached: { pid: 4242, logPath: "/state/yomi/logs/3939.log" },
+      });
+      expect(banner).toContain("認証なしでネットワークに公開");
+      expect(banner).toContain("停止するには yomi down");
+    });
+  });
+
   describe("depth 表示 (Issue #44)", () => {
     test("depth 指定で走査階層行を含む", () => {
       const banner = buildStartupBanner({

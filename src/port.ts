@@ -14,7 +14,7 @@ export async function findAvailablePort(
   throw new Error(`空きポートが見つかりません (${startPort}〜${startPort + limit - 1} を試行)`);
 }
 
-function isPortAvailable(host: string, port: number): Promise<boolean> {
+export function isPortAvailable(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
