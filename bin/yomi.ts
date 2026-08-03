@@ -16,6 +16,7 @@ import {
   startDetached,
   stopInstance,
 } from "../src/daemon.ts";
+import { buildListOutput } from "../src/instance-table.ts";
 import { type InstanceRecord, liveInstances } from "../src/instances.ts";
 import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
@@ -33,6 +34,10 @@ async function main() {
 
   if (parsed.name === "down") {
     await runDown(parsed.options);
+    return;
+  }
+  if (parsed.name === "list") {
+    await runList();
     return;
   }
   await runUp(parsed.options);
@@ -124,6 +129,11 @@ async function runDown(options: DownOptions) {
       process.exitCode = 1;
     }
   }
+}
+
+async function runList() {
+  // liveInstances は死んだ記録を掃除しながら返す（down と共有）
+  console.log(buildListOutput(await liveInstances()));
 }
 
 function parseCommandOrExit(): ParsedCommand {
