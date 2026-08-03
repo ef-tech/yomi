@@ -81,12 +81,26 @@ yomi
 
 ブラウザが自動で開きます。
 
+### サブコマンド
+
+```
+yomi [options]        カレントディレクトリを開く（yomi up と同じ）
+yomi up [options]     起動する（-d でバックグラウンド）
+yomi down [options]   バックグラウンド起動した yomi を停止する
+yomi list             バックグラウンドで起動中の yomi を一覧表示する
+```
+
+引数なしの `yomi` は従来どおりフォアグラウンドで起動する（`yomi up` の別名）。
+
 ### オプション
 
 ```
-yomi [options]
+yomi up [options]
+  -d, --detach    バックグラウンドで起動しターミナルを解放する
+                  停止は yomi down。ログは状態ディレクトリに出力される
   --port <n>      ポートを指定（デフォルト: 3939 から自動探索）
   --no-open       ブラウザを自動で開かない
+  --open          ブラウザを開く（-d は既定で開かないため、その打ち消し）
   --host <addr>   バインドアドレス（デフォルト: 127.0.0.1、自端末からのみ）
   --share         同 LAN の別端末からも閲覧できるよう 0.0.0.0 にバインド
                   （認証なしで公開されるため信頼できるネットワークでのみ）
@@ -95,9 +109,38 @@ yomi [options]
                   読み込む階層の深さを制限（tree -L 相当。デフォルト: 無制限）
                   1 でルート直下のみ。深い md は読み込まず監視もしない
   --help, -h      ヘルプ
+
+yomi down [options]
+  （指定なし）    カレントディレクトリで起動した yomi を停止する
+  --all           起動中の yomi をすべて停止する
+  --port <n>      指定したポートの yomi を停止する
 ```
 
 大きなディレクトリツリーでは `--depth`（短縮 `-L`）で起動時にスキャン/監視する階層を絞れる。`tree -L <level>` と同じく、ルート直下を深さ 1 として数える。深さを超えた Markdown は読み込まれず、ファイル監視（ライブリロード）の対象からも外れるため、起動が速くなり inotify の watch 数も減る。深い階層を見たいときは深さを上げて起動し直す。
+
+### バックグラウンドで動かす (Issue #68, #69)
+
+`docker compose` の `up -d` / `down` と同じ感覚で常駐させられる。ターミナルを 1 枚占有しないので、複数のプロジェクトを同時に開いたままにできる。
+
+```bash
+cd /path/to/docs
+yomi up -d          # バックグラウンドで起動（pid・URL・ログパスが表示される）
+
+yomi list           # 起動中の yomi を一覧表示
+# PID      PORT   PUBLIC  DIR
+# 1053537  39601  local   /path/to/docs
+# 1053577  39602  share   /path/to/other
+
+yomi down           # このディレクトリで起動した yomi を停止
+yomi down --all     # 起動中のものをすべて停止
+yomi down --port 3939
+```
+
+- **`yomi down` の既定はカレントディレクトリのものだけ**。別プロジェクトで開いている yomi を巻き添えで落とさないため、全部止めるときは `--all` を明示する
+- `PUBLIC` 列は `local`（自端末のみ）か `share`（LAN に公開中）を表す
+- 状態とログは `${XDG_STATE_HOME:-~/.local/state}/yomi/` 配下に置く（`instances/<port>.json` と `logs/<port>.log`）
+- 異常終了などで残った記録は、`yomi list` / `yomi down` の実行時に自動で除去される
+- `-d` のときはブラウザを自動で開かない。開きたいときは `yomi up -d --open`
 
 ### ファイルツリー
 

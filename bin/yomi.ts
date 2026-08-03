@@ -13,9 +13,11 @@ import {
   describeNoStopTarget,
   describeStop,
   selectStopTargets,
+  servingInstances,
   startDetached,
   stopInstance,
 } from "../src/daemon.ts";
+import { buildListOutput } from "../src/instance-table.ts";
 import { type InstanceRecord, liveInstances } from "../src/instances.ts";
 import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
@@ -33,6 +35,10 @@ async function main() {
 
   if (parsed.name === "down") {
     await runDown(parsed.options);
+    return;
+  }
+  if (parsed.name === "list") {
+    await runList();
     return;
   }
   await runUp(parsed.options);
@@ -124,6 +130,12 @@ async function runDown(options: DownOptions) {
       process.exitCode = 1;
     }
   }
+}
+
+async function runList() {
+  // servingInstances は「pid 生存 + 記録したポートで listen」で絞り、外れた記録を掃除する。
+  // down の停止判定と同じ基準なので、一覧に出たものは必ず down で止められる。
+  console.log(buildListOutput(await servingInstances()));
 }
 
 function parseCommandOrExit(): ParsedCommand {

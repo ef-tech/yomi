@@ -32,7 +32,7 @@
     "@biomejs/biome": "^2.4.13",
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.3",
-    "dompurify": "3.4.11",
+    "dompurify": "3.4.12",
     "jsdom": "^30.0.1",
     "mermaid": "11.16.0",
     "typescript": "^7.0.2"
