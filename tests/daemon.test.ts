@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import {
 import {
   type InstanceRecord,
   isAlive,
+  matchesRoot,
   type RegistryPaths,
   readInstances,
   resolvePaths,
@@ -175,7 +177,11 @@ describe("バックグラウンド起動 → 停止 (結合)", () => {
       expect(records).toHaveLength(1);
       const rec = records[0] as InstanceRecord;
       expect(rec.port).toBe(port);
-      expect(rec.rootDir).toBe(workDir);
+      // macOS の tmpdir は /var → /private/var のシンボリックリンクで、子プロセスの
+      // process.cwd() は解決済みのパスを返す。down は matchesRoot が realpath で
+      // 突き合わせるので実挙動に影響しないが、比較する側も正規化しておく。
+      expect(rec.rootDir).toBe(realpathSync(workDir));
+      expect(matchesRoot(rec, workDir)).toBe(true);
       expect(isAlive(rec.pid)).toBe(true);
 
       // 親が終了した後もサーバは応答し続ける
