@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_DOWN_OPTIONS,
+  DEFAULT_LIST_OPTIONS,
   DEFAULT_OPTIONS,
   parseArgs,
   parseCommand,
   parseDownArgs,
+  parseListArgs,
   shouldOpenBrowser,
 } from "../src/cli.ts";
 
@@ -282,6 +284,13 @@ describe("parseCommand (Issue #68)", () => {
     expect(parsed).toEqual({ name: "down", options: { ...DEFAULT_DOWN_OPTIONS, all: true } });
   });
 
+  test("list サブコマンド (Issue #69)", () => {
+    expect(parseCommand(["list"])).toEqual({
+      name: "list",
+      options: { ...DEFAULT_LIST_OPTIONS },
+    });
+  });
+
   test("未知のサブコマンドはエラー (オプションの打ち間違いと区別する)", () => {
     expect(() => parseCommand(["bogus"])).toThrow(/不明なサブコマンド: bogus/);
     expect(() => parseCommand(["Up"])).toThrow(/不明なサブコマンド: Up/);
@@ -291,6 +300,30 @@ describe("parseCommand (Issue #68)", () => {
     expect(parseCommand(["--help"]).options.help).toBe(true);
     expect(parseCommand(["up", "--help"]).options.help).toBe(true);
     expect(parseCommand(["down", "-h"]).options.help).toBe(true);
+    expect(parseCommand(["list", "--help"]).options.help).toBe(true);
+  });
+});
+
+describe("parseListArgs (Issue #69)", () => {
+  test("既定は help: false のみ", () => {
+    expect(parseListArgs([])).toEqual({ ...DEFAULT_LIST_OPTIONS });
+  });
+
+  test("--help / -h", () => {
+    expect(parseListArgs(["--help"]).help).toBe(true);
+    expect(parseListArgs(["-h"]).help).toBe(true);
+  });
+
+  test("他コマンドのオプションは受け付けない (list は絞り込みを持たない)", () => {
+    expect(() => parseListArgs(["--all"])).toThrow(/不明なオプション/);
+    expect(() => parseListArgs(["--port", "3939"])).toThrow(/不明なオプション/);
+    expect(() => parseListArgs(["-d"])).toThrow(/不明なオプション/);
+  });
+
+  test("DEFAULT_LIST_OPTIONS は変更されない (immutable check)", () => {
+    const before = { ...DEFAULT_LIST_OPTIONS };
+    parseListArgs(["--help"]);
+    expect(DEFAULT_LIST_OPTIONS).toEqual(before);
   });
 });
 
