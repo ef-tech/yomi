@@ -187,6 +187,30 @@ export async function stopInstance(
 }
 
 /**
+ * 実際に応答しているインスタンスだけを返し、外れた記録は削除する (Issue #69)。
+ *
+ * `liveInstances` は pid の生存しか見ないので、pid が再利用されていると「生きている」と
+ * 誤判定する。**一覧に出したものは down で止められるべき**なので、表示にもシグナル送信と
+ * 同じ基準（pid 生存 + 記録したポートで listen）を使い、判定を食い違わせない。
+ *
+ * `yomi down` 側があえて `liveInstances`（pid だけ）を使うのは、拾える記録は拾ったうえで
+ * `stopInstance` に「既に終了していました。記録を削除しました」と報告させるため。
+ */
+export async function servingInstances(
+  paths: RegistryPaths = resolvePaths(),
+): Promise<InstanceRecord[]> {
+  const serving: InstanceRecord[] = [];
+  for (const record of await readInstances(paths)) {
+    if (await isThisInstance(record)) {
+      serving.push(record);
+    } else {
+      await removeInstance(record.port, paths);
+    }
+  }
+  return serving;
+}
+
+/**
  * 記録された pid が本当にこのインスタンスか。
  *
  * pid の生存だけを信じると、yomi が異常終了したあとに OS が pid を再利用した場合、

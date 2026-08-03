@@ -40,9 +40,19 @@ export const DEFAULT_DOWN_OPTIONS: DownOptions = {
   help: false,
 };
 
+/** `yomi list` のオプション (Issue #69) */
+export interface ListOptions {
+  help: boolean;
+}
+
+export const DEFAULT_LIST_OPTIONS: ListOptions = {
+  help: false,
+};
+
 export type ParsedCommand =
   | { name: "up"; options: CliOptions }
-  | { name: "down"; options: DownOptions };
+  | { name: "down"; options: DownOptions }
+  | { name: "list"; options: ListOptions };
 
 /** --share を指定したときにバインドする全インターフェースアドレス (Issue #51) */
 export const SHARE_HOST = "0.0.0.0";
@@ -53,6 +63,7 @@ export const HELP_TEXT = `yomi (読み) — ローカル Markdown ビューア
   yomi [options]        カレントディレクトリを開く (yomi up と同じ)
   yomi up [options]     起動する (-d でバックグラウンド)
   yomi down [options]   バックグラウンド起動した yomi を停止する
+  yomi list             バックグラウンドで起動中の yomi を一覧表示する
 
 up のオプション:
   -d, --detach    バックグラウンドで起動しターミナルを解放する
@@ -74,9 +85,13 @@ down のオプション:
   --all           起動中の yomi をすべて停止する
   --port <n>      指定したポートの yomi を停止する
 
+list の出力:
+  PID / ポート / 公開有無 (local・share) / 起動ディレクトリ を表示する
+
 例:
   cd /path/to/docs && yomi              # 自端末からのみ (127.0.0.1)
   yomi up -d                            # バックグラウンドで起動
+  yomi list                             # 起動中の yomi を一覧表示
   yomi down                             # このディレクトリの yomi を停止
   yomi down --all                       # 起動中のものをすべて停止
   yomi --port 8080 --no-open
@@ -142,6 +157,7 @@ export function parseCommand(argv: readonly string[]): ParsedCommand {
   const [first, ...rest] = argv;
   if (first === "up") return { name: "up", options: parseArgs(rest) };
   if (first === "down") return { name: "down", options: parseDownArgs(rest) };
+  if (first === "list") return { name: "list", options: parseListArgs(rest) };
   if (first !== undefined && !first.startsWith("-")) {
     throw new Error(`不明なサブコマンド: ${first}`);
   }
@@ -235,6 +251,23 @@ export function parseDownArgs(argv: readonly string[]): DownOptions {
 
   if (opts.all && opts.port !== null) {
     throw new Error("--all と --port は同時に指定できません（停止対象が二重に決まります）");
+  }
+
+  return opts;
+}
+
+export function parseListArgs(argv: readonly string[]): ListOptions {
+  const opts: ListOptions = { ...DEFAULT_LIST_OPTIONS };
+
+  for (const arg of normalize(argv)) {
+    switch (arg) {
+      case "--help":
+      case "-h":
+        opts.help = true;
+        break;
+      default:
+        throw new Error(`不明なオプション: ${arg}`);
+    }
   }
 
   return opts;

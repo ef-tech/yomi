@@ -81,12 +81,26 @@ yomi
 
 The browser opens automatically.
 
+### Subcommands
+
+```
+yomi [options]        Open the current directory (same as yomi up)
+yomi up [options]     Start (use -d to run in the background)
+yomi down [options]   Stop a yomi started in the background
+yomi list             List the yomi instances running in the background
+```
+
+`yomi` without arguments still starts in the foreground as before (an alias for `yomi up`).
+
 ### Options
 
 ```
-yomi [options]
+yomi up [options]
+  -d, --detach    Run in the background and release the terminal
+                  Stop it with yomi down; logs go to the state directory
   --port <n>      Specify the port (default: auto-discovery from 3939)
   --no-open       Do not open the browser automatically
+  --open          Open the browser (-d does not open it by default)
   --host <addr>   Bind address (default: 127.0.0.1, local only)
   --share         Bind to 0.0.0.0 so other devices on the same LAN can view
                   (exposed without authentication; trusted networks only)
@@ -95,9 +109,38 @@ yomi [options]
                   Limit the scan depth (equivalent to tree -L; default: unlimited)
                   1 = root level only. Deeper md files are neither loaded nor watched
   --help, -h      Help
+
+yomi down [options]
+  (no argument)   Stop the yomi started in the current directory
+  --all           Stop every running yomi
+  --port <n>      Stop the yomi on the given port
 ```
 
 For large directory trees, `--depth` (short form `-L`) narrows the levels scanned/watched at startup. Just like `tree -L <level>`, the root level counts as depth 1. Markdown beyond the depth is not loaded and is also excluded from file watching (live reload), so startup is faster and the number of inotify watches is lower. To view deeper levels, restart with a higher depth.
+
+### Running in the background (Issue #68, #69)
+
+Keep yomi resident the same way you would with `docker compose up -d` / `down`. It does not occupy a terminal, so you can keep several projects open at once.
+
+```bash
+cd /path/to/docs
+yomi up -d          # Start in the background (prints pid, URL and log path)
+
+yomi list           # List the running instances
+# PID      PORT   PUBLIC  DIR
+# 1053537  39601  local   /path/to/docs
+# 1053577  39602  share   /path/to/other
+
+yomi down           # Stop the instance started in this directory
+yomi down --all     # Stop every running instance
+yomi down --port 3939
+```
+
+- **`yomi down` defaults to the current directory only.** Pass `--all` explicitly to stop everything, so a yomi opened for another project is never taken down by accident
+- The `PUBLIC` column shows `local` (this machine only) or `share` (exposed to the LAN)
+- State and logs live under `${XDG_STATE_HOME:-~/.local/state}/yomi/` (`instances/<port>.json` and `logs/<port>.log`)
+- Records left behind by an abnormal exit are pruned automatically when you run `yomi list` or `yomi down`
+- `-d` does not open the browser. Use `yomi up -d --open` if you want it opened
 
 ### File tree
 
