@@ -7,6 +7,7 @@ import {
   describeStop,
   type StopOutcome,
   selectStopTargets,
+  stopInstance,
 } from "../src/daemon.ts";
 import {
   type InstanceRecord,
@@ -14,6 +15,7 @@ import {
   type RegistryPaths,
   readInstances,
   resolvePaths,
+  saveInstance,
 } from "../src/instances.ts";
 import { findAvailablePort } from "../src/port.ts";
 
@@ -63,6 +65,7 @@ describe("停止結果のメッセージ", () => {
     record: record({ pid: 4242, port: 3939 }),
     forced: false,
     alreadyGone: false,
+    stopped: true,
   };
 
   test("通常の停止", () => {
@@ -77,6 +80,13 @@ describe("停止結果のメッセージ", () => {
     const message = describeStop({ ...base, alreadyGone: true });
     expect(message).toContain("既に終了していました");
     expect(message).toContain("記録を削除");
+  });
+
+  test("落とせなかった場合は成功と言わず手当てを示す", () => {
+    const message = describeStop({ ...base, forced: true, stopped: false });
+    expect(message).toContain("停止できませんでした");
+    expect(message).toContain("kill -9 4242");
+    expect(message).not.toContain("停止しました");
   });
 });
 
@@ -237,6 +247,32 @@ describe("バックグラウンド起動 → 停止 (結合)", () => {
       } finally {
         await runCli(["down", "--all"], { cwd: workDir, state: stateDir });
         await rm(otherDir, { recursive: true, force: true });
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "記録したポートで listen していない pid にはシグナルを送らない (PID 再利用対策)",
+    async () => {
+      // 生きてはいるが yomi ではないプロセス = pid が再利用された状況の再現
+      const bystander = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      const port = await findAvailablePort("127.0.0.1", 39800);
+      const stale = record({ pid: bystander.pid, port, host: "127.0.0.1" });
+      await saveInstance(stale, paths);
+
+      try {
+        const outcome = await stopInstance(stale, { paths });
+
+        expect(outcome.alreadyGone).toBe(true);
+        expect(outcome.stopped).toBe(true);
+        // 無関係なプロセスを巻き添えにしていない
+        expect(isAlive(bystander.pid)).toBe(true);
+        // 記録は片付ける (次回以降 list / down に出てこない)
+        expect(await readInstances(paths)).toEqual([]);
+      } finally {
+        bystander.kill(9);
+        await bystander.exited;
       }
     },
     INTEGRATION_TIMEOUT_MS,

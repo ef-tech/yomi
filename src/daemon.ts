@@ -147,6 +147,8 @@ export interface StopOutcome {
   forced: boolean;
   /** シグナルを送る時点で既に居なかったか (レジストリだけ残っていた) */
   alreadyGone: boolean;
+  /** 実際に終了させられたか。SIGKILL でも消えなかった場合は false */
+  stopped: boolean;
 }
 
 export interface StopOptions {
@@ -156,7 +158,7 @@ export interface StopOptions {
 
 /**
  * インスタンスを停止してレジストリから削除する。
- * SIGTERM → 猶予 → SIGKILL の順で、どちらに転んでも記録は必ず消す。
+ * SIGTERM → 猶予 → SIGKILL の順に試し、終了を見届けてから記録を消す。
  */
 export async function stopInstance(
   record: InstanceRecord,
@@ -165,21 +167,37 @@ export async function stopInstance(
   const paths = opts.paths ?? resolvePaths();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
 
-  if (!isAlive(record.pid)) {
+  if (!(await isThisInstance(record))) {
     await removeInstance(record.port, paths);
-    return { record, forced: false, alreadyGone: true };
+    return { record, forced: false, alreadyGone: true, stopped: true };
   }
 
   killQuietly(record.pid, "SIGTERM");
   let forced = false;
-  if (!(await waitUntilGone(record.pid, timeoutMs))) {
+  let stopped = await waitUntilGone(record.pid, timeoutMs);
+  if (!stopped) {
     killQuietly(record.pid, "SIGKILL");
     forced = true;
-    await waitUntilGone(record.pid, timeoutMs);
+    stopped = await waitUntilGone(record.pid, timeoutMs);
   }
 
-  await removeInstance(record.port, paths);
-  return { record, forced, alreadyGone: false };
+  // 落とせていないのに記録を消すと、二度と down から辿れない孤児になる
+  if (stopped) await removeInstance(record.port, paths);
+  return { record, forced, alreadyGone: false, stopped };
+}
+
+/**
+ * 記録された pid が本当にこのインスタンスか。
+ *
+ * pid の生存だけを信じると、yomi が異常終了したあとに OS が pid を再利用した場合、
+ * **無関係なプロセスへ SIGKILL を送ってしまう**（取り返しがつかない）。
+ * 記録したポートで実際に listen していることを合わせて確認し、
+ * どちらか一方でも満たさなければシグナルを送らずに記録だけ片付ける。
+ */
+async function isThisInstance(record: InstanceRecord): Promise<boolean> {
+  if (!isAlive(record.pid)) return false;
+  const target = isWildcard(record.host) ? "127.0.0.1" : record.host;
+  return canConnect(target, record.port);
 }
 
 /**
@@ -200,6 +218,10 @@ export function selectStopTargets(
 /** 停止結果を利用者向けの 1 行にする */
 export function describeStop(outcome: StopOutcome): string {
   const where = `pid ${outcome.record.pid} / :${outcome.record.port}`;
+  if (!outcome.stopped) {
+    // 別ユーザーのプロセスなど、SIGKILL が届かなかった場合。記録は残してある
+    return `yomi を停止できませんでした (${where})。手動で終了してください: kill -9 ${outcome.record.pid}`;
+  }
   if (outcome.alreadyGone) {
     return `yomi は既に終了していました (${where})。記録を削除しました`;
   }

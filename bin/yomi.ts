@@ -16,7 +16,7 @@ import {
   startDetached,
   stopInstance,
 } from "../src/daemon.ts";
-import { liveInstances } from "../src/instances.ts";
+import { type InstanceRecord, liveInstances } from "../src/instances.ts";
 import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
@@ -84,28 +84,24 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
+  let record: InstanceRecord;
   try {
-    const record = await startDetached({
-      rootDir,
-      host: options.host,
-      port,
-      depth: options.depth,
-    });
-
-    printStartupBanner({
-      rootDir,
-      host: options.host,
-      port: record.port,
-      depth: options.depth,
-      detached: { pid: record.pid, logPath: record.logPath },
-    });
-
-    if (shouldOpenBrowser(options)) {
-      openBrowser(pickBrowserUrl(options.host, record.port));
-    }
+    record = await startDetached({ rootDir, host: options.host, port, depth: options.depth });
   } catch (err) {
     console.error(`エラー: ${(err as Error).message}`);
     process.exit(1);
+  }
+
+  printStartupBanner({
+    rootDir,
+    host: options.host,
+    port: record.port,
+    depth: options.depth,
+    detached: { pid: record.pid, logPath: record.logPath },
+  });
+
+  if (shouldOpenBrowser(options)) {
+    openBrowser(pickBrowserUrl(options.host, record.port));
   }
 }
 
@@ -119,7 +115,14 @@ async function runDown(options: DownOptions) {
   }
 
   for (const target of targets) {
-    console.log(describeStop(await stopInstance(target)));
+    const outcome = await stopInstance(target);
+    if (outcome.stopped) {
+      console.log(describeStop(outcome));
+    } else {
+      // 記録は残してあるので、原因を直したうえで再実行できる
+      console.error(describeStop(outcome));
+      process.exitCode = 1;
+    }
   }
 }
 
