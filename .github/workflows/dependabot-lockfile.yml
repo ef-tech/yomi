@@ -37,6 +37,13 @@ on:
 permissions:
   contents: read # 実際の push は PAT で行うので GITHUB_TOKEN に write は要らない
 
+# 同じ dependabot ブランチで CI が続けて走ったとき (rebase・force-push) に、
+# 2 つのジョブが同じブランチへ push し合って non-fast-forward で落ちるのを避ける。
+# キャンセルはしない — 走っている追記を途中で止めると lockfile が中途半端に残る。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
 jobs:
   sync-lockfile:
     # dependabot の PR に対する CI の完了だけを拾う。PAT で push し直した後の
@@ -47,7 +54,7 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
     env:
-      # ${{ }} をシェルのコマンド文字列に直接埋めない (ブランチ名は外部入力)
+      # run: のシェルへ ${{ }} を直接埋めず、env 経由で渡す (ブランチ名は外部入力)
       BRANCH: ${{ github.event.workflow_run.head_branch }}
       TOKEN: ${{ secrets.DEPENDABOT_LOCKFILE_TOKEN }}
     steps:
@@ -61,8 +68,8 @@ jobs:
       - name: Checkout dependabot branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
-          token: ${{ secrets.DEPENDABOT_LOCKFILE_TOKEN }}
+          ref: ${{ env.BRANCH }}
+          token: ${{ env.TOKEN }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
