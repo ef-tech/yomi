@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_OPTIONS, parseArgs } from "../src/cli.ts";
+import {
+  DEFAULT_DOWN_OPTIONS,
+  DEFAULT_OPTIONS,
+  parseArgs,
+  parseCommand,
+  parseDownArgs,
+  shouldOpenBrowser,
+} from "../src/cli.ts";
 
 describe("parseArgs", () => {
   test("引数なしならデフォルト", () => {
@@ -197,5 +204,128 @@ describe("parseArgs", () => {
     const before = { ...DEFAULT_OPTIONS };
     parseArgs(["--port", "9999", "--host=x", "--no-open"]);
     expect(DEFAULT_OPTIONS).toEqual(before);
+  });
+
+  describe("-d / --detach (Issue #68)", () => {
+    test("既定は false", () => {
+      expect(parseArgs([]).detach).toBe(false);
+    });
+
+    test("-d / --detach で true", () => {
+      expect(parseArgs(["-d"]).detach).toBe(true);
+      expect(parseArgs(["--detach"]).detach).toBe(true);
+    });
+
+    test("他オプションと併用できる", () => {
+      const opts = parseArgs(["-d", "--port", "8080", "--share", "-L", "2"]);
+      expect(opts.detach).toBe(true);
+      expect(opts.port).toBe(8080);
+      expect(opts.host).toBe("0.0.0.0");
+      expect(opts.depth).toBe(2);
+    });
+  });
+
+  describe("--open (Issue #68)", () => {
+    test("未指定なら open: true だが明示扱いにはしない", () => {
+      expect(parseArgs([]).open).toBe(true);
+      expect(parseArgs([]).openExplicit).toBe(false);
+    });
+
+    test("--open / --no-open は明示指定として記録される", () => {
+      expect(parseArgs(["--open"])).toMatchObject({ open: true, openExplicit: true });
+      expect(parseArgs(["--no-open"])).toMatchObject({ open: false, openExplicit: true });
+    });
+  });
+});
+
+describe("shouldOpenBrowser (Issue #68)", () => {
+  test("フォアグラウンドは既定で開く", () => {
+    expect(shouldOpenBrowser(parseArgs([]))).toBe(true);
+  });
+
+  test("フォアグラウンドで --no-open なら開かない", () => {
+    expect(shouldOpenBrowser(parseArgs(["--no-open"]))).toBe(false);
+  });
+
+  test("-d は既定で開かない (ターミナルを離れる操作なのでタブを増やさない)", () => {
+    expect(shouldOpenBrowser(parseArgs(["-d"]))).toBe(false);
+  });
+
+  test("-d でも --open を明示すれば開く", () => {
+    expect(shouldOpenBrowser(parseArgs(["-d", "--open"]))).toBe(true);
+  });
+
+  test("-d --no-open は当然開かない", () => {
+    expect(shouldOpenBrowser(parseArgs(["-d", "--no-open"]))).toBe(false);
+  });
+});
+
+describe("parseCommand (Issue #68)", () => {
+  test("引数なしは up (従来どおりカレントディレクトリを開く)", () => {
+    expect(parseCommand([])).toEqual({ name: "up", options: { ...DEFAULT_OPTIONS } });
+  });
+
+  test("先頭がオプションなら up として従来の引数をそのまま解釈する (後方互換)", () => {
+    const parsed = parseCommand(["--port", "8080", "--no-open"]);
+    expect(parsed.name).toBe("up");
+    expect(parsed.options).toMatchObject({ port: 8080, open: false });
+  });
+
+  test("up サブコマンドは残りをオプションとして解釈する", () => {
+    const parsed = parseCommand(["up", "-d", "--port", "8080"]);
+    expect(parsed.name).toBe("up");
+    expect(parsed.options).toMatchObject({ detach: true, port: 8080 });
+  });
+
+  test("down サブコマンドは down のオプションを解釈する", () => {
+    const parsed = parseCommand(["down", "--all"]);
+    expect(parsed).toEqual({ name: "down", options: { ...DEFAULT_DOWN_OPTIONS, all: true } });
+  });
+
+  test("未知のサブコマンドはエラー (オプションの打ち間違いと区別する)", () => {
+    expect(() => parseCommand(["bogus"])).toThrow(/不明なサブコマンド: bogus/);
+    expect(() => parseCommand(["Up"])).toThrow(/不明なサブコマンド: Up/);
+  });
+
+  test("--help はどのコマンドでも受け付ける", () => {
+    expect(parseCommand(["--help"]).options.help).toBe(true);
+    expect(parseCommand(["up", "--help"]).options.help).toBe(true);
+    expect(parseCommand(["down", "-h"]).options.help).toBe(true);
+  });
+});
+
+describe("parseDownArgs (Issue #68)", () => {
+  test("既定はカレントディレクトリ対象 (all: false, port: null)", () => {
+    expect(parseDownArgs([])).toEqual({ ...DEFAULT_DOWN_OPTIONS });
+  });
+
+  test("--all", () => {
+    expect(parseDownArgs(["--all"]).all).toBe(true);
+  });
+
+  test("--port N / --port=N", () => {
+    expect(parseDownArgs(["--port", "3939"]).port).toBe(3939);
+    expect(parseDownArgs(["--port=3939"]).port).toBe(3939);
+  });
+
+  test("--port の値の検証は up と同じ", () => {
+    expect(() => parseDownArgs(["--port"])).toThrow("--port には値が必要です");
+    expect(() => parseDownArgs(["--port", "0"])).toThrow(/1〜65535/);
+  });
+
+  test("--all と --port の同時指定はエラー (対象が二重に決まる)", () => {
+    expect(() => parseDownArgs(["--all", "--port", "3939"])).toThrow(/同時に指定できません/);
+    expect(() => parseDownArgs(["--port", "3939", "--all"])).toThrow(/同時に指定できません/);
+  });
+
+  test("up 専用のオプションは受け付けない", () => {
+    expect(() => parseDownArgs(["--share"])).toThrow(/不明なオプション/);
+    expect(() => parseDownArgs(["-d"])).toThrow(/不明なオプション/);
+  });
+
+  test("DEFAULT_DOWN_OPTIONS は変更されない (immutable check)", () => {
+    const before = { ...DEFAULT_DOWN_OPTIONS };
+    parseDownArgs(["--all"]);
+    expect(DEFAULT_DOWN_OPTIONS).toEqual(before);
   });
 });
