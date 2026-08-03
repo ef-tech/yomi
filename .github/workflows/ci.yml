@@ -1,3 +1,6 @@
+# この `name` は dependabot-lockfile.yml の `workflow_run.workflows` から
+# **文字列で参照されている**。変えるとあちらが起動しなくなり、dependabot の PR が
+# lockfile 未更新のまま落ち続ける (エラーも出ずに黙って止まる) ので、両方を揃えて変えること。
 name: CI
 
 on:
@@ -30,6 +33,8 @@ jobs:
         with:
           # vendor bundle の鮮度検証 (git diff --exit-code) を決定的にするため patch まで固定。
           # dompurify/mermaid を更新したら bun run build で再生成しコミットする (README 参照)。
+          # **dependabot-lockfile.yml と同じ版に揃える** — 版がずれると生成される
+          # bun.lock が食い違い、追記した直後にこの --frozen-lockfile がまた落ちる。
           bun-version: "1.3.12"
 
       - name: Install dependencies
