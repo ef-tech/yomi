@@ -349,6 +349,35 @@ describe("バックグラウンド起動 → 停止 (結合)", () => {
   );
 
   test(
+    "list は pid が再利用された記録を表示しない (down の判定と食い違わせない・Issue #69)",
+    async () => {
+      // 生きてはいるが yomi ではないプロセス = pid 再利用の再現
+      const bystander = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      const port = await findAvailablePort("127.0.0.1", 39980);
+      await saveInstance(
+        record({ pid: bystander.pid, port, host: "127.0.0.1", rootDir: workDir }),
+        paths,
+      );
+
+      try {
+        const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+
+        expect(listed.code).toBe(0);
+        // pid は生きているが、そのポートで listen していないので一覧に出さない
+        expect(listed.stdout).toContain("起動中の yomi はありません");
+        expect(listed.stdout).not.toContain(String(bystander.pid));
+        // 無関係なプロセスは巻き添えにしない
+        expect(isAlive(bystander.pid)).toBe(true);
+        expect(await readInstances(paths)).toEqual([]);
+      } finally {
+        bystander.kill(9);
+        await bystander.exited;
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
     "停止対象が無くても成功扱い (終了コード 0)",
     async () => {
       const down = await runCli(["down"], { cwd: workDir, state: stateDir });

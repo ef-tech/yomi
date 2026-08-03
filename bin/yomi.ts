@@ -13,6 +13,7 @@ import {
   describeNoStopTarget,
   describeStop,
   selectStopTargets,
+  servingInstances,
   startDetached,
   stopInstance,
 } from "../src/daemon.ts";
@@ -132,8 +133,9 @@ async function runDown(options: DownOptions) {
 }
 
 async function runList() {
-  // liveInstances は死んだ記録を掃除しながら返す（down と共有）
-  console.log(buildListOutput(await liveInstances()));
+  // servingInstances は「pid 生存 + 記録したポートで listen」で絞り、外れた記録を掃除する。
+  // down の停止判定と同じ基準なので、一覧に出たものは必ず down で止められる。
+  console.log(buildListOutput(await servingInstances()));
 }
 
 function parseCommandOrExit(): ParsedCommand {
