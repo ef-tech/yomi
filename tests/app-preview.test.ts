@@ -6,13 +6,17 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, type FakeFile, mermaidStub } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  bootApp,
+  type FakeFile,
+  mermaidStub,
+  resetAppEnvironment,
+} from "./helpers/app-harness.ts";
 
 let h: AppHarness;
 
-afterEach(() => {
-  h?.cleanup();
-});
+afterEach(resetAppEnvironment);
 
 const VIEW_KEY = "yomi:viewMode:v1";
 const THEME_KEY = "yomi:themeMode:v1";

@@ -347,6 +347,21 @@ function restoreGlobals() {
 }
 
 /**
+ * 差し込んだ global と、モジュールスコープに残る購読・カウンタを素の状態へ戻す。
+ *
+ * **各テストファイルは `afterEach(resetAppEnvironment)` をそのまま使う。**
+ * `harness.cleanup()` 経由にすると、bootApp が途中で例外を投げたテストでは
+ * harness 変数が未代入のままになり、差し込んだ global が後続ファイルへ漏れる
+ * (漏れると server.test.ts / daemon.test.ts が偽 fetch を掴んで壊れる)。
+ * 状態はモジュールスコープにあるので、harness インスタンスが無くても戻せる。
+ */
+export function resetAppEnvironment() {
+  restoreGlobals();
+  __resetLangListenersForTest();
+  __resetNavCounterForTest();
+}
+
+/**
  * DOMPurify 専用の jsdom window を 1 つだけ用意し、そこに束縛する。
  *
  * vendor bundle は「モジュール評価時の globalThis.window」を掴んで離さない
@@ -406,6 +421,17 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
   mql(DARK_MEDIA).matches = options.dark ?? false;
   Object.defineProperty(w, "matchMedia", { value: mql, configurable: true, writable: true });
 
+  const clipboard: string[] = [];
+  const scrollIntoViewCalls: { id: string; options: unknown }[] = [];
+  const openedUrls: string[] = [];
+  const confirmMessages: string[] = [];
+  const fetchCalls: FetchCall[] = [];
+  const historyCalls: HistoryCall[] = [];
+  const observers: FakeIntersectionObserver[] = [];
+  const sockets: FakeWebSocket[] = [];
+
+  // isSecureContext を true にして navigator.clipboard 経路を通す
+  // (false だと app.js が execCommand フォールバックへ落ち、jsdom が未実装で失敗する)
   Object.defineProperty(w, "isSecureContext", { value: true, configurable: true });
   Object.defineProperty(w.navigator, "clipboard", {
     value: {
@@ -422,8 +448,6 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     configurable: true,
   });
 
-  const clipboard: string[] = [];
-  const scrollIntoViewCalls: { id: string; options: unknown }[] = [];
   // jsdom は scrollIntoView を実装していない。deep-link / TOC ジャンプは
   // 「どの要素にスクロールしようとしたか」が観測点なので、記録するだけの実装を入れる。
   Object.defineProperty(w.Element.prototype, "scrollIntoView", {
@@ -433,13 +457,6 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     configurable: true,
     writable: true,
   });
-
-  const openedUrls: string[] = [];
-  const confirmMessages: string[] = [];
-  const fetchCalls: FetchCall[] = [];
-  const historyCalls: HistoryCall[] = [];
-  const observers: FakeIntersectionObserver[] = [];
-  const sockets: FakeWebSocket[] = [];
 
   const state = {
     files: options.files ?? defaultFiles(),
@@ -670,14 +687,7 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     // 破棄済み window を触りに行く。global さえ戻せば他ファイルへの影響は無く、
     // jsdom は参照が切れれば GC される。
     //
-    // i18n の購読解除も**ここで**行う。boot 時だけの解除では、最後の boot の
-    // reapplyDynamicI18n が登録されたまま残り、後続ファイル (i18n.test.ts) が
-    // setLang を呼んだ瞬間に「global を戻した後の app.js」が document を触って落ちる。
-    cleanup: () => {
-      restoreGlobals();
-      __resetLangListenersForTest();
-      __resetNavCounterForTest();
-    },
+    cleanup: resetAppEnvironment,
   };
   return harness;
 }

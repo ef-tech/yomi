@@ -7,13 +7,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, type TreeNode } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  bootApp,
+  resetAppEnvironment,
+  type TreeNode,
+} from "./helpers/app-harness.ts";
 
 let h: AppHarness;
 
-afterEach(() => {
-  h?.cleanup();
-});
+afterEach(resetAppEnvironment);
 
 const OPEN_DIRS_KEY = "yomi:openDirs:v1";
 

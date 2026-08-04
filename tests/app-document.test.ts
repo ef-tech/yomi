@@ -6,13 +6,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, type FakeFile } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  bootApp,
+  type FakeFile,
+  resetAppEnvironment,
+} from "./helpers/app-harness.ts";
 
 let h: AppHarness;
 
-afterEach(() => {
-  h?.cleanup();
-});
+afterEach(resetAppEnvironment);
 
 /** プレビューに任意の <a> を差し込む。DOMPurify が落とすスキームも検証したいので DOM 直挿し */
 function putLink(harness: AppHarness, attrs: Record<string, string>, text = "link"): HTMLElement {

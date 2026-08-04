@@ -6,13 +6,11 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp } from "./helpers/app-harness.ts";
+import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
 
 let h: AppHarness;
 
-afterEach(() => {
-  h?.cleanup();
-});
+afterEach(resetAppEnvironment);
 
 const isSidebarOpen = () => h.el("sidebar").classList.contains("is-open");
 

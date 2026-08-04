@@ -6,13 +6,11 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp } from "./helpers/app-harness.ts";
+import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
 
 let h: AppHarness;
 
-afterEach(() => {
-  h?.cleanup();
-});
+afterEach(resetAppEnvironment);
 
 /** editor に文字を入れて input を発火する (ユーザーのタイプ相当) */
 function type(harness: AppHarness, value: string) {
