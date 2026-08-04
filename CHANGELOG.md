@@ -10,6 +10,19 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-04
+
+**バックグラウンド実行**に対応しました (Issue #67 / #68 / #69)。`yomi up -d` でターミナルを占有せず常駐させ、`yomi list` で起動中の一覧を確認し、`yomi down` で停止できます。`docker compose` の `up -d` / `down` と同じ感覚で、複数のプロジェクトを同時に開いたままにできます。引数なしの `yomi` は従来どおりフォアグラウンド起動のままです。あわせて、リンクした csv 等のダウンロード (Issue #64) と、dependabot の依存更新 PR が CI で必ず落ちていた問題の解消 (Issue #72) が入っています。
+
+### Added (Issue #68, #69)
+
+- **サブコマンド体系を導入**: `yomi up` / `yomi down` / `yomi list` を追加。**引数なしの `yomi` と既存オプション (`--port` / `--host` / `--share` / `--depth` / `--no-open`) は `yomi up` の別名として従来どおり動作する**（後方互換）
+- **`yomi up -d` でバックグラウンド起動**: プロセスグループを分離して起動するため、起動したターミナルで Ctrl+C を押しても常駐プロセスは生き続ける。起動時に pid・URL・ログパスを表示し、標準出力/標準エラーは状態ディレクトリのログへ追記する。`-d` のときは既定でブラウザを開かない（`--open` の明示指定でのみ開く）
+- **`yomi down` で停止**: 既定は**カレントディレクトリで起動したインスタンスのみ**を停止する。別プロジェクトで開いている yomi を巻き添えで落とさないため、全部止めるときは `--all`、個別指定は `--port <n>` を使う。SIGTERM で終わらなければ 5 秒後に SIGKILL へフォールバックする
+- **`yomi list` で起動中インスタンスを一覧**: PID / ポート / 公開有無 (`local` = 自端末のみ / `share` = LAN 公開中) / 起動ディレクトリを表で表示する。起動ディレクトリは最終列に置くため、パスが長く 80 桁を超えても見出しと値の対応が崩れない
+- **インスタンスレジストリ**: `${XDG_STATE_HOME:-~/.local/state}/yomi/` にポート単位の JSON とログを置く (`instances/<port>.json` / `logs/<port>.log`)。1 インスタンス 1 ファイルにすることで、複数ディレクトリで同時に起動しても記録を潰し合わない。ディレクトリは 0700 で作成する
+- **残骸の自動除去と誤操作の防止**: 異常終了で残った記録は `yomi list` / `yomi down` の実行時に除去される。停止・一覧の判定は「pid の生存」だけでなく「記録したポートで listen しているか」も確認するため、pid が再利用されていても無関係なプロセスを停止させない。使用中ポートへの二重起動も拒否する
+
 ### Added (Issue #64)
 
 - **リンクした csv 等をダウンロードできるようにした**: `/api/asset` の許可拡張子に、ブラウザが実行も描画もしないデータ / 文書 / アーカイブ形式 (`.csv` / `.tsv` / `.txt` / `.json` / `.yaml` / `.yml` / `.zip` / `.xlsx` / `.docx` / `.pptx`) を追加。これまでは許可リストが画像 + `.pdf` のみだったため、`[売上](data/sales.csv)` のようなリンクは 400 で弾かれ保存できなかった
@@ -20,6 +33,18 @@ yomi の主要な変更点をこのファイルに記録します。
 
 - **リンク書き換えを `.pdf` 決め打ちから allowlist 判定へ一般化**: `rewritePdfLinkHref` を `rewriteAssetLinkHref` に改名し、判定を `isAssetExtension()` に一本化した。配信できる拡張子が増えても renderer 側の正規表現を都度足す必要がなくなる。attachment 対象のリンクには `download` 属性を付与し、空タブを開かずそのまま保存させる（`target="_blank"` は app.js の click ハンドラが素通り条件にしているため維持）
 - **画像へのテキストリンクも解決されるようになった**: `[図を見る](foo.png)` のような画像へのリンクは、これまで内部 md ナビゲーション扱いで「ファイルが見つかりません」になっていたが、`/api/asset` 経由で新規タブに表示される
+
+### Changed (Issue #72)
+
+- **dependabot の依存更新 PR に `bun.lock` を自動追記するようにした**: dependabot は `package.json` しか書き換えられず `bun.lock` を更新しないため、依存更新 PR が CI の `bun install --frozen-lockfile` で必ず落ち、マージできないまま溜まっていた。CI の完了を契機に lockfile を再生成して PR へ追記する `Dependabot lockfile` ワークフローを追加した (`.github/workflows/dependabot-lockfile.yml`)
+- **利用にはリポジトリ側の準備が必要**: dependabot がトリガーした workflow の `GITHUB_TOKEN` は read-only に固定され `permissions:` でも昇格できず、`GITHUB_TOKEN` による push では PR の check が approval-required で止まる。このため `workflow_run` + PAT（Actions secrets の `DEPENDABOT_LOCKFILE_TOKEN`）で push する。手順は README の「開発」を参照。PAT を持った環境で更新先パッケージの lifecycle script を走らせないよう `--ignore-scripts` で install する
+- **dompurify / mermaid の更新は引き続き手当てが必要**: この 2 つは `public/vendor/` に生成物を持つため、更新時は `bun run build` での再生成が要る（自動化は Issue #75）
+
+### Dependencies
+
+- typescript 6.0.3 → 7.0.2 (#62)
+- dompurify 3.4.11 → 3.4.12 (#63)
+- jsdom 29.1.1 → 30.0.1 (#70)
 
 ## [0.18.1] - 2026-07-08
 
