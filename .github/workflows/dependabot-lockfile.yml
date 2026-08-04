@@ -10,6 +10,12 @@ name: Dependabot generated files
 #    dompurify は**プレビューのサニタイザ** (Issue #21 / #59) なので、CVE が出たときに
 #    素早く上げたい依存でありながら、いちばん手作業を要求する状態になっていた
 #
+# **ファイル名と secret 名に "lockfile" が残っている理由**
+# 責務が 2 つになったので表示名 (name) と job id は実態に合わせたが、ファイル名
+# `dependabot-lockfile.yml` と secret 名 `DEPENDABOT_LOCKFILE_TOKEN` はそのままにしている。
+# secret 名を変えると登録済みの PAT を人が入れ直すまでワークフローが止まるため
+# (README のセットアップ手順もやり直しになる)、名前の綺麗さに見合わない。
+#
 # **なぜ workflow_run なのか**
 # dependabot が起こした pull_request / pull_request_target の GITHUB_TOKEN は
 # read-only に固定され、`permissions:` で昇格できない (fork PR と同じ扱い)。
