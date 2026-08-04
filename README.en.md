@@ -356,9 +356,22 @@ bun run build   # regenerate public/vendor/dompurify.js / mermaid.js
 
 CI runs `bun run build` to verify build integrity (no CDN references or stray chunks remain, and the generated artifacts are committed).
 
-### Dependabot and bun.lock (Issue #72)
+Note that **when Dependabot bumps `dompurify` / `mermaid`, this regeneration happens automatically** (see the next section). You only need to run `bun run build` by hand when you bump a version yourself.
 
-Dependabot can only edit `package.json` and never updates `bun.lock`, so dependency-update PRs always fail CI at `bun install --frozen-lockfile`. [`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) resolves this automatically: once CI completes, it regenerates `bun.lock` and appends it to the PR.
+### Dependabot and generated files (Issue #72 / #75)
+
+Dependabot can only edit `package.json`, so generated files go stale and dependency-update PRs always fail CI:
+
+| Generated file | Where it fails |
+|---|---|
+| `bun.lock` | `bun install --frozen-lockfile` |
+| `public/vendor/*.js` | vendor freshness check (`bun run build` + `git diff --exit-code`) |
+
+[`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) resolves this automatically: once CI completes, it regenerates **both and appends them to the PR as a single commit**. Anything that did not change is not appended (e.g. a `jsdom` bump appends only `bun.lock`).
+
+Vendor bundles are covered because `dompurify` is the **preview sanitizer** (Issue #21 / #59) — a dependency you want to bump quickly when a CVE lands. Leaving that step manual would stall exactly the updates that are most urgent.
+
+> Keep the workflow's `bun-version` **identical to the one in `ci.yml`**. If they drift, the generated `bun.lock` and vendor bundle bytes differ and CI fails again right after the append.
 
 **The workflow stays inactive until a PAT is registered.** This one-time setup is required:
 
@@ -376,7 +389,9 @@ To fix a PR by hand, run this on the branch:
 ```bash
 git switch dependabot/npm_and_yarn/<package>-<version>
 bun install
-git add bun.lock && git commit -m "chore: 📦 regenerate bun.lock" && git push
+bun run build   # regenerates vendor too, if dompurify / mermaid changed
+git add bun.lock public/vendor
+git commit -m "chore: 📦 regenerate generated files for the dependabot update" && git push
 ```
 
 ## Troubleshooting

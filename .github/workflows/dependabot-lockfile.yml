@@ -1,8 +1,14 @@
-name: Dependabot lockfile
+name: Dependabot generated files
 
-# dependabot は package.json しか書き換えず bun.lock を更新できないため、CI の
-# `bun install --frozen-lockfile` が必ず落ちる (Issue #72)。ここで lockfile を
-# 再生成して dependabot の PR に追記し、そのまま green にできるようにする。
+# dependabot は package.json しか書き換えないため、生成物が古いまま残って CI が必ず落ちる。
+# ここで生成物を作り直して dependabot の PR に追記し、そのまま green にできるようにする。
+# 対象は 2 つ:
+#
+# 1. **bun.lock** — dependabot は更新できないので `bun install --frozen-lockfile` が落ちる (Issue #72)
+# 2. **public/vendor/*.js** — dompurify / mermaid を上げても再ビルドされないので、
+#    ci.yml の vendor 鮮度検証 (`bun run build` + `git diff --exit-code`) が落ちる (Issue #75)。
+#    dompurify は**プレビューのサニタイザ** (Issue #21 / #59) なので、CVE が出たときに
+#    素早く上げたい依存でありながら、いちばん手作業を要求する状態になっていた
 #
 # **なぜ workflow_run なのか**
 # dependabot が起こした pull_request / pull_request_target の GITHUB_TOKEN は
@@ -39,13 +45,13 @@ permissions:
 
 # 同じ dependabot ブランチで CI が続けて走ったとき (rebase・force-push) に、
 # 2 つのジョブが同じブランチへ push し合って non-fast-forward で落ちるのを避ける。
-# キャンセルはしない — 走っている追記を途中で止めると lockfile が中途半端に残る。
+# キャンセルはしない — 走っている追記を途中で止めると生成物が中途半端に残る。
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
-  sync-lockfile:
+  sync-generated:
     # dependabot の PR に対する CI の完了だけを拾う。PAT で push し直した後の
     # 実行は actor が変わるため再入しないが、下の差分判定でも二重に止めている。
     if: >-
@@ -74,24 +80,42 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          # ci.yml と同じ版に固定する。版がずれると lockfile の内容が変わり、
-          # 追記した直後の CI がまた --frozen-lockfile で落ちる。
+          # ci.yml と同じ版に固定する。版がずれると (a) 生成される bun.lock が食い違って
+          # 追記した直後の CI がまた --frozen-lockfile で落ち、(b) vendor bundle のバイトが
+          # 変わって ci.yml の `git diff --exit-code -- public/vendor` が落ちる。
+          # **ci.yml の bun-version と必ず揃えること。**
           bun-version: "1.3.12"
 
       # --ignore-scripts: PAT を持った環境で依存の lifecycle script を実行しない
       # (更新先パッケージ経由の任意コード実行を避ける)。lockfile は依存解決の
       # 結果なので、スクリプトを走らせなくても内容は変わらない。
-      - name: Regenerate bun.lock
+      - name: Install dependencies
         run: bun install --ignore-scripts
 
+      # 更新対象が dompurify / mermaid かを package.json の diff で判定する条件分岐は入れない。
+      # グループ更新やインデントの揺れで壊れるので、**常に生成して差分の有無で判断する**ほうが確実。
+      # `bun run build` 自体は ci.yml も毎回実行しているコストで、数秒で終わる。
+      #
+      # ここで依存のコードが実行されることはない。build-vendor.ts が使う Bun.build は
+      # node_modules/{dompurify,mermaid} を**構文解析して bundle するだけ**で評価しないため、
+      # --ignore-scripts と合わせて「更新先パッケージのコードは一切走らない」が保たれる。
+      - name: Rebuild vendor bundle
+        run: bun run build
+
+      # bun.lock と public/vendor を **1 コミットにまとめる**。分けると「lockfile だけ新しく
+      # vendor が古い」中間コミットができ、それはまさに ci.yml の鮮度検証が落とす状態になる。
+      # 依存更新 1 回に対する生成物はアトミックに入れる。
       - name: Commit and push if changed
         run: |
-          if git diff --quiet -- bun.lock; then
-            echo "bun.lock は最新です。追記しません"
+          if git diff --quiet -- bun.lock public/vendor; then
+            echo "bun.lock / public/vendor はどちらも最新です。追記しません"
             exit 0
           fi
+          git diff --stat -- bun.lock public/vendor
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bun.lock
-          git commit -m "chore: 📦 dependabot の更新に合わせて bun.lock を再生成"
+          # 変更が無いほうは何も stage されないので、余計なファイルは入らない
+          # (例: jsdom の更新なら bun.lock だけのコミットになる)
+          git add bun.lock public/vendor
+          git commit -m "chore: 📦 dependabot の更新に合わせて生成物を再生成"
           git push origin "HEAD:$BRANCH"
