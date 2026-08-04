@@ -24,6 +24,9 @@ export function setLang(lang: string): void;
 /** 言語変更を購読する。返り値の関数で解除。 */
 export function onLangChange(fn: (lang: Lang) => void): () => void;
 
+/** テスト用: 購読者を全解除する (プロダクションでは呼ばない)。 */
+export function __resetLangListenersForTest(): void;
+
 /** キーを引いて {name} プレースホルダを params で置換する。 */
 export function t(key: string, params?: Record<string, string | number>): string;
 
