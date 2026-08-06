@@ -48,4 +48,13 @@ describe("isExcludedPath", () => {
   test("空文字パスは false", () => {
     expect(isExcludedPath("")).toBe(false);
   });
+
+  test("`.ef/` は除外しない (Issue #91)", () => {
+    // .ef/verify/issue-N/REPORT.md は yomi で読ませるために書かれるレポート。
+    // 更新が激しいという理由だけで足すと、読ませたいものがツリーから消える。
+    // 個別に外したい利用者は .yomiignore を使う。
+    expect(isExcludedPath(".ef/verify/issue-90/REPORT.md")).toBe(false);
+    expect(isExcludedPath(".ef/triage/issue-12-ask.md")).toBe(false);
+    expect(DEFAULT_EXCLUDES.has(".ef")).toBe(false);
+  });
 });
