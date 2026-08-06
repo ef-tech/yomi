@@ -38,17 +38,31 @@ describe("resetAppEnvironment", () => {
     expect(h.el("status").classList.contains("is-toast")).toBe(true);
   });
 
-  test("差し込んだ global を素の状態へ戻す", async () => {
+  test("差し込んだ global を boot 前の値へ戻す", async () => {
+    // **「素の環境では undefined」と決め打ちしない。** 何が定義済みかは実行環境で変わる
+    // (bun on macOS は globalThis.window を持つが linux は持たない)。契約は
+    // 「差し込む前の値に戻す」ことなので、boot 前を控えてそれと比べる
+    const before = {
+      window: globalThis.window,
+      document: globalThis.document,
+      fetch: globalThis.fetch,
+      setTimeout: globalThis.setTimeout,
+      WebSocket: globalThis.WebSocket,
+    };
+
     await bootApp();
-    expect(typeof globalThis.window).not.toBe("undefined");
-    expect(typeof globalThis.document).not.toBe("undefined");
+    expect(globalThis.window).not.toBe(before.window);
+    expect(globalThis.fetch).not.toBe(before.fetch);
+    expect(globalThis.setTimeout).not.toBe(before.setTimeout);
 
     resetAppEnvironment();
 
     // 戻し切れていないと server.test.ts / daemon.test.ts が偽 fetch を掴んで壊れる
-    expect(typeof globalThis.window).toBe("undefined");
-    expect(typeof globalThis.document).toBe("undefined");
-    expect(typeof globalThis.location).toBe("undefined");
+    expect(globalThis.window).toBe(before.window);
+    expect(globalThis.document).toBe(before.document);
+    expect(globalThis.fetch).toBe(before.fetch);
+    expect(globalThis.setTimeout).toBe(before.setTimeout);
+    expect(globalThis.WebSocket).toBe(before.WebSocket);
   });
 
   test("boot し直せば再び使える (冪等)", async () => {
