@@ -527,6 +527,42 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
   );
 
   test(
+    "記録に失敗してもビューアとしては起動する (警告は出す)",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39360);
+      // 状態ディレクトリの位置に**ファイル**を置く → mkdir が失敗し saveInstance が throw する
+      const blocked = join(await mkdtemp(join(tmpdir(), "yomi-fg-blocked-")), "not-a-dir");
+      await writeFile(blocked, "", "utf8");
+
+      const proc = Bun.spawn([process.execPath, ENTRY, "--port", String(port), "--no-open"], {
+        cwd: workDir,
+        env: { ...process.env, XDG_STATE_HOME: blocked },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      spawned.push(proc);
+
+      const deadline = Date.now() + 15_000;
+      let served = false;
+      while (Date.now() < deadline && !served) {
+        try {
+          served = (await fetch(`http://127.0.0.1:${port}/api/tree`)).status === 200;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      // 記録できなくても読める (主機能は記録に依存していない)
+      expect(served).toBe(true);
+
+      proc.kill("SIGINT");
+      await proc.exited;
+      // 何が起きたか分かる形で伝えている (黙って続けない)
+      expect(await new Response(proc.stderr).text()).toContain("記録に失敗");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
     "up -d の子はレジストリを上書きしない (親が書いた logPath 付きの記録が残る)",
     async () => {
       const port = await findAvailablePort("127.0.0.1", 39350);

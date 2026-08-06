@@ -85,10 +85,25 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
   //
   // **切り離された子 (up -d の実体) は記録しない。** 親の startDetached が
   // logPath 付きの記録を書くので、ここでも書くと logPath が空の記録で上書きしてしまう。
+  //
+  // **記録に失敗しても起動は続ける。** ビューアの主機能は記録に依存しておらず、
+  // フォアグラウンドは Ctrl+C で止められる。状態ディレクトリが書けない環境
+  // (読み取り専用・容量不足) で「読めなくなる」ほうが損失が大きい。
+  // ただし黙って続けると list / down で見つからない理由が分からないので警告は出す。
+  // (バックグラウンドは記録が無いと停止手段そのものを失うため startDetached は失敗させる)
+  let registered = false;
   if (!detachedChild) {
-    await saveInstance(
-      buildInstanceRecord({ pid: process.pid, port, host: options.host, rootDir }),
-    );
+    try {
+      await saveInstance(
+        buildInstanceRecord({ pid: process.pid, port, host: options.host, rootDir }),
+      );
+      registered = true;
+    } catch (err) {
+      console.warn(
+        `警告: インスタンスの記録に失敗しました (${(err as Error).message})\n` +
+          "  yomi list / yomi down からは操作できません。停止するには Ctrl+C を使ってください",
+      );
+    }
   }
 
   printStartupBanner({
@@ -107,7 +122,7 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
   }
 
   // 記録した本人だけが後始末する (切り離された子の記録は親のもの = stopInstance が消す)
-  installShutdownHandlers(handle, detachedChild ? null : port);
+  installShutdownHandlers(handle, registered ? port : null);
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
