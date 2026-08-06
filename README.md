@@ -354,9 +354,22 @@ bun run build   # public/vendor/dompurify.js / mermaid.js を再生成
 
 CI は `bun run build` を実行してビルド健全性（CDN 参照・余計なチャンクの残存がないこと、生成物の未コミット/欠落がないこと）を検証します。
 
-### dependabot と bun.lock (Issue #72)
+なお **dependabot が `dompurify` / `mermaid` を上げた PR では、この再生成も自動で行われます**（次節）。手で `bun run build` が要るのは、自分でバージョンを上げたときだけです。
 
-dependabot は `package.json` しか書き換えられず `bun.lock` を更新しないため、放っておくと依存更新 PR が CI の `bun install --frozen-lockfile` で必ず落ちます。これを自動で解消するのが [`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) で、CI の完了を契機に `bun.lock` を再生成して PR へ追記します。
+### dependabot と生成物 (Issue #72 / #75)
+
+dependabot は `package.json` しか書き換えないため、生成物が古いまま残って依存更新 PR の CI が必ず落ちます。
+
+| 生成物 | 落ちる場所 |
+|---|---|
+| `bun.lock` | `bun install --frozen-lockfile` |
+| `public/vendor/*.js` | vendor 鮮度検証（`bun run build` + `git diff --exit-code`） |
+
+これを自動で解消するのが [`.github/workflows/dependabot-lockfile.yml`](.github/workflows/dependabot-lockfile.yml) で、CI の完了を契機に**両方を再生成して 1 コミットで PR へ追記**します。差分が出なかったものは追記されません（例: `jsdom` の更新なら `bun.lock` だけ）。
+
+vendor まで面倒を見るのは、`dompurify` が**プレビューのサニタイザ**（Issue #21 / #59）であり、CVE が出たときに素早く上げたい依存だからです。ここが手作業のままだと、いちばん急ぎたい更新がいちばん止まります。
+
+> ワークフローの `bun-version` は **`ci.yml` と必ず同じ値に揃えてください**。ずれると生成される `bun.lock` と vendor bundle のバイトが食い違い、追記した直後の CI がまた落ちます。
 
 **このワークフローは PAT の登録が済むまで動きません。** セットアップは 1 回だけ必要です:
 
@@ -374,7 +387,9 @@ PAT が要るのは GitHub の仕様上の制約です。dependabot がトリガ
 ```bash
 git switch dependabot/npm_and_yarn/<package>-<version>
 bun install
-git add bun.lock && git commit -m "chore: 📦 bun.lock を再生成" && git push
+bun run build   # dompurify / mermaid の更新なら vendor も再生成される
+git add bun.lock public/vendor
+git commit -m "chore: 📦 dependabot の更新に合わせて生成物を再生成" && git push
 ```
 
 ## トラブルシューティング
