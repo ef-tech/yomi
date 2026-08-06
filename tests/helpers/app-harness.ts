@@ -355,7 +355,78 @@ function restoreGlobals() {
  * (漏れると server.test.ts / daemon.test.ts が偽 fetch を掴んで壊れる)。
  * 状態はモジュールスコープにあるので、harness インスタンスが無くても戻せる。
  */
+/* ===== app.js が仕込んだタイマーの追跡 ===== */
+
+/**
+ * app.js は `setTimeout` で後続処理を仕込む（WebSocket の再接続・toast の消去・
+ * エディタへのフォーカス等）。**global を戻すだけでは、保留中のタイマーが残る。**
+ *
+ * とくに `connectLiveReload` の再接続タイマーは発火時に `location` と `WebSocket` を読むので、
+ * テストファイルの境界をまたいで発火すると
+ * `ReferenceError: location is not defined` になり、bun が `0 fail / 1 error` で exit 1 する
+ * （テスト一覧には出ないので原因が追いにくい）。同一ファイル内で発火すれば次の boot が
+ * global を張り直しているため無害なので、**実行速度で結果が変わる間欠failure**になる（Issue #92）。
+ *
+ * 個別のテストで「再接続を待ち切る」のでは、app.js がタイマーを仕込んだまま終わる
+ * どのテストでも再発する。**環境を差し込んだ側が環境を畳む**のが正しいので、ここで追跡して
+ * `resetAppEnvironment()` で破棄する。
+ */
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+const realSetInterval = globalThis.setInterval;
+const realClearInterval = globalThis.clearInterval;
+
+/** setTimeout / setInterval の戻り値。bun は数値ではなく Timer オブジェクトを返す */
+type TimerId = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval> | number;
+
+const pendingTimeouts = new Set<TimerId>();
+const pendingIntervals = new Set<TimerId>();
+
+// global へは defineGlobal(unknown) で入れるので、`typeof setTimeout` へのキャストは要らない
+// (Node 型の __promisify__ まで満たす必要が出て、かえって嘘の型になる)
+function trackedSetTimeout(handler: TimerHandler, timeout?: number, ...args: unknown[]): TimerId {
+  const holder: { id?: TimerId } = {};
+  holder.id = realSetTimeout(
+    (...called: unknown[]) => {
+      // 発火したものは追跡から外す（clear 対象は「まだ発火していないもの」だけ）
+      if (holder.id !== undefined) pendingTimeouts.delete(holder.id);
+      (handler as (...a: unknown[]) => void)(...called);
+    },
+    timeout,
+    ...args,
+  );
+  pendingTimeouts.add(holder.id);
+  return holder.id;
+}
+
+function trackedClearTimeout(id?: TimerId): void {
+  if (id !== undefined) pendingTimeouts.delete(id);
+  realClearTimeout(id as Parameters<typeof clearTimeout>[0]);
+}
+
+// setInterval は現時点の app.js では使っていないが、責務分割 (#78) で入っても
+// 黙って同じ罠に戻らないよう対称に追跡する
+function trackedSetInterval(handler: TimerHandler, timeout?: number, ...args: unknown[]): TimerId {
+  const id = realSetInterval(handler, timeout, ...args);
+  pendingIntervals.add(id);
+  return id;
+}
+
+function trackedClearInterval(id?: TimerId): void {
+  if (id !== undefined) pendingIntervals.delete(id);
+  realClearInterval(id as Parameters<typeof clearInterval>[0]);
+}
+
+function clearPendingTimers() {
+  for (const id of pendingTimeouts) realClearTimeout(id as Parameters<typeof clearTimeout>[0]);
+  pendingTimeouts.clear();
+  for (const id of pendingIntervals) realClearInterval(id as Parameters<typeof clearInterval>[0]);
+  pendingIntervals.clear();
+}
+
 export function resetAppEnvironment() {
+  // **global を戻す前に**消す。戻した後だと追跡ラッパー自体が外れる
+  clearPendingTimers();
   restoreGlobals();
   __resetLangListenersForTest();
   __resetNavCounterForTest();
@@ -580,10 +651,16 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
   defineGlobal("Node", w.Node);
   defineGlobal("HTMLElement", w.HTMLElement);
   defineGlobal("fetch", fakeFetch);
+  // app.js が仕込むタイマーを追跡できるよう、差し替え版を global に置く。
+  // これが無いと、保留中のタイマーが resetAppEnvironment 後に発火して復元済み global を触る (#92)
+  defineGlobal("setTimeout", trackedSetTimeout);
+  defineGlobal("clearTimeout", trackedClearTimeout);
+  defineGlobal("setInterval", trackedSetInterval);
+  defineGlobal("clearInterval", trackedClearInterval);
   defineGlobal("requestAnimationFrame", (cb: (t: number) => void) => {
-    return Number(setTimeout(() => cb(0), 0));
+    return Number(trackedSetTimeout(() => cb(0), 0));
   });
-  defineGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
+  defineGlobal("cancelAnimationFrame", (id: number) => trackedClearTimeout(id));
   defineGlobal(
     "IntersectionObserver",
     class extends FakeIntersectionObserver {
@@ -601,9 +678,11 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     },
   );
 
+  // flush 自身のタイマーは追跡しない (待ってから進むので clear 対象にする意味がなく、
+  // 追跡すると「消したい app.js のタイマー」と混ざる)
   const flush = async (times = 4) => {
     for (let i = 0; i < times; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => realSetTimeout(resolve, 0));
     }
   };
 
