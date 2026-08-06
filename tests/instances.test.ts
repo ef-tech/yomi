@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 import {
+  buildInstanceRecord,
   type InstanceRecord,
   isAlive,
   liveInstances,
@@ -11,6 +13,7 @@ import {
   readInstances,
   recordPath,
   removeInstance,
+  removeInstanceSync,
   resolvePaths,
   saveInstance,
 } from "../src/instances.ts";
@@ -191,5 +194,86 @@ describe("matchesRoot", () => {
   test("存在しないディレクトリでも文字列として比較できる", () => {
     const missing = join(tmpdir(), "yomi-does-not-exist-12345");
     expect(matchesRoot(record({ rootDir: missing }), missing)).toBe(true);
+  });
+});
+
+describe("buildInstanceRecord (Issue #90)", () => {
+  const base = { pid: 100, port: 3939, host: "127.0.0.1", rootDir: "/tmp/docs" };
+
+  test("渡した値をそのまま持ち、version は package.json から入る", () => {
+    const rec = buildInstanceRecord({ ...base, startedAt: "2026-08-06T00:00:00.000Z" });
+    expect(rec).toEqual({
+      ...base,
+      startedAt: "2026-08-06T00:00:00.000Z",
+      logPath: "",
+      version: pkg.version,
+    });
+  });
+
+  test("logPath 省略時は空文字 (フォアグラウンドは端末に出るのでログを持たない)", () => {
+    expect(buildInstanceRecord(base).logPath).toBe("");
+  });
+
+  test("logPath を渡せばそのまま入る (バックグラウンドはログファイルを持つ)", () => {
+    expect(buildInstanceRecord({ ...base, logPath: "/tmp/x.log" }).logPath).toBe("/tmp/x.log");
+  });
+
+  test("startedAt 省略時は ISO8601 の現在時刻", () => {
+    const rec = buildInstanceRecord(base);
+    expect(rec.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+    expect(Number.isNaN(Date.parse(rec.startedAt))).toBe(false);
+  });
+
+  test("組み立てた記録は保存して読み戻せる (parseRecord を通る形になっている)", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "yomi-build-"));
+    try {
+      const paths = resolvePaths({ XDG_STATE_HOME: stateDir });
+      const rec = buildInstanceRecord(base);
+      await saveInstance(rec, paths);
+      expect(await readInstances(paths)).toEqual([rec]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("removeInstanceSync (Issue #90)", () => {
+  let stateDir: string;
+  let paths: RegistryPaths;
+
+  beforeEach(async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "yomi-rmsync-"));
+    paths = resolvePaths({ XDG_STATE_HOME: stateDir });
+  });
+
+  afterEach(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  test("記録を消す", async () => {
+    await saveInstance(record({ port: 3939 }), paths);
+    expect(await readInstances(paths)).toHaveLength(1);
+
+    removeInstanceSync(3939, paths);
+
+    expect(await readInstances(paths)).toEqual([]);
+  });
+
+  test("他のポートの記録は残す", async () => {
+    await saveInstance(record({ port: 3939 }), paths);
+    await saveInstance(record({ port: 3940 }), paths);
+
+    removeInstanceSync(3939, paths);
+
+    expect((await readInstances(paths)).map((r) => r.port)).toEqual([3940]);
+  });
+
+  test("存在しないポートでも例外を投げない (終了処理を妨げない)", () => {
+    expect(() => removeInstanceSync(9999, paths)).not.toThrow();
+  });
+
+  test("状態ディレクトリごと無くても例外を投げない", async () => {
+    await rm(stateDir, { recursive: true, force: true });
+    expect(() => removeInstanceSync(3939, paths)).not.toThrow();
   });
 });

@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
-import pkg from "../package.json" with { type: "json" };
 import {
+  buildInstanceRecord,
   ensureDirs,
   type InstanceRecord,
   isAlive,
@@ -100,15 +100,13 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
     throw new Error(`バックグラウンド起動に失敗しました。${await describeLogTail(log)}`);
   }
 
-  const record: InstanceRecord = {
+  const record = buildInstanceRecord({
     pid,
     port: opts.port,
     host: opts.host,
     rootDir: opts.rootDir,
-    startedAt: new Date().toISOString(),
     logPath: log,
-    version: pkg.version,
-  };
+  });
   await saveInstance(record, paths);
   return record;
 }

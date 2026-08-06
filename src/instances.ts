@@ -1,11 +1,16 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 /**
- * バックグラウンド起動した yomi 1 インスタンスの記録 (Issue #68)。
+ * 起動中の yomi 1 インスタンスの記録 (Issue #68)。
  * `yomi list` / `yomi down` はこの内容だけを見て対象を決める。
+ *
+ * バックグラウンド (`up -d`) だけでなく**フォアグラウンド起動も記録する** (Issue #90)。
+ * 記録が無いとどちらのコマンドからも辿れず、Ctrl+C が効かない状態に陥ったときに
+ * `ps` で pid を探して `kill` するしか手が無くなる。
  */
 export interface InstanceRecord {
   pid: number;
@@ -16,8 +21,37 @@ export interface InstanceRecord {
   rootDir: string;
   /** ISO8601。PID 再利用を疑うときの手がかりとして残す */
   startedAt: string;
+  /** バックグラウンド起動のログ出力先。**フォアグラウンドは端末に出るので空文字** */
   logPath: string;
   version: string;
+}
+
+export interface BuildInstanceRecordInput {
+  pid: number;
+  port: number;
+  host: string;
+  rootDir: string;
+  /** 省略時は空文字 (フォアグラウンド = 端末に出るのでログファイルを持たない) */
+  logPath?: string;
+  /** 省略時は現在時刻。テストから固定するために開けてある */
+  startedAt?: string;
+}
+
+/**
+ * 記録を組み立てる。
+ * バックグラウンド (`startDetached`) とフォアグラウンド (`runForeground`) の両方から呼ぶので、
+ * **version の埋め方や既定値をここ 1 箇所に集める** (2 箇所で組み立てると必ず片方が古くなる)。
+ */
+export function buildInstanceRecord(input: BuildInstanceRecordInput): InstanceRecord {
+  return {
+    pid: input.pid,
+    port: input.port,
+    host: input.host,
+    rootDir: input.rootDir,
+    startedAt: input.startedAt ?? new Date().toISOString(),
+    logPath: input.logPath ?? "",
+    version: pkg.version,
+  };
 }
 
 export interface RegistryPaths {
@@ -83,6 +117,21 @@ export async function removeInstance(
   paths: RegistryPaths = resolvePaths(),
 ): Promise<void> {
   await rm(recordPath(port, paths), { force: true });
+}
+
+/**
+ * 記録を同期的に削除する。**終了シグナルのハンドラから呼ぶ用** (Issue #90)。
+ *
+ * 非同期版を使うと、`process.exit(0)` までにイベントループを 1 周させる必要が出る。
+ * ハンドラの中で await すると exit が遅れ、await せずに投げっぱなしにすると
+ * 消える前にプロセスが落ちる。どちらにも転ばないよう、ここだけ同期で消す。
+ */
+export function removeInstanceSync(port: number, paths: RegistryPaths = resolvePaths()): void {
+  try {
+    rmSync(recordPath(port, paths), { force: true });
+  } catch {
+    // 権限などで消せなくても終了は妨げない。残骸は次の list / down が掃除する
+  }
 }
 
 /**
