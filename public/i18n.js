@@ -298,6 +298,19 @@ export function onLangChange(fn) {
   return () => listeners.delete(fn);
 }
 
+/**
+ * テスト用: 購読者を全解除する (プロダクションでは呼ばない)。
+ *
+ * app.js はモジュール読み込み時に onLangChange(reapplyDynamicI18n) を登録するが、
+ * 解除する手段を持たない (ページ生存中は解除しないため)。特性テストは 1 テストごとに
+ * app.js を読み直すので、これが無いと過去のインスタンスの購読が積み残り、
+ * setLang のたびに破棄済み DOM を触るリスナーが増えていく。
+ * navigation.js の __resetNavCounterForTest と同じ用途。
+ */
+export function __resetLangListenersForTest() {
+  listeners.clear();
+}
+
 /** キーを引いてプレースホルダ {name} を params で置換する。未翻訳は ja→キーにフォールバック。 */
 export function t(key, params) {
   const table = MESSAGES[currentLang] ?? MESSAGES.ja;
