@@ -18,7 +18,13 @@ import {
   stopInstance,
 } from "../src/daemon.ts";
 import { buildListOutput } from "../src/instance-table.ts";
-import { type InstanceRecord, liveInstances } from "../src/instances.ts";
+import {
+  buildInstanceRecord,
+  type InstanceRecord,
+  liveInstances,
+  removeInstanceSync,
+  saveInstance,
+} from "../src/instances.ts";
 import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
@@ -71,6 +77,20 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 
   // 切り離された子が自分のログへ出す場合は、届かない Ctrl+C ではなく yomi down を案内する
   const detachedChild = process.env[DETACHED_ENV] === "1";
+
+  // レジストリに記録して yomi list / yomi down の対象にする (Issue #90)。
+  //
+  // **createServer より後に置く。** Bun.serve は使用中ポートで throw するので、
+  // 二重起動はここへ来る前に落ちる = 先に動いているインスタンスの記録を上書きしない。
+  //
+  // **切り離された子 (up -d の実体) は記録しない。** 親の startDetached が
+  // logPath 付きの記録を書くので、ここでも書くと logPath が空の記録で上書きしてしまう。
+  if (!detachedChild) {
+    await saveInstance(
+      buildInstanceRecord({ pid: process.pid, port, host: options.host, rootDir }),
+    );
+  }
+
   printStartupBanner({
     rootDir,
     host: options.host,
@@ -86,7 +106,8 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
     openBrowser(pickBrowserUrl(options.host, port));
   }
 
-  installShutdownHandlers(handle);
+  // 記録した本人だけが後始末する (切り離された子の記録は親のもの = stopInstance が消す)
+  installShutdownHandlers(handle, detachedChild ? null : port);
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
@@ -148,16 +169,22 @@ function parseCommandOrExit(): ParsedCommand {
   }
 }
 
-function installShutdownHandlers(handle: ServerHandle): void {
-  process.on("SIGINT", () => {
-    console.log("\n終了します…");
+/**
+ * 終了シグナルでサーバを閉じ、レジストリの記録を片付ける。
+ *
+ * `registeredPort` が null なら記録の削除はしない (自分が書いた記録ではないため)。
+ * 削除は**同期版**を使う —— ここで await すると exit が遅れ、await しないと
+ * 消える前にプロセスが落ちる (`removeInstanceSync` のコメント)。
+ */
+function installShutdownHandlers(handle: ServerHandle, registeredPort: number | null): void {
+  const shutdown = (message?: string) => {
+    if (message !== undefined) console.log(message);
     handle.close();
+    if (registeredPort !== null) removeInstanceSync(registeredPort);
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    handle.close();
-    process.exit(0);
-  });
+  };
+  process.on("SIGINT", () => shutdown("\n終了します…"));
+  process.on("SIGTERM", () => shutdown());
 }
 
 main().catch((err) => {
