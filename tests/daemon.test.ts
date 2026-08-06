@@ -13,6 +13,7 @@ import {
 import {
   type InstanceRecord,
   isAlive,
+  logPath,
   matchesRoot,
   type RegistryPaths,
   readInstances,
@@ -383,6 +384,199 @@ describe("バックグラウンド起動 → 停止 (結合)", () => {
       const down = await runCli(["down"], { cwd: workDir, state: stateDir });
       expect(down.code).toBe(0);
       expect(down.stdout).toContain("停止対象がありません");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+});
+
+describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () => {
+  let workDir: string;
+  let stateDir: string;
+  let paths: RegistryPaths;
+  /** 各テストが起こしたフォアグラウンドプロセス (afterEach で確実に落とす) */
+  let spawned: ReturnType<typeof Bun.spawn>[];
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "yomi-fg-work-"));
+    stateDir = await mkdtemp(join(tmpdir(), "yomi-fg-state-"));
+    paths = resolvePaths({ XDG_STATE_HOME: stateDir });
+    await writeFile(join(workDir, "README.md"), "# テスト\n", "utf8");
+    spawned = [];
+  });
+
+  afterEach(async () => {
+    for (const proc of spawned) {
+      try {
+        proc.kill(9);
+        await proc.exited;
+      } catch {
+        // 既に終了している
+      }
+    }
+    for (const rec of await readInstances(paths)) {
+      try {
+        process.kill(rec.pid, "SIGKILL");
+      } catch {
+        // 既に終了している
+      }
+    }
+    await rm(workDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  /** フォアグラウンドで起動し、listen を始めるまで待つ */
+  async function startForeground(port: number): Promise<ReturnType<typeof Bun.spawn>> {
+    const proc = Bun.spawn([process.execPath, ENTRY, "--port", String(port), "--no-open"], {
+      cwd: workDir,
+      env: { ...process.env, XDG_STATE_HOME: stateDir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    spawned.push(proc);
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tree`);
+        if (res.status === 200) return proc;
+      } catch {
+        // まだ listen していない
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`フォアグラウンド起動が ${port} で listen しませんでした`);
+  }
+
+  test(
+    "フォアグラウンド起動もレジストリに記録され、list に出る",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39310);
+      const proc = await startForeground(port);
+
+      const records = await readInstances(paths);
+      expect(records).toHaveLength(1);
+      const rec = records[0] as InstanceRecord;
+      expect(rec.pid).toBe(proc.pid);
+      expect(rec.port).toBe(port);
+      expect(rec.rootDir).toBe(realpathSync(workDir));
+      // 端末に出るのでログファイルは持たない (バックグラウンドとの唯一の違い)
+      expect(rec.logPath).toBe("");
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+      expect(listed.code).toBe(0);
+      expect(listed.stdout).toContain(String(proc.pid));
+      expect(listed.stdout).toContain(String(port));
+      // PUBLIC 列と起動ディレクトリがバックグラウンドと同じ形で出る
+      expect(listed.stdout).toContain("local");
+      expect(listed.stdout).toContain(realpathSync(workDir));
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "フォアグラウンド起動を yomi down で停止でき、記録も消える",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39320);
+      const proc = await startForeground(port);
+
+      const down = await runCli(["down"], { cwd: workDir, state: stateDir });
+      expect(down.code).toBe(0);
+      expect(down.stdout).toContain("yomi を停止しました");
+
+      await proc.exited;
+      expect(isAlive(proc.pid)).toBe(false);
+      expect(await readInstances(paths)).toEqual([]);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "SIGINT (Ctrl+C) で終了すると記録が残骸として残らない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39330);
+      const proc = await startForeground(port);
+      expect(await readInstances(paths)).toHaveLength(1);
+
+      proc.kill("SIGINT");
+      await proc.exited;
+
+      expect(await readInstances(paths)).toEqual([]);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "SIGTERM に応答しないフォアグラウンドも down が SIGKILL で落とす",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39340);
+      const proc = await startForeground(port);
+
+      // SIGSTOP で「シグナルハンドラを処理できない」状態を作る。#89 で観測した
+      // futex ブロック (event loop が回らず SIGTERM が届かない) と同じ見え方になる
+      process.kill(proc.pid, "SIGSTOP");
+
+      const down = await runCli(["down"], { cwd: workDir, state: stateDir });
+      expect(down.code).toBe(0);
+      expect(down.stdout).toContain("強制終了しました");
+      expect(down.stdout).toContain("SIGKILL");
+
+      await proc.exited;
+      expect(isAlive(proc.pid)).toBe(false);
+      expect(await readInstances(paths)).toEqual([]);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "記録に失敗してもビューアとしては起動する (警告は出す)",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39360);
+      // 状態ディレクトリの位置に**ファイル**を置く → mkdir が失敗し saveInstance が throw する
+      const blocked = join(await mkdtemp(join(tmpdir(), "yomi-fg-blocked-")), "not-a-dir");
+      await writeFile(blocked, "", "utf8");
+
+      const proc = Bun.spawn([process.execPath, ENTRY, "--port", String(port), "--no-open"], {
+        cwd: workDir,
+        env: { ...process.env, XDG_STATE_HOME: blocked },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      spawned.push(proc);
+
+      const deadline = Date.now() + 15_000;
+      let served = false;
+      while (Date.now() < deadline && !served) {
+        try {
+          served = (await fetch(`http://127.0.0.1:${port}/api/tree`)).status === 200;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      // 記録できなくても読める (主機能は記録に依存していない)
+      expect(served).toBe(true);
+
+      proc.kill("SIGINT");
+      await proc.exited;
+      // 何が起きたか分かる形で伝えている (黙って続けない)
+      expect(await new Response(proc.stderr).text()).toContain("記録に失敗");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "up -d の子はレジストリを上書きしない (親が書いた logPath 付きの記録が残る)",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 39350);
+
+      const up = await runCli(["up", "-d", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(up.code).toBe(0);
+
+      const records = await readInstances(paths);
+      expect(records).toHaveLength(1);
+      // 子 (runForeground) が書くと logPath が空になる。親の記録が残っていること
+      expect((records[0] as InstanceRecord).logPath).toBe(logPath(port, paths));
     },
     INTEGRATION_TIMEOUT_MS,
   );
