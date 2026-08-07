@@ -12,6 +12,10 @@
   --selected-text: #0969da;
   --code-bg: #f6f8fa;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --diff-add-bg: #e6ffec;
+  --diff-add-border: #2da44e;
+  --diff-del-bg: #ffebe9;
+  --diff-del-border: #cf222e;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,6 +31,10 @@
     --selected-text: #79c0ff;
     --code-bg: #161b22;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --diff-add-bg: #12261e;
+    --diff-add-border: #3fb950;
+    --diff-del-bg: #25171c;
+    --diff-del-border: #f85149;
   }
 }
 
@@ -44,6 +52,10 @@
   --selected-text: #0969da;
   --code-bg: #f6f8fa;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --diff-add-bg: #e6ffec;
+  --diff-add-border: #2da44e;
+  --diff-del-bg: #ffebe9;
+  --diff-del-border: #cf222e;
 }
 
 :root[data-theme="dark"] {
@@ -59,6 +71,10 @@
   --selected-text: #79c0ff;
   --code-bg: #161b22;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --diff-add-bg: #12261e;
+  --diff-add-border: #3fb950;
+  --diff-del-bg: #25171c;
+  --diff-del-border: #f85149;
 }
 
 * {
@@ -391,6 +407,172 @@ body {
   .conflict-action.is-danger {
     color: #ff7b72;
     border-color: #ff7b72;
+  }
+}
+
+/* ===== 競合の差分ダイアログ (Issue #57) ===== */
+.conflict-diff {
+  position: fixed;
+  inset: 0;
+  z-index: 70; /* クイックオープン (60) より上。競合は失われるものがあるので最優先 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.conflict-diff[hidden] {
+  display: none;
+}
+
+.conflict-diff-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(960px, 100%);
+  max-height: 90vh;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.conflict-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.conflict-diff-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.conflict-diff-summary {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.conflict-diff-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.conflict-diff-legend-item {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/*
+ * 差分の本体。**横スクロールはここだけで起こす** (ページ全体を横に伸ばさない)。
+ * tabindex="0" を付けてあるので、キーボードだけでもスクロールできる。
+ */
+.conflict-diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.conflict-diff-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 行番号。等幅で右寄せにして、桁が揃うようにする */
+.conflict-diff-no {
+  flex: 0 0 3.2em;
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none; /* 差分をコピーしたときに行番号が混ざらない */
+}
+
+/*
+ * **記号でも区別する。** 色だけに頼ると色覚特性のある人と白黒印刷で読めない
+ * (クイックオープンのハイライトと同じ方針)。左の縦線も色に加えた冗長化。
+ */
+.conflict-diff-sign {
+  flex: 0 0 1em;
+  font-weight: 700;
+  user-select: none;
+}
+
+.conflict-diff-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.conflict-diff-row.is-add {
+  background: var(--diff-add-bg);
+  box-shadow: inset 3px 0 0 var(--diff-add-border);
+}
+
+.conflict-diff-row.is-del {
+  background: var(--diff-del-bg);
+  box-shadow: inset 3px 0 0 var(--diff-del-border);
+}
+
+/* 畳んだ同一行 */
+.conflict-diff-skip {
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
+  background: var(--bg-subtle);
+  border-block: 1px solid var(--border);
+  user-select: none;
+}
+
+.conflict-diff-truncated {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.conflict-diff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.conflict-diff-spacer {
+  flex: 1;
+}
+
+@media (max-width: 767px) {
+  .conflict-diff {
+    padding: 2vh 8px;
+  }
+
+  .conflict-diff-panel {
+    max-height: 96vh;
+    padding: 12px;
+  }
+
+  /* 狭い幅では行番号を落とす (テキストの幅を稼ぐ。差分の記号は残す) */
+  .conflict-diff-no {
+    display: none;
+  }
+
+  /* 指で押せる大きさを確保する */
+  .conflict-diff-actions .conflict-action {
+    min-height: 40px;
   }
 }
 

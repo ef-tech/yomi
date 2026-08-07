@@ -1,3 +1,4 @@
+import { collapseUnchanged, diffLines } from "./diff.js";
 import { applyI18n, ERROR_CODE_KEYS, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import {
   isAnchor,
@@ -60,6 +61,18 @@ const els = {
   conflictTakeServer: document.getElementById("conflict-take-server"),
   conflictOverwrite: document.getElementById("conflict-overwrite"),
   conflictDismiss: document.getElementById("conflict-dismiss"),
+  conflictShowDiff: document.getElementById("conflict-show-diff"),
+  // 競合の差分ダイアログ (Issue #57)
+  conflictDiff: document.getElementById("conflict-diff"),
+  conflictDiffSummary: document.getElementById("conflict-diff-summary"),
+  conflictDiffBody: document.getElementById("conflict-diff-body"),
+  conflictDiffLegend: document.getElementById("conflict-diff-legend"),
+  conflictDiffTruncated: document.getElementById("conflict-diff-truncated"),
+  conflictDiffCopyLocal: document.getElementById("conflict-diff-copy-local"),
+  conflictDiffCopyServer: document.getElementById("conflict-diff-copy-server"),
+  conflictDiffTakeServer: document.getElementById("conflict-diff-take-server"),
+  conflictDiffOverwrite: document.getElementById("conflict-diff-overwrite"),
+  conflictDiffClose: document.getElementById("conflict-diff-close"),
   toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
   themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
   // UI 言語トグル (Issue #48)
@@ -203,6 +216,7 @@ wireTopbarAutohide();
 wireSidebarSwipe();
 wireTocActions();
 wireLinkNavigation();
+wireConflictDiff();
 wireKeyboard();
 wireBeforeUnload();
 wireHistoryNavigation();
@@ -1468,6 +1482,7 @@ function showConflict(payload) {
 function hideConflict() {
   conflictServerSnapshot = null;
   els.conflictBanner.hidden = true;
+  closeConflictDiff();
 }
 
 function takeServerVersion() {
@@ -1486,8 +1501,220 @@ function takeServerVersion() {
 }
 
 function forceOverwrite() {
+  // **スナップショットを先に読む。** hideConflict がそれを捨てるので、
+  // 順番を逆にすると差分ダイアログから押したときに何を上書きするか分からなくなる
   hideConflict();
   saveEdit({ force: true });
+}
+
+/* ===== 競合の差分ダイアログ (Issue #57) ===== */
+
+/**
+ * 変更行の前後に残す同一行の数。
+ *
+ * 3 行あると「どの段落の話か」が分かる (git の既定と同じ)。増やすほど文脈は増えるが、
+ * 差分そのものを探すスクロールも増える。
+ */
+const CONFLICT_DIFF_CONTEXT = 3;
+
+/** 差分ダイアログを閉じたときのフォーカス戻り先。 */
+let conflictDiffReturnFocus = null;
+
+function wireConflictDiff() {
+  els.conflictShowDiff.addEventListener("click", () => openConflictDiff());
+  els.conflictDiffClose.addEventListener("click", () => closeConflictDiff());
+  els.conflictDiffTakeServer.addEventListener("click", () => takeServerVersion());
+  els.conflictDiffOverwrite.addEventListener("click", () => forceOverwrite());
+  els.conflictDiffCopyLocal.addEventListener("click", () =>
+    copyConflictSide(els.editor.value, "conflict.diff.copiedLocal"),
+  );
+  els.conflictDiffCopyServer.addEventListener("click", () =>
+    copyConflictSide(conflictServerSnapshot?.raw ?? "", "conflict.diff.copiedServer"),
+  );
+
+  // 背景 (パネルの外) をクリックしたら閉じる
+  els.conflictDiff.addEventListener("click", (ev) => {
+    if (ev.target === els.conflictDiff) closeConflictDiff();
+  });
+
+  // **`document` の capture で拾う。** パネル要素に付けると、フォーカスがパネル外へ
+  // 落ちた瞬間に Esc も Tab も届かなくなる (クイックオープンで踏んだのと同じ罠。
+  // `wireQuickOpen` のコメントに理由を書いてある)。
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (els.conflictDiff.hidden) return;
+      handleConflictDiffKeydown(ev);
+    },
+    true,
+  );
+}
+
+function handleConflictDiffKeydown(ev) {
+  if (ev.isComposing) return;
+
+  if (ev.key === "Escape") {
+    // **バブルさせない。** 最前面 (z-index 70) なので、1 回の Esc で背後の
+    // sidebar や外部リンクバナーまで閉じてはいけない
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeConflictDiff();
+    return;
+  }
+
+  if (ev.key === "Tab") {
+    // **フォーカスをダイアログに閉じ込める。** `aria-modal="true"` を宣言している以上、
+    // 背後のエディタやツリーへ抜けられるのは宣言と実体の食い違いになる。
+    // ここはクイックオープンと違って**フォーカスできる要素が複数ある**ので、
+    // 端で折り返す本来のフォーカストラップが要る。
+    const focusables = conflictDiffFocusables();
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+
+    if (!els.conflictDiff.contains(active)) {
+      ev.preventDefault();
+      (ev.shiftKey ? last : first).focus();
+      return;
+    }
+    if (ev.shiftKey && active === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && active === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  }
+}
+
+/** ダイアログ内でフォーカスを取れる要素を、DOM 順で返す。 */
+function conflictDiffFocusables() {
+  return Array.from(
+    els.conflictDiff.querySelectorAll("button:not([disabled]), [tabindex='0']"),
+  ).filter((el) => !el.hidden);
+}
+
+function openConflictDiff() {
+  if (!conflictServerSnapshot) return;
+  conflictDiffReturnFocus = document.activeElement;
+  renderConflictDiff();
+  els.conflictDiff.hidden = false;
+  // 最初のフォーカスは先頭の要素へ。通常は差分本体なので、**まず中身を読ませる**形になる
+  // (いきなり「サーバ内容を取り込む」に当てない —— 誤爆すると編集が消える)。
+  // 大きすぎて差分を出せなかったときは本体が hidden なので、自動的に次の要素へ回る
+  conflictDiffFocusables()[0]?.focus();
+}
+
+function closeConflictDiff() {
+  if (els.conflictDiff.hidden) return;
+  els.conflictDiff.hidden = true;
+  els.conflictDiffBody.replaceChildren();
+  const back = conflictDiffReturnFocus;
+  conflictDiffReturnFocus = null;
+  // **`<body>` は戻り先として採用しない。** 「どこにも当たっていない」のと同じで、
+  // キーボード操作の起点が消える。
+  //
+  // **戻り先が消えていることがある。** 採用・上書きを選ぶとバナーごと閉じるので、
+  // ダイアログやバナーの中にあった戻り先は非表示になる。`isConnected` は true のままで
+  // 空振りを検出できないため、`focus()` が実際に効いたかを見る。
+  const candidates = [
+    back,
+    els.conflictBanner.hidden ? null : els.conflictShowDiff,
+    // まだ編集中なら本文へ返す (競合は編集中に起きるので、ここが自然な続き)
+    state.editing ? els.editor : null,
+    els.editBtn,
+  ];
+  for (const el of candidates) {
+    if (!el || el === document.body || !el.isConnected || typeof el.focus !== "function") continue;
+    el.focus();
+    if (document.activeElement === el) return;
+  }
+}
+
+function renderConflictDiff() {
+  const localText = els.editor.value;
+  const serverText = conflictServerSnapshot?.raw ?? "";
+  const result = diffLines(localText, serverText);
+
+  els.conflictDiffTruncated.hidden = !result.truncated;
+  els.conflictDiffBody.replaceChildren();
+  // **差分が無いなら枠も凡例も出さない。** 空の枠と「- ローカル / + サーバ」だけが
+  // 残ると、差分を出そうとして失敗したように見える
+  els.conflictDiffBody.hidden = result.truncated;
+  els.conflictDiffLegend.hidden = result.truncated;
+
+  if (result.truncated) {
+    // 差分は出さないが、**選択肢は残す**。人は中身をコピーして自分で比べられる
+    els.conflictDiffSummary.textContent = "";
+    return;
+  }
+
+  // **`diffLines` はローカル → サーバの向き**なので、`removed` が「ローカルにしかない行」、
+  // `added` が「サーバにしかない行」。文言も左右で言い切り、増えた/減ったと言わない
+  // (どちらを基準に増減と呼ぶかは読み手によって逆になる)。
+  els.conflictDiffSummary.textContent =
+    result.stats.added === 0 && result.stats.removed === 0
+      ? t("conflict.diff.identical")
+      : t("conflict.diff.summary", {
+          local: String(result.stats.removed),
+          server: String(result.stats.added),
+        });
+
+  const frag = document.createDocumentFragment();
+  for (const row of collapseUnchanged(result.rows, CONFLICT_DIFF_CONTEXT)) {
+    frag.appendChild(
+      row.type === "skip" ? buildConflictSkipRow(row.count) : buildConflictDiffRow(row),
+    );
+  }
+  els.conflictDiffBody.appendChild(frag);
+}
+
+/**
+ * 差分 1 行を組み立てる。
+ *
+ * **innerHTML を使わない。** 中身は Markdown の生テキストなので `<script>` も `&` も
+ * 入りうる。テキストノードで組み立てれば、エスケープ漏れの経路そのものが無い
+ * (Issue #21 / #59 のサニタイズ方針を迂回しない)。
+ */
+function buildConflictDiffRow(row) {
+  const div = document.createElement("div");
+  div.className = `conflict-diff-row is-${row.type}`;
+
+  const no = document.createElement("span");
+  no.className = "conflict-diff-no";
+  // 片側にしか無い行は、その側の番号だけを出す
+  no.textContent = row.type === "add" ? String(row.rightNo) : String(row.leftNo);
+  div.appendChild(no);
+
+  const sign = document.createElement("span");
+  sign.className = "conflict-diff-sign";
+  // **色だけに頼らない。** 記号があれば白黒でも色覚特性があっても読み取れる
+  sign.textContent = row.type === "del" ? "-" : row.type === "add" ? "+" : " ";
+  div.appendChild(sign);
+
+  const text = document.createElement("span");
+  text.className = "conflict-diff-text";
+  text.textContent = row.text;
+  div.appendChild(text);
+
+  return div;
+}
+
+function buildConflictSkipRow(count) {
+  const div = document.createElement("div");
+  div.className = "conflict-diff-skip";
+  div.textContent = t("conflict.diff.skipped", { count: String(count) });
+  return div;
+}
+
+async function copyConflictSide(text, messageKey) {
+  try {
+    await copyTextToClipboard(text);
+    setStatus("ok", t(messageKey));
+  } catch {
+    setStatus("error", t("conflict.diff.copyFailed"));
+  }
 }
 
 /* ===== リンクナビゲーション ===== */
