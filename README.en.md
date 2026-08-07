@@ -159,7 +159,8 @@ yomi down --port 3939
 - Matched characters are shown in bold with an underline (not signalled by colour alone)
 - **The candidates are exactly what the left tree shows.** Files excluded by `.yomiignore` or beyond `--depth` never appear
 - Navigation goes through the same path as a normal file selection, so the **unsaved-changes prompt, browser history, and tree highlighting all behave as before**
-- `Ctrl/Cmd+P` does not open while editing (so it does not get in the way of typing)
+- **It opens while editing too.** Choosing a candidate with unsaved changes shows the same discard prompt as a normal file selection
+- **Japanese file names are searchable too.** Keys are left alone while an IME is composing, so confirming a conversion with `Enter` never opens a file by accident
 
 Full-text search of file contents is out of scope.
 
