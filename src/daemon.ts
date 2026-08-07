@@ -127,7 +127,7 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
 export async function assertPortIsFree(
   host: string,
   port: number,
-  paths: RegistryPaths = resolvePaths(),
+  paths: RegistryPaths,
 ): Promise<void> {
   const existing = (await readInstances(paths)).find((r) => r.port === port);
   if (existing && isAlive(existing.pid)) {

@@ -20,7 +20,7 @@ import {
   resolvePaths,
   saveInstance,
 } from "../src/instances.ts";
-import { findAvailablePort } from "../src/port.ts";
+import { DEFAULT_START_PORT, findAvailablePort } from "../src/port.ts";
 
 const ENTRY = join(import.meta.dir, "..", "bin", "yomi.ts");
 
@@ -503,28 +503,41 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
       INTEGRATION_TIMEOUT_MS,
     );
 
+    // **findAvailablePort の走査範囲は 3939 から 50 個 (src/port.ts)。** 事前検査を
+    // --port 明示時に限っているので、ここを誤ると省略時まで落とすようになる。
+    // 走査範囲の先頭を塞いだうえで「別のポートで起動できる」ことまで見る
+    // (走査範囲外を塞いでも、自動探索は素通りするので何も検証できない)。
     test(
-      "--port を省略したときは自動探索が働き、衝突しない",
+      "--port を省略しても自動探索が働き、塞がれたポートを避けて起動する",
       async () => {
-        const taken = await findAvailablePort("127.0.0.1", 39380);
-        await startForeground(taken);
-
-        // --port なしなら findAvailablePort が空きを探すので、事前検査に掛からず起動する
-        const proc = Bun.spawn([process.execPath, ENTRY, "--no-open"], {
-          cwd: workDir,
-          env: { ...process.env, XDG_STATE_HOME: stateDir },
-          stdout: "pipe",
-          stderr: "pipe",
+        const taken = await findAvailablePort("127.0.0.1", DEFAULT_START_PORT);
+        // yomi ではない何かが走査範囲の先頭を掴んでいる状態を作る
+        const holder = Bun.listen({
+          hostname: "127.0.0.1",
+          port: taken,
+          socket: { data() {}, open() {}, close() {} },
         });
-        spawned.push(proc);
+        try {
+          const proc = Bun.spawn([process.execPath, ENTRY, "--no-open"], {
+            cwd: workDir,
+            env: { ...process.env, XDG_STATE_HOME: stateDir },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          spawned.push(proc);
 
-        const deadline = Date.now() + 15_000;
-        let started = false;
-        while (Date.now() < deadline && !started) {
-          started = (await readInstances(paths)).length === 2;
-          if (!started) await new Promise((r) => setTimeout(r, 100));
+          const deadline = Date.now() + 15_000;
+          let records: InstanceRecord[] = [];
+          while (Date.now() < deadline && records.length === 0) {
+            records = await readInstances(paths);
+            if (records.length === 0) await new Promise((r) => setTimeout(r, 100));
+          }
+          expect(records).toHaveLength(1);
+          // 塞がれたポートを避けて別のポートで起動している
+          expect((records[0] as InstanceRecord).port).not.toBe(taken);
+        } finally {
+          holder.stop(true);
         }
-        expect(started).toBe(true);
       },
       INTEGRATION_TIMEOUT_MS,
     );
