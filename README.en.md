@@ -277,7 +277,24 @@ Pressing the "Edit" button in the right pane's header switches to a `<textarea>`
 - **Save**: the "Save and close" button (save → end editing), or `Ctrl/Cmd+S` (save only, keep editing)
 - **Discard**: the "Discard" button drops unsaved changes and exits edit mode
 - **Unsaved indicator**: `● Unsaved` lights up in the header. Closing the tab prompts a warning
-- **Concurrent edit (Lost Update) detection**: if another process rewrites the same file while editing, a conflict banner appears on save. Choose from "Load server version", "Force overwrite", or "Close"
+- **Concurrent edit (Lost Update) detection**: if another process rewrites the same file while editing, a conflict banner appears on save. Choose from "Show diff", "Load server version", "Force overwrite", or "Close"
+
+##### Diff on conflict (Issue #57)
+
+"Show diff" in the conflict banner lets you **compare your edits with the latest server content line by line** before deciding which one to keep.
+
+| Marker | Meaning |
+|---|---|
+| `-` (red, left rule) | Line that only exists in your version |
+| `+` (green, left rule) | Line that only exists on the server |
+| `N line(s) hidden` | Unchanged lines far from any change, collapsed |
+
+- **Not signalled by colour alone.** The `-` / `+` markers and the left rule carry the same information (light and dark themes both supported)
+- "Load server version" and "Force overwrite" can be run straight from the diff view, and either side can be **copied**
+- **Your edits are never lost before you choose** — closing the dialog leaves you in edit mode with your text intact
+- Fully keyboard operable (`Tab` cycles inside the dialog, `Esc` closes it)
+- **Large documents skip the diff** (over 2000 lines / 512 KB). A frozen screen is worse than no diff, so the choices and the copy buttons remain. A long document with only a small change is still diffed
+- **No automatic merge.** At the point the save fails the client no longer has the common ancestor, so merging would produce a third version that is neither side
 
 #### Creating new files
 
