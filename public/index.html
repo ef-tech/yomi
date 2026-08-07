@@ -329,7 +329,7 @@
           autocomplete="off"
           spellcheck="false"
           role="combobox"
-          aria-expanded="true"
+          aria-expanded="false"
           aria-controls="quick-open-list"
           aria-autocomplete="list"
           data-i18n-placeholder="quickOpen.placeholder"
@@ -338,7 +338,13 @@
           aria-label="ファイル名で絞り込み (↑↓ で選択、Enter で開く、Esc で閉じる)"
         />
         <ul id="quick-open-list" class="quick-open-list" role="listbox"></ul>
-        <p id="quick-open-empty" class="quick-open-empty" data-i18n="quickOpen.empty" hidden>
+        <p
+          id="quick-open-empty"
+          class="quick-open-empty"
+          role="status"
+          data-i18n="quickOpen.empty"
+          hidden
+        >
           一致するファイルがありません
         </p>
       </div>

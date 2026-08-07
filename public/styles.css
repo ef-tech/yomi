@@ -1489,13 +1489,24 @@ body {
   box-shadow: inset 3px 0 0 var(--link);
 }
 
+/* ファイル名は主。縮める順番は「ディレクトリが先」なので、こちらは縮めない */
 .quick-open-item .qo-name {
   font-weight: 600;
+  white-space: nowrap;
 }
 
+/*
+ * ディレクトリは従。深い階層で行が溢れるときは**こちらを削る**。
+ * flex の子は既定で min-width:auto = 中身より小さくならないので、
+ * min-width:0 を入れないと縮まずにパネルの overflow:hidden で切り落とされる。
+ */
 .quick-open-item .qo-dir {
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
   color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 一致した文字。太字 + 下線で、色覚に依存せず読み取れるようにする */
