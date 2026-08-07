@@ -5,12 +5,12 @@ import {
   errorText,
   fetchJson,
   LANG_MODES,
-  MOBILE_MEDIA_QUERY,
   restorePreferences as restorePrefsInto,
   sanitize,
   THEME_MODES,
   VIEW_MODES,
 } from "./app-context.js";
+import { createMobileUi } from "./app-mobile.js";
 import { createWebSocketClient } from "./app-websocket.js";
 import { applyI18n, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import {
@@ -56,9 +56,6 @@ const ctx = { els, state };
 ctx.status = createStatus(ctx);
 const { setStatus, clearStatus } = ctx.status;
 
-/** スマホ判定 (Issue #25)。767px 以下を sidebar overlay モードとする。 */
-const MOBILE_QUERY = window.matchMedia(MOBILE_MEDIA_QUERY);
-
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 function effectiveTheme(mode) {
@@ -90,6 +87,36 @@ darkQuery.addEventListener("change", () => {
   }
 });
 
+// **モジュールを先に組み立てて ctx に差し込む。** 配線 (wire*) の中で参照されるので、
+// 起動シーケンスより前に揃えておく。まだ app.js に残っている責務は、切り出し済みの
+// モジュールから同じ形で見えるようオブジェクトにして公開する (段階的分割の足場。
+// 分割が終われば createXxx(ctx) の戻り値に置き換わる)。
+ctx.tree = { renderTree, highlightSelected };
+ctx.document = { loadFile, applyFile };
+ctx.editor = {
+  showConflict,
+  /** 編集モードの toggle (編集ボタンと ⋮ メニューの両方から使う) */
+  toggleEditMode() {
+    if (state.editing) {
+      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
+    } else {
+      enterEditMode();
+    }
+  },
+};
+ctx.preview = {
+  applyThemeMode,
+  saveThemeMode,
+  initMermaid,
+  renderCurrentFile,
+  applyViewMode,
+  saveViewMode,
+  renderMermaid,
+  toggleToc,
+};
+ctx.mobile = createMobileUi(ctx);
+ctx.ws = createWebSocketClient(ctx);
+
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
 onLangChange(reapplyDynamicI18n);
@@ -104,25 +131,21 @@ wireThemeToggle();
 wireLangToggle();
 wireEditActions();
 wireCopyPath();
-wireSidebar();
+// **登録順を変えない。** sidebar の Esc ハンドラは外部 URL バナーが開いていたら譲る
+// 設計で、後から登録される wireKeyboard 側がバナーを閉じる。順序が逆転すると
+// 「Esc 1 回で両方閉じる」に変わってしまう。
+ctx.mobile.wireSidebar();
 wireTreeToolbar();
-wireOverflowMenu();
-wireTocFab();
-wireTopbarAutohide();
-wireSidebarSwipe();
+ctx.mobile.wireOverflowMenu();
+ctx.mobile.wireTocFab();
+ctx.mobile.wireTopbarAutohide();
+ctx.mobile.wireSidebarSwipe();
 wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
 wireBeforeUnload();
 wireHistoryNavigation();
 wireScrollSync();
-
-// **モジュールを ctx に差し込んでから起動する。** websocket は document / tree / editor を
-// 呼ぶので、参照が揃う前に走らせない。
-ctx.tree = { renderTree, highlightSelected };
-ctx.document = { loadFile, applyFile };
-ctx.editor = { showConflict };
-ctx.ws = createWebSocketClient(ctx);
 
 init();
 ctx.ws.connect();
@@ -453,7 +476,7 @@ async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
   applyFile(data);
   scrollIntoHash(hash);
   // スマホ表示ではファイル選択後に sidebar overlay を自動で閉じる
-  if (mode === "push") closeSidebarIfMobile();
+  if (mode === "push") ctx.mobile.closeSidebarIfMobile();
 
   if (mode === "none") {
     setStatus("ok", t("status.showing", { path: data.path }));
@@ -931,196 +954,6 @@ async function copyTextToClipboard(text) {
     document.body.removeChild(ta);
   }
   if (!ok) throw new Error(t("error.copyExec"));
-}
-
-/* ===== Sidebar overlay (Issue #25, スマホ専用) ===== */
-
-function wireSidebar() {
-  els.menuBtn.addEventListener("click", () => {
-    const isOpen = els.sidebar.classList.contains("is-open");
-    setSidebarOpen(!isOpen);
-  });
-  els.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Escape") return;
-    if (!els.sidebar.classList.contains("is-open")) return;
-    // 外部 URL バナーが開いている時は banner 側の Esc ハンドラを優先
-    if (!els.externalLinkBanner.hidden) return;
-    setSidebarOpen(false);
-  });
-  // viewport がデスクトップ幅に戻ったら自動で閉じる (overlay 状態が残ると視覚的に変)
-  MOBILE_QUERY.addEventListener("change", (ev) => {
-    if (!ev.matches) setSidebarOpen(false);
-  });
-}
-
-function setSidebarOpen(open) {
-  els.sidebar.classList.toggle("is-open", open);
-  els.sidebarBackdrop.hidden = !open;
-  els.menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-/** スマホ表示でファイルを選んだら自動で sidebar を閉じる */
-function closeSidebarIfMobile() {
-  if (MOBILE_QUERY.matches) setSidebarOpen(false);
-}
-
-/* ===== ⋮ Overflow menu (Issue #30, スマホ専用) ===== */
-
-function wireOverflowMenu() {
-  els.overflowBtn.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    setOverflowOpen(els.overflowMenu.hidden);
-  });
-  // 外クリックで閉じる
-  document.addEventListener("click", (ev) => {
-    if (els.overflowMenu.hidden) return;
-    if (els.overflowMenu.contains(ev.target)) return;
-    if (els.overflowBtn.contains(ev.target)) return;
-    setOverflowOpen(false);
-  });
-  // Esc で閉じる (外部 URL バナー優先は既存 keydown リスナーと衝突しないよう個別判定)
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Escape") return;
-    if (els.overflowMenu.hidden) return;
-    if (!els.externalLinkBanner.hidden) return;
-    setOverflowOpen(false);
-  });
-
-  // overflow-theme-btn → applyThemeMode (PC 側 wireThemeToggle と同じロジックを再利用)
-  for (const btn of els.overflowThemeBtns) {
-    btn.addEventListener("click", () => {
-      const mode = btn.dataset.themeMode;
-      if (!mode || !THEME_MODES.includes(mode)) return;
-      if (state.themeMode === mode) return;
-      applyThemeMode(mode);
-      saveThemeMode();
-      initMermaid(mode);
-      if (state.currentHtml && state.viewMode !== "md") {
-        renderCurrentFile();
-      }
-    });
-  }
-
-  // overflow-view-btn → applyViewMode
-  for (const btn of els.overflowViewBtns) {
-    btn.addEventListener("click", () => {
-      const mode = btn.dataset.mode;
-      if (!mode || !VIEW_MODES.includes(mode)) return;
-      if (state.viewMode === mode) return;
-      state.tocPreviewOverride = false;
-      applyViewMode(mode);
-      saveViewMode();
-      if (state.currentHtml && mode !== "md") {
-        renderMermaid().catch(() => {});
-      }
-    });
-  }
-
-  // overflow-edit → 編集モード toggle (既存 editBtn と同じ動作)
-  els.overflowEdit.addEventListener("click", () => {
-    setOverflowOpen(false);
-    if (state.editing) {
-      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
-    } else {
-      enterEditMode();
-    }
-  });
-}
-
-function setOverflowOpen(open) {
-  els.overflowMenu.hidden = !open;
-  els.overflowBtn.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-/* ===== FAB 目次 (Issue #30, スマホ専用) ===== */
-
-function wireTocFab() {
-  els.tocFab.addEventListener("click", () => {
-    if (state.editing) return;
-    toggleToc();
-  });
-}
-
-/* ===== sticky topbar 自動 hide/show on scroll (Issue #30, スマホ専用) ===== */
-
-const TOPBAR_HIDE_THRESHOLD = 5; // この px 以上下スクロールで hide
-const TOPBAR_TOP_GUARD = 30; // 上端 30px 以内では常に show
-
-function wireTopbarAutohide() {
-  const topbar = document.querySelector(".topbar");
-  if (!topbar) return;
-  const targets = [els.preview, els.source];
-  const lastY = new WeakMap();
-  const onScroll = (target) => {
-    if (!MOBILE_QUERY.matches) return;
-    const y = target.scrollTop;
-    const prev = lastY.get(target) ?? 0;
-    const dy = y - prev;
-    if (y < TOPBAR_TOP_GUARD) {
-      topbar.classList.remove("is-hidden");
-    } else if (dy > TOPBAR_HIDE_THRESHOLD) {
-      topbar.classList.add("is-hidden");
-      // overflow menu が開いていたら一緒に閉じる (見た目上違和感を避ける)
-      if (!els.overflowMenu.hidden) setOverflowOpen(false);
-    } else if (dy < -TOPBAR_HIDE_THRESHOLD) {
-      topbar.classList.remove("is-hidden");
-    }
-    lastY.set(target, y);
-  };
-  for (const t of targets) {
-    if (t) t.addEventListener("scroll", () => onScroll(t), { passive: true });
-  }
-}
-
-/* ===== 端スワイプで drawer 開閉 (Issue #30, スマホ専用) ===== */
-
-const SWIPE_EDGE_PX = 24;
-const SWIPE_MIN_DX = 60;
-const SWIPE_MAX_DY = 50;
-
-function wireSidebarSwipe() {
-  let startX = null;
-  let startY = null;
-  let startedFromEdge = false;
-  let startedInDrawer = false;
-
-  document.addEventListener(
-    "touchstart",
-    (ev) => {
-      if (!MOBILE_QUERY.matches) return;
-      if (ev.touches.length !== 1) return;
-      const t = ev.touches[0];
-      startX = t.clientX;
-      startY = t.clientY;
-      const open = els.sidebar.classList.contains("is-open");
-      startedFromEdge = !open && t.clientX <= SWIPE_EDGE_PX;
-      startedInDrawer = open && els.sidebar.contains(ev.target);
-    },
-    { passive: true },
-  );
-
-  document.addEventListener(
-    "touchend",
-    (ev) => {
-      if (!MOBILE_QUERY.matches) return;
-      if (startX === null) return;
-      const t = ev.changedTouches[0];
-      const dx = t.clientX - startX;
-      const dy = Math.abs(t.clientY - startY);
-      const fromEdge = startedFromEdge;
-      const inDrawer = startedInDrawer;
-      startX = startY = null;
-      startedFromEdge = startedInDrawer = false;
-      if (dy > SWIPE_MAX_DY) return;
-      if (fromEdge && dx > SWIPE_MIN_DX) {
-        setSidebarOpen(true);
-      } else if (inDrawer && dx < -SWIPE_MIN_DX) {
-        setSidebarOpen(false);
-      }
-    },
-    { passive: true },
-  );
 }
 
 let copyResetTimer = null;
