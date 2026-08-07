@@ -293,7 +293,7 @@ Pressing the "Edit" button in the right pane's header switches to a `<textarea>`
 - "Load server version" and "Force overwrite" can be run straight from the diff view, and either side can be **copied**
 - **Your edits are never lost before you choose** — closing the dialog leaves you in edit mode with your text intact
 - Fully keyboard operable (`Tab` cycles inside the dialog, `Esc` closes it)
-- **Large documents skip the diff** (over 2000 lines / 512 KB). A frozen screen is worse than no diff, so the choices and the copy buttons remain. A long document with only a small change is still diffed
+- **Large documents skip the diff** (over 2000 lines / 512 KB *after* trimming the common head and tail). A frozen screen is worse than no diff, so the choices and the copy buttons remain. Because the limit is measured on what actually gets compared, a long document with only a small change is still diffed
 - **No automatic merge.** At the point the save fails the client no longer has the common ancestor, so merging would produce a third version that is neither side
 
 #### Creating new files
