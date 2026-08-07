@@ -70,7 +70,7 @@ export function createServer(config: ServerConfig): ServerHandle {
 
       if (url.pathname === "/api/file") {
         if (req.method === "GET") {
-          return handleFileRead(config.rootDir, url.searchParams.get("path"));
+          return handleFileRead(config.rootDir, url.searchParams.get("path"), excludes);
         }
         if (req.method === "POST") {
           if (!checkOrigin(req))
@@ -97,7 +97,7 @@ export function createServer(config: ServerConfig): ServerHandle {
 
       if (url.pathname === "/api/asset") {
         if (req.method === "GET" || req.method === "HEAD") {
-          return handleAssetRead(config.rootDir, url.searchParams.get("path"), req);
+          return handleAssetRead(config.rootDir, url.searchParams.get("path"), req, excludes);
         }
         return new Response("Method Not Allowed", {
           status: 405,
@@ -241,7 +241,30 @@ async function handleTree(
   }
 }
 
-async function handleFileRead(rootDir: string, requested: string | null): Promise<Response> {
+/**
+ * 除外配下への読み取りを拒否するレスポンス (Issue #65)。
+ *
+ * **ファイルの存在確認より前に返す**ため、除外配下にあるパスは実在しても存在しなくても
+ * 同じ 400 になる (存在有無を漏らさない)。
+ *
+ * 対象は `.yomiignore` と `DEFAULT_EXCLUDES` だけで、**`--depth` 超過は含めない**。
+ * depth は `tree -L` 相当の走査深さの上限で、境界のディレクトリはツリーに残る
+ * (`scanner.ts` の `truncatedDirs`) = 「中を見ていない」ことの表明であって除外ではない。
+ * README も起動時間と inotify watch 数を下げるための指定として説明している。
+ * 読み取りまで塞ぐと、浅い md から深い md への内部リンク遷移が動かなくなる。
+ */
+function excludedPathResponse(rel: string): Response {
+  return Response.json(
+    { error: `除外設定により読み取れません: ${rel}`, code: "excluded_path" },
+    { status: 400 },
+  );
+}
+
+async function handleFileRead(
+  rootDir: string,
+  requested: string | null,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
@@ -251,6 +274,11 @@ async function handleFileRead(rootDir: string, requested: string | null): Promis
 
   try {
     const safe = await resolveSafe(rootDir, requested);
+    // ツリーに出ないものは読めない。判定はシンボリックリンク解決後の rel に対して行うので、
+    // 除外配下を指すリンクを root 直下に置いても迂回できない。
+    if (isExcludedPath(safe.rel, excludes)) {
+      return excludedPathResponse(safe.rel);
+    }
     const buf = await readFile(safe.abs);
     const raw = buf.toString("utf-8");
     const html = await renderMarkdown(raw, { currentPath: safe.rel });
@@ -488,6 +516,7 @@ async function handleAssetRead(
   rootDir: string,
   requested: string | null,
   req: Request,
+  excludes: ReadonlySet<string>,
 ): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
@@ -504,6 +533,12 @@ async function handleAssetRead(
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
+  }
+
+  // 除外配下は開く前に弾く (Issue #65)。fd を取る前に返すので、除外配下のファイルは
+  // 実在しても ENOENT との区別がつかない。
+  if (isExcludedPath(safe.rel, excludes)) {
+    return excludedPathResponse(safe.rel);
   }
 
   // Issue #22: TOCTOU 対策 + 強 ETag (sha256 ベース)。
