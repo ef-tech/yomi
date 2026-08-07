@@ -417,6 +417,27 @@ sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 
 If you cannot raise the limit (e.g., no `sudo`), you can also narrow the watched levels with [`--depth`](#options). For example, `yomi --depth 2` watches only two levels, keeping the watch count low.
 
+### Automatic recovery when yomi stops responding (Issue #91)
+
+A long-running yomi can end up in a state where **connections are accepted but no response comes back, and neither Ctrl+C nor `kill` stops it** (observed after more than 7 days of uptime). The main thread stalls on an internal lock and never returns to the event loop; because signal handlers are dispatched from that same event loop, Ctrl+C never arrives either.
+
+**The root cause has not been identified yet.** yomi therefore runs a watchdog thread: if the main thread stops responding for 60 seconds, it prints a message like the following and force-terminates the process. Restarting recovers it.
+
+```
+yomi: メインスレッドが 63 秒間応答していません。
+  event loop が停止しており、Ctrl+C も kill も効かない状態です (Issue #91)。
+  復旧のためプロセスを強制終了します。再起動してください。
+  稼働時間: 682341 秒
+  この状態を踏んだことを https://github.com/ef-tech/yomi/issues/91 に報告してもらえると助かります。
+  スレッドの状態 (この情報が原因究明の手がかりになります):
+    tid=3300359 comm=bun wchan=futex_do_wait
+    ...
+```
+
+**If you see this message, please paste it into [#91](https://github.com/ef-tech/yomi/issues/91).** The reproduction conditions are still unknown, and the thread states are the only lead we have. When running in the background (`yomi up -d`), the message goes to the log in the state directory.
+
+The watchdog does **not** affect normal operation. If the whole process is frozen (for example when a laptop sleeps), it tells that apart from a real stall by looking at its own scheduling delay, so it does not fire spuriously.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE) for details.
