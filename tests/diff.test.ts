@@ -100,18 +100,43 @@ describe("diffLines", () => {
 
     // 行数では弾けない「巨大な 1 行」を落とす
     test("バイト数が上限を超えたら truncated", () => {
-      const huge = "x".repeat(2000);
-      const result = diffLines(huge, `${huge}y`, { maxBytes: 100 });
+      const result = diffLines("x".repeat(2000), "y".repeat(2000), { maxBytes: 100 });
 
       expect(result.truncated).toBe(true);
       expect(result.reason).toBe("bytes");
     });
 
     test("バイト数は UTF-8 で数える（日本語で上限をすり抜けない）", () => {
-      // 「あ」は UTF-8 で 3 バイト。100 文字 = 300 バイト
-      const ja = "あ".repeat(100);
-      expect(diffLines(ja, ja, { maxBytes: 200 }).truncated).toBe(true);
-      expect(diffLines(ja, ja, { maxBytes: 400 }).truncated).toBe(false);
+      // 「あ」「い」は UTF-8 で 3 バイト。100 文字 = 300 バイト
+      const a = "あ".repeat(100);
+      const b = "い".repeat(100);
+      expect(diffLines(a, b, { maxBytes: 200 }).truncated).toBe(true);
+      expect(diffLines(a, b, { maxBytes: 400 }).truncated).toBe(false);
+    });
+
+    // **上限はトリム後に見る。** 文書全体の大きさで判断すると、README が保証している
+    // 「変更が一部なら長い文書でも差分は出る」が破れる（比較対象は 1 行 vs 1 行なのに諦める）
+    test("上限を超える大きさの文書でも、差分が小さければバイト数で諦めない", () => {
+      const common = Array.from({ length: 1000 }, (_, i) => `line ${i} ${"x".repeat(40)}`);
+      const local = common.join("\n");
+      const server = [...common.slice(0, 500), "直した行", ...common.slice(501)].join("\n");
+      // 文書全体は 40KB 超。トリム後は 1 行 vs 1 行なので数十バイト
+      expect(new TextEncoder().encode(local).length).toBeGreaterThan(40_000);
+
+      const result = diffLines(local, server, { maxBytes: 1000 });
+
+      expect(result.truncated).toBe(false);
+      expect(result.stats).toEqual({ added: 1, removed: 1 });
+    });
+
+    // トリム前の保険。行に割ることすら重い大きさはここで落とす
+    test("桁違いに大きければ、行に割る前に諦める", () => {
+      // maxBytes の 64 倍がハード上限
+      const huge = "x".repeat(7000);
+      const result = diffLines(huge, huge, { maxBytes: 100 });
+
+      expect(result.truncated).toBe(true);
+      expect(result.reason).toBe("bytes");
     });
   });
 });
@@ -147,6 +172,27 @@ describe("collapseUnchanged", () => {
     const rows = build("a\nb", "a\nX");
     const collapsed = collapseUnchanged(rows, 3);
     expect(collapsed.some((r) => r.type === "skip")).toBe(false);
+  });
+
+  test("context が 0 なら変更行だけが残る", () => {
+    const rows = build("a\nb\nc\nd\ne", "a\nb\nX\nd\ne");
+    const collapsed = collapseUnchanged(rows, 0);
+
+    expect(collapsed).toEqual([
+      { type: "skip", count: 2 },
+      { type: "del", text: "c", leftNo: 3, rightNo: null },
+      { type: "add", text: "X", leftNo: null, rightNo: 3 },
+      { type: "skip", count: 2 },
+    ]);
+  });
+
+  // 負値でも変更行を落とさない（内側のループが回らず全部畳まれるのを防ぐ）
+  test("context が負でも変更行は残る", () => {
+    const rows = build("a\nb\nc", "a\nX\nc");
+    const collapsed = collapseUnchanged(rows, -1);
+
+    expect(collapsed.some((r) => r.type === "del")).toBe(true);
+    expect(collapsed.some((r) => r.type === "add")).toBe(true);
   });
 
   test("畳んだ行数の合計が元の行数と合う", () => {

@@ -26,8 +26,17 @@
 /** 差分を計算する上限 (トリム後の行数)。これを超えたら諦める。 */
 export const MAX_DIFF_LINES = 2000;
 
-/** 差分を計算する上限 (片側のバイト数)。長い 1 行だけのファイルを弾く。 */
+/** 差分を計算する上限 (トリム後・片側のバイト数)。長い 1 行だけのファイルを弾く。 */
 export const MAX_DIFF_BYTES = 512 * 1024;
+
+/**
+ * トリムする前に諦める倍率。
+ *
+ * 上限判定はトリム後に行うが (そうしないと「長い文書の 1 行直し」まで諦める)、
+ * **行に割る前の文字列操作すら重い大きさ**はここで落とす。桁を分けてあるので、
+ * 通常の文書がこの保険に引っかかることはない。
+ */
+const HARD_BYTE_FACTOR = 64;
 
 /**
  * テキストを行に割る。
@@ -112,8 +121,12 @@ export function diffLines(localText, serverText, options = {}) {
   const maxLines = options.maxLines ?? MAX_DIFF_LINES;
   const maxBytes = options.maxBytes ?? MAX_DIFF_BYTES;
 
-  // **バイト数は行に割る前に見る。** 巨大な 1 行 (minify された何か) は行数では弾けない
-  if (byteLength(localText) > maxBytes || byteLength(serverText) > maxBytes) {
+  // **行にすら割れない大きさだけ、ここで落とす。** 上限そのものはトリム後に見るので、
+  // ここは「文字列操作で固まらせない」ためだけの保険。桁を分けてある
+  if (
+    byteLength(localText) > maxBytes * HARD_BYTE_FACTOR ||
+    byteLength(serverText) > maxBytes * HARD_BYTE_FACTOR
+  ) {
     return { rows: [], truncated: true, reason: "bytes", stats: { added: 0, removed: 0 } };
   }
 
@@ -136,8 +149,17 @@ export function diffLines(localText, serverText, options = {}) {
   const midLeft = left.slice(head, left.length - tail);
   const midRight = right.slice(head, right.length - tail);
 
+  // **上限は「トリムした後に残った量」で見る。** ここが実際に DP へ渡る部分で、
+  // 計算量を決めるのもここ。文書全体の大きさで判断すると、**長い文書の 1 行直し**
+  // (比較対象は 1 行 vs 1 行) まで諦めることになる。
+  //
+  // バイト数も同じ理由でトリム後に見る。「巨大な 1 行」はトリムで消えずに
+  // 1 行 vs 1 行として残るので、ここで確実に捕まる。
   if (midLeft.length > maxLines || midRight.length > maxLines) {
     return { rows: [], truncated: true, reason: "lines", stats: { added: 0, removed: 0 } };
+  }
+  if (byteLength(midLeft.join("\n")) > maxBytes || byteLength(midRight.join("\n")) > maxBytes) {
+    return { rows: [], truncated: true, reason: "bytes", stats: { added: 0, removed: 0 } };
   }
 
   const parts = [
@@ -183,11 +205,15 @@ export function diffLines(localText, serverText, options = {}) {
  *   | { type: "skip", count: number })[]} 畳んだ部分は `{ type: "skip", count }` になる
  */
 export function collapseUnchanged(rows, context = 3) {
-  // 残す行に印を付ける (変更行そのものと、その前後 context 行)
+  // 残す行に印を付ける (変更行そのものと、その前後 context 行)。
+  // **変更行は context に関わらず必ず残す** —— 負値を渡されると内側のループが
+  // 1 度も回らず、変更行まで畳まれて「差分が無い」ように見えてしまう
+  const span = Math.max(0, context);
   const keep = new Array(rows.length).fill(false);
   for (let i = 0; i < rows.length; i++) {
     if (rows[i].type === "equal") continue;
-    for (let j = Math.max(0, i - context); j <= Math.min(rows.length - 1, i + context); j++) {
+    keep[i] = true;
+    for (let j = Math.max(0, i - span); j <= Math.min(rows.length - 1, i + span); j++) {
       keep[j] = true;
     }
   }
