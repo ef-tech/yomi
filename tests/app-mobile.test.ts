@@ -137,6 +137,32 @@ describe("⋮ overflow メニュー", () => {
     expect(h.el("overflow-menu").hidden).toBe(true);
   });
 
+  // sidebar と同じく「外部 URL バナーが開いていたら譲る」設計で、これは
+  // **リスナーの登録順に依存する**（overflow の Esc ハンドラが wireKeyboard より
+  // 先に登録され、バナーが開いていれば何もしない）。順序が逆転すると
+  // 「Esc 1 回でバナーも overflow も閉じる」に変わるので、sidebar 側と同様に固定する。
+  test("Esc は外部 URL バナーを優先し、overflow は開いたまま残る", async () => {
+    h = await bootApp({ mobile: true });
+
+    // **バナーを先に開く。** 逆順にすると、リンクの click が overflow の
+    // 「外クリックで閉じる」を発火させて overflow が閉じてしまう (既存の仕様)。
+    const a = h.document.createElement("a");
+    a.setAttribute("href", "https://example.com/");
+    h.el("preview").appendChild(a);
+    h.click(a);
+    expect(h.el("external-link-banner").hidden).toBe(false);
+
+    h.click(h.el("overflow-btn"));
+    expect(h.el("overflow-menu").hidden).toBe(false);
+
+    h.keydown(h.document, { key: "Escape" });
+    expect(h.el("external-link-banner").hidden).toBe(true);
+    expect(h.el("overflow-menu").hidden).toBe(false);
+
+    h.keydown(h.document, { key: "Escape" });
+    expect(h.el("overflow-menu").hidden).toBe(true);
+  });
+
   test("メニュー内のテーマ / 表示モードは PC 側トグルと同じ結果になる", async () => {
     h = await bootApp({ mobile: true });
     h.click(h.el("overflow-btn"));

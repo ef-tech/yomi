@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -15,9 +15,20 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC = join(ROOT, "public");
 const VENDOR = join(PUBLIC, "vendor");
 
-/** `public/` 直下のブラウザ側モジュール (vendor bundle 自体は別テストで検査する)。 */
+/**
+ * `public/` 配下のブラウザ側モジュール (vendor bundle 自体は別テストで検査する)。
+ *
+ * **再帰で集める。** 非再帰だと `public/js/foo.js` のようにサブディレクトリへ置いた
+ * 瞬間、そのファイルが CDN 検査から静かに外れてテストは green のままになる
+ * (「置き場は変わりうる」という上の設計意図に穴が開く)。
+ */
 async function browserModules(): Promise<{ name: string; text: string }[]> {
-  const names = (await readdir(PUBLIC)).filter((n) => n.endsWith(".js"));
+  const entries = await readdir(PUBLIC, { recursive: true, withFileTypes: true });
+  const names = entries
+    .filter((e) => e.isFile() && e.name.endsWith(".js"))
+    .map((e) => relative(PUBLIC, join(e.parentPath, e.name)))
+    // vendor bundle は生成物。別テスト (CDN_HOSTS / URL_MODULE_LOAD) で個別に検査する
+    .filter((rel) => !rel.split(sep).includes("vendor"));
   return Promise.all(
     names.map(async (name) => ({ name, text: await readFile(join(PUBLIC, name), "utf8") })),
   );
