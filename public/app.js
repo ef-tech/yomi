@@ -18,13 +18,29 @@ import { getHashFromUrl, seedNavCounter } from "./navigation.js";
 import { prefs } from "./prefs.js";
 
 /**
- * 画面全体の配線コンテキスト (Issue #78)。
+ * yomi のブラウザ側エントリポイント。
  *
- * **els / state をここで 1 度だけ作る。** モジュール側に持たせるとテストの boot をまたいで
+ * **このファイルの責務は「画面初期化とモジュール結線」だけ** (Issue #78)。機能は
+ * 責務ごとのモジュールに分かれている:
+ *
+ * | モジュール | 担当 |
+ * |---|---|
+ * | `app-context.js` | els / state / 定数 / 共有ユーティリティ (fetchJson・sanitize・status) |
+ * | `app-tree.js` | 左ツリー、ディレクトリ開閉、新規 md 作成 |
+ * | `app-document.js` | ファイル読込、遷移 (`navigateTo`)、履歴、リンク、パスコピー |
+ * | `app-editor.js` | 編集モード、保存、競合バナー |
+ * | `app-preview.js` | Mermaid、表示モード、テーマ、スクロール同期、TOC、タスクリスト |
+ * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
+ * | `app-websocket.js` | ライブリロード |
+ *
+ * ここに残しているのは、どのモジュールにも属さない横断的なもの
+ * (UI 言語切替・グローバルキーボードショートカット・起動シーケンス) だけ。
+ *
+ * **els / state はここで 1 度だけ作る。** モジュール側に持たせるとテストの boot をまたいで
  * 前の jsdom の要素を掴む (理由は `app-context.js` の冒頭)。
  *
- * モジュール間の相互参照は `ctx` 経由の遅延束縛にする。生成順に依存しないので、
- * websocket → document → tree のような循環があっても import が循環しない。
+ * モジュール間の相互参照は `ctx` 経由の遅延束縛にする。document ⇄ preview ⇄ editor ⇄ tree
+ * は循環しているが、`ctx` を挟むので import は循環しない。
  */
 const els = createElements();
 const state = createState();
@@ -32,10 +48,9 @@ const ctx = { els, state };
 ctx.status = createStatus(ctx);
 const { setStatus, clearStatus } = ctx.status;
 
-// **モジュールを先に組み立てて ctx に差し込む。** 配線 (wire*) の中で参照されるので、
-// 起動シーケンスより前に揃えておく。まだ app.js に残っている責務は、切り出し済みの
-// モジュールから同じ形で見えるようオブジェクトにして公開する (段階的分割の足場。
-// 分割が終われば createXxx(ctx) の戻り値に置き換わる)。
+// **モジュールを先に全部組み立ててから配線する。** 互いを `ctx` 経由で呼ぶので、
+// 生成順は関係ない (document ⇄ preview ⇄ editor ⇄ tree は循環している)。
+// 各モジュールは生成時に副作用を持たず、DOM への接続は下の wire* で行う。
 ctx.document = createDocument(ctx);
 ctx.preview = createPreview(ctx);
 ctx.tree = createTree(ctx);
