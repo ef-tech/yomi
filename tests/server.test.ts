@@ -872,13 +872,20 @@ describe("server - 除外配下の読み取り拒否 (Issue #65)", () => {
     await writeFile(join(root, "public.csv"), "a,b\n");
     // 除外配下を指すリンクを root 直下に置いても迂回できないこと
     await symlink(join(root, "private", "creds.csv"), join(root, "link.csv"));
+    await symlink(join(root, "private", "secret.md"), join(root, "link.md"));
+    // 除外配下にルート外を指すリンクがある (unsafe_path オラクルの検証用)
+    await symlink("/etc/hostname", join(root, "private", "escape.csv"));
+    // 除外名そのものが symlink のケース (realpath でその名前が消える)
+    await mkdir(join(root, "real"), { recursive: true });
+    await writeFile(join(root, "real", "inner.csv"), "REAL\n");
+    await symlink(join(root, "real"), join(root, "aliased"));
 
     handle = createServer({
       rootDir: root,
       hostname: "127.0.0.1",
       port: 0,
       watch: false,
-      excludes: new Set(["private", "memo.md", "memo.csv"]),
+      excludes: new Set(["private", "memo.md", "memo.csv", "aliased"]),
     });
     url = `http://127.0.0.1:${handle.server.port}`;
   });
@@ -932,9 +939,57 @@ describe("server - 除外配下の読み取り拒否 (Issue #65)", () => {
   });
 
   test("除外配下を指す symlink 経由でも取得できない (解決後の rel で判定)", async () => {
+    for (const p of ["link.csv", "link.md"]) {
+      const res = await fetch(
+        p.endsWith(".md") ? `${url}/api/file?path=${p}` : `${url}/api/asset?path=${p}`,
+      );
+      expect(res.status).toBe(400);
+      expect(await codeOf(res)).toBe("excluded_path");
+    }
+  });
+
+  // 解決後だけで判定すると、要求していない実パスを教えてしまう。さらに「echo が要求と
+  // 違う」こと自体がリンク先の実在を証明する。
+  test("エラーは要求パスだけを echo し、解決後の実パスを漏らさない", async () => {
     const res = await fetch(`${url}/api/asset?path=link.csv`);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toContain("link.csv");
+    expect(json.error).not.toContain("private");
+    expect(json.error).not.toContain("creds.csv");
+  });
+
+  // 解決前に字句で弾かないと resolveSafe が先に throw し、unsafe_path が返る。
+  // 応答の違いから「除外配下にそのエントリがある」ことが分かってしまう。
+  test("除外配下のルート外 symlink も unsafe_path でなく excluded_path (存在オラクルを塞ぐ)", async () => {
+    const outsideLink = await fetch(`${url}/api/asset?path=private/escape.csv`);
+    const missing = await fetch(`${url}/api/asset?path=private/nope.csv`);
+    expect(outsideLink.status).toBe(400);
+    expect(await codeOf(outsideLink)).toBe("excluded_path");
+    expect(await codeOf(missing)).toBe("excluded_path");
+  });
+
+  // realpath が除外名 (symlink) を消すので、解決後だけの判定ではすり抜ける。
+  test("除外名そのものが symlink でもすり抜けない", async () => {
+    const res = await fetch(`${url}/api/asset?path=aliased/inner.csv`);
     expect(res.status).toBe(400);
     expect(await codeOf(res)).toBe("excluded_path");
+  });
+
+  test("バックスラッシュ区切りでも除外をすり抜けない", async () => {
+    const res = await fetch(`${url}/api/asset?path=${encodeURIComponent("private\\creds.csv")}`);
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("excluded_path");
+  });
+
+  test("HEAD /api/asset も除外配下は 400", async () => {
+    const res = await fetch(`${url}/api/asset?path=private/creds.csv`, { method: "HEAD" });
+    expect(res.status).toBe(400);
+  });
+
+  test("/api/file の 404 は除外の外では従来どおり", async () => {
+    const res = await fetch(`${url}/api/file?path=nope.md`);
+    expect(res.status).toBe(404);
+    expect(await codeOf(res)).toBe("not_found");
   });
 
   // 読み取りだけ塞いでも、baseSha を故意に外せば 409 の競合レスポンスに現在の中身 (raw)
@@ -980,6 +1035,47 @@ describe("server - 除外配下の読み取り拒否 (Issue #65)", () => {
     expect(await codeOf(exists)).toBe(await codeOf(missing));
     // 除外の外なら「存在しない」は 404 のまま (除外判定が 404 を潰していない)
     expect((await fetch(`${url}/api/asset?path=nope.csv`)).status).toBe(404);
+  });
+});
+
+// 上の describe は excludes を明示指定して既定集合を **置き換えて** いるため、
+// DEFAULT_EXCLUDES 経路（.yomiignore を置かない既定の利用形態）は別に固定する。
+describe("server - DEFAULT_EXCLUDES も読み書きを拒否する (Issue #65)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-excl-default-"));
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await mkdir(join(root, "dist"), { recursive: true });
+    await writeFile(join(root, "node_modules", "readme.md"), "# dep\n");
+    await writeFile(join(root, "dist", "report.csv"), "a,b\n");
+    await writeFile(join(root, "ok.md"), "# ok\n");
+    // excludes を渡さない = DEFAULT_EXCLUDES がそのまま効く
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("node_modules 配下の md は /api/file から読めない", async () => {
+    const res = await fetch(`${url}/api/file?path=node_modules/readme.md`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code?: string }).code).toBe("excluded_path");
+  });
+
+  test("dist 配下の asset は /api/asset から取得できない", async () => {
+    const res = await fetch(`${url}/api/asset?path=dist/report.csv`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code?: string }).code).toBe("excluded_path");
+  });
+
+  test("除外されていないファイルは読める", async () => {
+    expect((await fetch(`${url}/api/file?path=ok.md`)).status).toBe(200);
   });
 });
 
