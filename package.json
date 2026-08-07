@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "bench": "bun run scripts/bench-tree.ts"
   },
   "files": [
     "bin",
