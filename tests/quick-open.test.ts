@@ -165,6 +165,15 @@ describe("searchPaths", () => {
       const chars = Array.from(path);
       expect(hit.positions.map((p) => chars[p]).join("")).toBe("stan");
     });
+
+    // **意図的に受け入れている制約の記録。** 1 文字ずつ小文字化する代償として、
+    // 小文字化が 2 コードポイントになる文字はクエリと噛み合わなくなる。
+    // ハイライトが 1 文字ずれるほうが広く効くので、位置の一貫性を優先している。
+    // ここが落ちたら「直った」ということなので、そのときはこのテストを消してよい。
+    test("小文字化が 2 コードポイントになる文字自体は引けない（既知の制約）", () => {
+      expect(searchPaths(["İstanbul.md"], "İ")).toEqual([]);
+      expect(searchPaths(["İstanbul.md"], "i")).toEqual([]);
+    });
   });
 
   // **score の各項に上限が無いと、離れたマッチの加点が名前一致ボーナスを食い潰す。**
@@ -178,6 +187,18 @@ describe("searchPaths", () => {
     const hits = searchPaths([dirOnly, spread], "guide");
 
     expect(hits.map((h) => h.path)).toEqual([spread, dirOnly]);
+  });
+
+  // **`spread` だけでなく `first` も同時に振る。** 各項に上限を掛けても、上限の合計
+  // (99*100 + 99*10 + 0.999 = 10_890.999) が旧ペナルティ 10_000 を超えていたため、
+  // ファイル名が 118 文字あたりで逆転していた（レビューで実測）。
+  test("マッチが離れ、かつ後方から始まっても、名前一致がディレクトリ一致より上に来る", () => {
+    // spread と first の両方を上限まで振り切る
+    const worst = `d/${"z".repeat(120)}g${"x".repeat(120)}uide.md`;
+    const dirOnly = "guide-dir/x.md";
+    const hits = searchPaths([dirOnly, worst], "guide");
+
+    expect(hits.map((h) => h.path)).toEqual([worst, dirOnly]);
   });
 
   // **除外・depth はサーバ側で適用済み**なので、母集団に無いものは出ない (DoD 3 行目)

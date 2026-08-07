@@ -62,6 +62,12 @@ function subsequenceMatch(text, query) {
   //
   // **`toLowerCase()` は 1 文字ずつ掛ける。** 文字列全体に掛けると長さが変わる文字
   // (`"İ".toLowerCase().length === 2`) で座標がずれ、ハイライトが 1 つ後ろへ流れる。
+  //
+  // **代償: 小文字化が 2 コードポイントになる文字 (`İ` 等) は一致しなくなる。**
+  // クエリ側は文字列全体に `toLowerCase()` を掛けてから 1 コードポイントずつ回すので、
+  // 展開された `"i" + U+0307` と、ここで比較する 2 コードポイントの文字列が噛み合わない。
+  // **位置の一貫性を優先した結果**として受け入れている —— ハイライトが 1 文字ずれるほうが、
+  // トルコ語の大文字 I が引けないことより広く効くため (この判断はテストにも残してある)。
   const chars = Array.from(text);
   const positions = [];
   let at = 0;
@@ -79,6 +85,19 @@ function subsequenceMatch(text, query) {
   }
   return positions;
 }
+
+/**
+ * 候補として出す既定の最大件数。これ以上は絞り込んでもらう (DOM を作りすぎない)。
+ *
+ * **app.js もこれを import する**（同じ 50 を 2 箇所に置くと片方だけ変えたときに気づけない）。
+ */
+export const QUICK_OPEN_LIMIT = 50;
+
+/**
+ * ファイル名に一致しなかった候補への加点。**他の項の上限合計 (10_890.999) より大きい**ので、
+ * 「ファイル名に一致したものが必ず上」が桁で保証される。
+ */
+const NOT_IN_NAME_PENALTY = 100_000;
 
 /**
  * 候補の並び順を決めるスコア。**小さいほど上**。
@@ -102,11 +121,16 @@ function score(path, positions, namePositions) {
   const last = used[used.length - 1] ?? 0;
   // マッチが広がっているほど (= 途中を飛ばしているほど) 大きくなる
   const spread = last - first - (used.length - 1);
-  // **各項に上限を掛ける。** 掛けないと長いファイル名で `spread * 100` が
-  // 名前一致ボーナス (10_000) を食い潰し、「ファイル名にマッチしたものが上」が
-  // 反転する (実測: 名前 102 文字・マッチ間隔 100 で逆転)。
+  // **「ファイル名一致が最優先」を数として保証する。** 各項に上限を掛けたうえで、
+  // ディレクトリのみ一致のペナルティを**上限の合計より大きく**取る:
+  //
+  //     名前一致の最大 = 99*100 + 99*10 + 999/1000 = 10_890.999 < 100_000
+  //
+  // 上限を掛けるだけでは足りない —— 10_000 のままだと「マッチが離れた名前一致」が
+  // 上限合計 10_890 まで伸び、ディレクトリのみ一致 (10_000) を追い越して順位が反転する
+  // (実測: ファイル名 118 文字で逆転)。上限と桁の両方を決めて初めて不変になる。
   return (
-    (inName ? 0 : 10_000) +
+    (inName ? 0 : NOT_IN_NAME_PENALTY) +
     Math.min(spread, 99) * 100 +
     Math.min(first, 99) * 10 +
     Math.min(path.length, 999) / 1000
@@ -122,11 +146,11 @@ function score(path, positions, namePositions) {
  *
  * @param {string[]} paths 母集団 (ツリーのファイル相対パス)
  * @param {string} query 入力文字列
- * @param {number} [limit] 返す最大件数
+ * @param {number} [limit] 返す最大件数 (既定 `QUICK_OPEN_LIMIT`)
  * @returns {{ path: string, positions: number[] }[]} positions はパス全体での
  *   マッチ位置 (**コードポイント index**。ハイライト用)。query が空なら空配列
  */
-export function searchPaths(paths, query, limit = 50) {
+export function searchPaths(paths, query, limit = QUICK_OPEN_LIMIT) {
   const q = query.trim().toLowerCase();
   if (!q) return paths.slice(0, limit).map((path) => ({ path, positions: [] }));
 

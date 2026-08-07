@@ -19,6 +19,9 @@ export interface QuickOpenHit {
   positions: number[];
 }
 
+/** 候補として出す既定の最大件数。app.js と共有する (同じ値を 2 箇所に置かない)。 */
+export declare const QUICK_OPEN_LIMIT: number;
+
 /** ツリーからファイルの相対パスを document order で集める (ディレクトリは含まない)。 */
 export declare function collectFilePaths(node: QuickOpenTreeNode): string[];
 
