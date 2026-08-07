@@ -1,4 +1,18 @@
-import { applyI18n, ERROR_CODE_KEYS, onLangChange, resolveLang, setLang, t } from "./i18n.js";
+import {
+  createElements,
+  createState,
+  createStatus,
+  errorText,
+  fetchJson,
+  LANG_MODES,
+  MOBILE_MEDIA_QUERY,
+  restorePreferences as restorePrefsInto,
+  sanitize,
+  THEME_MODES,
+  VIEW_MODES,
+} from "./app-context.js";
+import { createWebSocketClient } from "./app-websocket.js";
+import { applyI18n, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import {
   isAnchor,
   isExternalUrl,
@@ -17,7 +31,6 @@ import {
 } from "./navigation.js";
 import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
-import { SANITIZE_CONFIG } from "./sanitize-config.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
@@ -26,83 +39,25 @@ import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-too
 // jsDelivr への実行時依存を排し、オフライン / CDN 障害 / CSP 下でも動作させる。
 // bundle は `bun run build` で生成 (scripts/build-vendor.ts)。app.js は /assets/app.js
 // で配信されるため、相対 ./vendor/... は /assets/vendor/... に解決される。
-import DOMPurify from "./vendor/dompurify.js";
 import mermaid from "./vendor/mermaid.js";
 
-const els = {
-  sidebar: document.getElementById("sidebar"),
-  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
-  menuBtn: document.getElementById("menu-btn"),
-  tree: document.getElementById("tree"),
-  // ツリーツールバー (Issue #41)
-  treeExpandAll: document.getElementById("tree-expand-all"),
-  treeCollapseAll: document.getElementById("tree-collapse-all"),
-  // 新規 md 作成 (Issue #6)
-  treeNewFile: document.getElementById("tree-new-file"),
-  preview: document.getElementById("preview"),
-  source: document.getElementById("source"),
-  editor: document.getElementById("editor"),
-  contentBody: document.getElementById("content-body"),
-  status: document.getElementById("status"),
-  currentPath: document.getElementById("current-path"),
-  dirtyIndicator: document.getElementById("dirty-indicator"),
-  // ⋮ overflow menu (Issue #30, スマホ専用)
-  overflowBtn: document.getElementById("overflow-btn"),
-  overflowMenu: document.getElementById("overflow-menu"),
-  overflowEdit: document.getElementById("overflow-edit"),
-  overflowThemeBtns: Array.from(document.querySelectorAll(".overflow-theme-btn")),
-  overflowViewBtns: Array.from(document.querySelectorAll(".overflow-view-btn")),
-  // FAB 目次 (Issue #30, スマホ専用)
-  tocFab: document.getElementById("toc-fab"),
-  editBtn: document.getElementById("edit-btn"),
-  discardBtn: document.getElementById("discard-btn"),
-  conflictBanner: document.getElementById("conflict-banner"),
-  conflictTakeServer: document.getElementById("conflict-take-server"),
-  conflictOverwrite: document.getElementById("conflict-overwrite"),
-  conflictDismiss: document.getElementById("conflict-dismiss"),
-  toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
-  themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
-  // UI 言語トグル (Issue #48)
-  langButtons: Array.from(document.querySelectorAll(".lang-toggle-btn")),
-  overflowLangBtns: Array.from(document.querySelectorAll(".overflow-lang-btn")),
-  // TOC
-  tocBtn: document.getElementById("toc-btn"),
-  tocPanel: document.getElementById("toc-panel"),
-  tocList: document.getElementById("toc-list"),
-  tocClose: document.getElementById("toc-close"),
-  tocExpandToggle: document.getElementById("toc-expand-toggle"),
-  // 外部 URL 警告バナー
-  externalLinkBanner: document.getElementById("external-link-banner"),
-  externalLinkUrl: document.getElementById("external-link-url"),
-  externalLinkCancel: document.getElementById("external-link-cancel"),
-  externalLinkOpen: document.getElementById("external-link-open"),
-};
-
-function sanitize(html) {
-  // サニタイズ設定は public/sanitize-config.js に切り出し (Issue #59)。
-  // `<style>` タグ / style 属性を禁止し CSS インジェクション (exfiltration) を防ぐ。
-  // Mermaid 図は sanitize 後に mermaid.run() が SVG を生成する (再 sanitize しない)。
-  return DOMPurify.sanitize(html ?? "", SANITIZE_CONFIG);
-}
-
-const VIEW_MODES = ["preview", "split", "md"];
-const DEFAULT_VIEW_MODE = "preview";
-
 /**
- * スマホ判定 (Issue #25)。767px 以下を sidebar overlay モードとする。
- * 初期化順序の関係で wireSidebar より前に評価したいため、ここで宣言。
+ * 画面全体の配線コンテキスト (Issue #78)。
+ *
+ * **els / state をここで 1 度だけ作る。** モジュール側に持たせるとテストの boot をまたいで
+ * 前の jsdom の要素を掴む (理由は `app-context.js` の冒頭)。
+ *
+ * モジュール間の相互参照は `ctx` 経由の遅延束縛にする。生成順に依存しないので、
+ * websocket → document → tree のような循環があっても import が循環しない。
  */
-const MOBILE_QUERY = window.matchMedia("(max-width: 767px)");
+const els = createElements();
+const state = createState();
+const ctx = { els, state };
+ctx.status = createStatus(ctx);
+const { setStatus, clearStatus } = ctx.status;
 
-const THEME_MODES = ["auto", "light", "dark"];
-const DEFAULT_THEME_MODE = "auto";
-
-// UI 言語モード (Issue #48): auto はブラウザ言語に追従、ja / en は固定
-const LANG_MODES = ["auto", "ja", "en"];
-const DEFAULT_LANG_MODE = "auto";
-
-const TOC_EXPAND_LEVELS = ["h3", "h6"];
-const DEFAULT_TOC_EXPAND_LEVEL = "h3";
+/** スマホ判定 (Issue #25)。767px 以下を sidebar overlay モードとする。 */
+const MOBILE_QUERY = window.matchMedia(MOBILE_MEDIA_QUERY);
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -135,52 +90,6 @@ darkQuery.addEventListener("change", () => {
   }
 });
 
-const state = {
-  /** path -> tree-item ボタン要素 */
-  fileButtons: new Map(),
-  /** path -> { button, ul } (ディレクトリの開閉に使用) */
-  dirNodes: new Map(),
-  /** 開いているディレクトリ path のセット */
-  openDirs: new Set([""]),
-  /** 現在表示中のファイル path */
-  currentPath: null,
-  /** 現在のファイル内容 */
-  currentRaw: "",
-  currentHtml: "",
-  /** 直近 GET / POST 時のサーバ側 sha (Lost Update 検知のベース) */
-  currentSha: null,
-  /** 表示モード: preview | split | md */
-  viewMode: DEFAULT_VIEW_MODE,
-  /** テーマモード: auto | light | dark */
-  themeMode: DEFAULT_THEME_MODE,
-  /** UI 言語モード: auto | ja | en (localStorage 永続、Issue #48) */
-  langMode: DEFAULT_LANG_MODE,
-  /** 編集モード中かどうか */
-  editing: false,
-  /** 編集中で未保存の差分があるかどうか */
-  dirty: false,
-  /** TOC パネルが表示中か (localStorage 永続化) */
-  tocVisible: false,
-  /** TOC の展開レベル: "h3" (H1-H3) / "h6" (H1-H6) */
-  tocExpandLevel: DEFAULT_TOC_EXPAND_LEVEL,
-  /** 編集モード進入時に TOC が開いていたら、終了時に復元するためのフラグ */
-  tocSuspended: false,
-  /** md モード時に TOC ボタン押下で一時的に preview 切替したかのフラグ (戻すため) */
-  tocPreviewOverride: false,
-  /** path -> button 要素 (現在地ハイライト用) */
-  tocEntries: new Map(),
-  /** IntersectionObserver (再構築のたびに破棄して作り直す) */
-  tocObserver: null,
-  /** Issue #9: split mode のスクロール同期 ON/OFF (デフォルト ON) */
-  scrollSyncEnabled: true,
-  /** Issue #6: 表示中の新規ファイル名インライン入力 { li, input } (非表示時は null) */
-  newFileInput: null,
-};
-
-// スマホの toast 表示タイマー (setStatus / clearStatus で共有)。startup の
-// applyLang が clearStatus を呼ぶため、TDZ 回避に init シーケンスより前で宣言する。
-let statusToastTimer = null;
-
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
 onLangChange(reapplyDynamicI18n);
@@ -207,8 +116,16 @@ wireKeyboard();
 wireBeforeUnload();
 wireHistoryNavigation();
 wireScrollSync();
+
+// **モジュールを ctx に差し込んでから起動する。** websocket は document / tree / editor を
+// 呼ぶので、参照が揃う前に走らせない。
+ctx.tree = { renderTree, highlightSelected };
+ctx.document = { loadFile, applyFile };
+ctx.editor = { showConflict };
+ctx.ws = createWebSocketClient(ctx);
+
 init();
-connectLiveReload();
+ctx.ws.connect();
 
 async function init() {
   // リロード時に history.state.navIndex が残っていれば、それ以上の値で再開
@@ -238,29 +155,6 @@ async function init() {
     els.tree.removeAttribute("aria-busy");
     els.tree.textContent = t("status.loadError", { msg: errorText(err) });
   }
-}
-
-async function fetchJson(url, options) {
-  const res = await fetch(url, options);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.error ?? `HTTP ${res.status}`);
-    err.status = res.status;
-    err.code = data.code;
-    err.payload = data;
-    throw err;
-  }
-  return data;
-}
-
-/**
- * fetch エラーを表示用文字列に変換する (Issue #48)。
- * サーバが返した code を翻訳キーに対応づけ、未知 code / code 無しは
- * サーバの error 文字列 (err.message) にフォールバックする。
- */
-function errorText(err) {
-  const key = err?.code ? ERROR_CODE_KEYS[err.code] : undefined;
-  return key ? t(key) : (err?.message ?? String(err));
 }
 
 function renderTree(root) {
@@ -768,45 +662,8 @@ function expandAncestors(path) {
   saveOpenDirs();
 }
 
-function setStatus(kind, text) {
-  els.status.textContent = text;
-  els.status.classList.remove("is-ok", "is-error", "is-toast");
-  if (kind === "ok") els.status.classList.add("is-ok");
-  else if (kind === "error") els.status.classList.add("is-error");
-  // スマホでは toast 表示 (Issue #30): CSS animation 完了後に class を除去
-  if (MOBILE_QUERY.matches && text) {
-    els.status.classList.add("is-toast");
-    if (statusToastTimer) clearTimeout(statusToastTimer);
-    statusToastTimer = setTimeout(() => {
-      els.status.classList.remove("is-toast");
-      statusToastTimer = null;
-    }, 3000);
-  }
-}
-
 function restorePreferences() {
-  const open = prefs.openDirs.load();
-  if (open) state.openDirs = new Set([...open, ""]);
-
-  const view = prefs.viewMode.load();
-  if (view && VIEW_MODES.includes(view)) state.viewMode = view;
-
-  const theme = prefs.themeMode.load();
-  if (theme && THEME_MODES.includes(theme)) state.themeMode = theme;
-
-  // Issue #48: UI 言語モード (auto|ja|en)。未保存/不正値はデフォルト auto を維持
-  const lang = prefs.lang.load();
-  if (lang && LANG_MODES.includes(lang)) state.langMode = lang;
-
-  const tocVis = prefs.tocVisible.load();
-  if (tocVis === true) state.tocVisible = true;
-
-  const tocLv = prefs.tocExpandLevel.load();
-  if (tocLv && TOC_EXPAND_LEVELS.includes(tocLv)) state.tocExpandLevel = tocLv;
-
-  // Issue #9: scrollSync は load 値が null (未保存) ならデフォルト true を維持
-  const ss = prefs.scrollSync.load();
-  if (ss === false) state.scrollSyncEnabled = false;
+  restorePrefsInto(state);
 }
 
 function saveOpenDirs() {
@@ -955,16 +812,6 @@ function reapplyDynamicI18n() {
   // (旧言語の文言が残らないように。次の操作で新言語で再表示される。
   //  競合バナー等の操作可能な UI は別要素なので消えない)。
   clearStatus();
-}
-
-/** ステータス表示を空にする (テキスト + 装飾クラス + toast タイマーを解除)。 */
-function clearStatus() {
-  if (statusToastTimer) {
-    clearTimeout(statusToastTimer);
-    statusToastTimer = null;
-  }
-  els.status.textContent = "";
-  els.status.classList.remove("is-ok", "is-error", "is-toast");
 }
 
 /** 編集モードの状態に応じて編集ボタン / overflow ボタンの表記を現在言語で設定する。 */
@@ -1812,81 +1659,4 @@ function wireBeforeUnload() {
       ev.returnValue = "";
     }
   });
-}
-
-/* ===== Live reload via WebSocket ===== */
-
-let wsRetryDelay = 500;
-const WS_RETRY_MAX = 5000;
-
-function connectLiveReload() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = `${proto}//${location.host}/ws`;
-  const ws = new WebSocket(url);
-
-  ws.addEventListener("open", () => {
-    wsRetryDelay = 500;
-  });
-
-  ws.addEventListener("message", (ev) => {
-    let msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch {
-      return;
-    }
-    handleLiveEvent(msg);
-  });
-
-  ws.addEventListener("close", () => {
-    setTimeout(connectLiveReload, wsRetryDelay);
-    wsRetryDelay = Math.min(wsRetryDelay * 2, WS_RETRY_MAX);
-  });
-
-  ws.addEventListener("error", () => {
-    ws.close();
-  });
-}
-
-async function handleLiveEvent(msg) {
-  if (!msg || typeof msg !== "object") return;
-
-  if (msg.type === "changed" && msg.path && msg.path === state.currentPath) {
-    if (state.editing) {
-      // 編集中にライブリロードが来た = 外部で書き換えられた可能性。
-      // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
-      try {
-        const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
-        showConflict(latest);
-        setStatus("error", t("status.fileUpdatedElsewhere"));
-      } catch (err) {
-        setStatus("error", errorText(err));
-      }
-      return;
-    }
-    try {
-      const data = await loadFile(state.currentPath);
-      applyFile(data);
-      setStatus("ok", t("status.reloaded", { path: data.path }));
-    } catch (err) {
-      setStatus("error", errorText(err));
-    }
-    return;
-  }
-
-  if (msg.type === "tree" || msg.type === "changed") {
-    try {
-      const tree = await fetchJson("/api/tree");
-      renderTree(tree);
-      if (state.currentPath) {
-        if (state.fileButtons.has(state.currentPath)) {
-          highlightSelected(state.currentPath);
-        } else {
-          setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
-        }
-      }
-    } catch (err) {
-      setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
-    }
-  }
 }
