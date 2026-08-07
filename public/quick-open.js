@@ -52,15 +52,27 @@ function baseName(path) {
  * 一致したときは**マッチした位置の配列**も返す。呼び出し側がハイライトに使う。
  *
  * @param {string} text
- * @param {string} query 小文字化済みであること
- * @returns {number[] | null} マッチ位置。不一致は null
+ * @param {string} query 小文字化済みであること (コードポイント単位で回す)
+ * @returns {number[] | null} マッチ位置 (**コードポイント index**)。不一致は null
  */
 function subsequenceMatch(text, query) {
-  const lower = text.toLowerCase();
+  // **コードポイント単位で走る。** UTF-16 のコードユニットで数えると、絵文字入りの
+  // ファイル名 (`📁note.md` 等) でサロゲートペアが割れ、ハイライトが孤立サロゲートに
+  // なって `�` が並ぶ。`Array.from` はコードポイントで分割する。
+  //
+  // **`toLowerCase()` は 1 文字ずつ掛ける。** 文字列全体に掛けると長さが変わる文字
+  // (`"İ".toLowerCase().length === 2`) で座標がずれ、ハイライトが 1 つ後ろへ流れる。
+  const chars = Array.from(text);
   const positions = [];
   let at = 0;
   for (const ch of query) {
-    const found = lower.indexOf(ch, at);
+    let found = -1;
+    for (let i = at; i < chars.length; i++) {
+      if (chars[i].toLowerCase() === ch) {
+        found = i;
+        break;
+      }
+    }
     if (found === -1) return null;
     positions.push(found);
     at = found + 1;
@@ -90,7 +102,15 @@ function score(path, positions, namePositions) {
   const last = used[used.length - 1] ?? 0;
   // マッチが広がっているほど (= 途中を飛ばしているほど) 大きくなる
   const spread = last - first - (used.length - 1);
-  return (inName ? 0 : 10_000) + spread * 100 + first * 10 + path.length / 1000;
+  // **各項に上限を掛ける。** 掛けないと長いファイル名で `spread * 100` が
+  // 名前一致ボーナス (10_000) を食い潰し、「ファイル名にマッチしたものが上」が
+  // 反転する (実測: 名前 102 文字・マッチ間隔 100 で逆転)。
+  return (
+    (inName ? 0 : 10_000) +
+    Math.min(spread, 99) * 100 +
+    Math.min(first, 99) * 10 +
+    Math.min(path.length, 999) / 1000
+  );
 }
 
 /**
@@ -104,7 +124,7 @@ function score(path, positions, namePositions) {
  * @param {string} query 入力文字列
  * @param {number} [limit] 返す最大件数
  * @returns {{ path: string, positions: number[] }[]} positions はパス全体での
- *   マッチ位置 (ハイライト用)。query が空なら空配列
+ *   マッチ位置 (**コードポイント index**。ハイライト用)。query が空なら空配列
  */
 export function searchPaths(paths, query, limit = 50) {
   const q = query.trim().toLowerCase();
@@ -116,8 +136,9 @@ export function searchPaths(paths, query, limit = 50) {
     if (positions === null) continue;
     const name = baseName(path);
     const namePositions = subsequenceMatch(name, q);
-    // ファイル名側の位置はパス全体の座標へ寄せる (ハイライトはパス全体に対して行う)
-    const offset = path.length - name.length;
+    // ファイル名側の位置はパス全体の座標へ寄せる (ハイライトはパス全体に対して行う)。
+    // **コードポイント数で数える** (positions がコードポイント index のため)。
+    const offset = Array.from(path).length - Array.from(name).length;
     hits.push({
       path,
       positions: namePositions ? namePositions.map((p) => p + offset) : positions,

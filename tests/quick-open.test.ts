@@ -135,6 +135,51 @@ describe("searchPaths", () => {
     expect(second).toEqual(first);
   });
 
+  // yomi は日本語のドキュメントを読む道具なので、ファイル名が非 ASCII なのは普通のこと。
+  // positions は**コードポイント index** で返す約束になっている（描画側もそれで数える）。
+  describe("非 ASCII のファイル名", () => {
+    test("日本語のファイル名で絞り込める", () => {
+      const hits = searchPaths(["docs/設計メモ.md", "docs/guide.md"], "メモ");
+      expect(hits.map((h) => h.path)).toEqual(["docs/設計メモ.md"]);
+    });
+
+    test("サロゲートペアを跨いでも positions がコードポイント単位でずれない", () => {
+      const path = "docs/📁メモ帳.md";
+      const [hit] = searchPaths([path], "メモ");
+      if (!hit) throw new Error("一致しなかった");
+
+      // 返った位置の文字がクエリと一致する（**コードポイント配列**で引く）
+      const chars = Array.from(path);
+      expect(hit.positions.map((p) => chars[p]).join("")).toBe("メモ");
+      // 孤立サロゲートを指していない
+      expect(hit.positions.every((p) => !/[\uD800-\uDFFF]/.test(chars[p] ?? ""))).toBe(true);
+    });
+
+    test("小文字化で長さが変わる文字があっても位置がずれない", () => {
+      // "İ" (U+0130) は toLowerCase() で 2 コードポイントになる。
+      // 文字列全体に toLowerCase() を掛けると、以降の位置が 1 つ後ろへ流れる
+      const path = "İstanbul.md";
+      const [hit] = searchPaths([path], "stan");
+      if (!hit) throw new Error("一致しなかった");
+
+      const chars = Array.from(path);
+      expect(hit.positions.map((p) => chars[p]).join("")).toBe("stan");
+    });
+  });
+
+  // **score の各項に上限が無いと、離れたマッチの加点が名前一致ボーナスを食い潰す。**
+  // 名前一致は 0、ディレクトリのみ一致は 10_000 から始まるので、`spread * 100` が
+  // 100 を超えた時点（= マッチの間隔が 100 文字以上）で順位が反転する。
+  test("ファイル名の中でマッチが大きく離れていても、名前一致がディレクトリ一致より上に来る", () => {
+    // `g` と `uide` の間が 200 文字 → 上限が無ければ spread * 100 = 20_000 になり、
+    // ディレクトリのみ一致 (10_000) に負ける
+    const spread = `guide-dir/g${"x".repeat(200)}uide.md`;
+    const dirOnly = "guide-dir/x.md";
+    const hits = searchPaths([dirOnly, spread], "guide");
+
+    expect(hits.map((h) => h.path)).toEqual([spread, dirOnly]);
+  });
+
   // **除外・depth はサーバ側で適用済み**なので、母集団に無いものは出ない (DoD 3 行目)
   test("母集団に無いパスは候補に出ない", () => {
     const visible = ["docs/guide.md"];
