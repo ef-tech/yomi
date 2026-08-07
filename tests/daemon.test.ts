@@ -446,6 +446,90 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     throw new Error(`フォアグラウンド起動が ${port} で listen しませんでした`);
   }
 
+  // Issue #94: フォアグラウンドは assertPortIsFree を通っておらず、Bun.serve の throw が
+  // main().catch にそのまま流れて**ソースの抜粋つきスタックトレース**が出ていた。
+  // up -d は同じ状況で利用者向けの 1 行を出しており、その非対称を解消する。
+  describe("使用中ポートを指定したとき (Issue #94)", () => {
+    test(
+      "既に yomi が使っていれば yomi down を案内し、終了コード 1 で落ちる",
+      async () => {
+        const port = await findAvailablePort("127.0.0.1", 39340);
+        const proc = await startForeground(port);
+
+        const second = await runCli(["--port", String(port), "--no-open"], {
+          cwd: workDir,
+          state: stateDir,
+        });
+
+        expect(second.code).toBe(1);
+        // スタックトレースではなく利用者向けの 1 行であること
+        expect(second.stderr).toContain(`ポート ${port} では既に yomi が起動しています`);
+        expect(second.stderr).toContain(`yomi down --port ${port}`);
+        expect(second.stderr).toContain(String(proc.pid));
+        expect(second.stderr).not.toContain("起動失敗");
+        expect(second.stderr).not.toContain("EADDRINUSE");
+
+        // 先に動いているインスタンスは無傷 (記録も上書きされていない)
+        expect((await readInstances(paths)).map((r) => r.pid)).toEqual([proc.pid]);
+        expect((await fetch(`http://127.0.0.1:${port}/api/tree`)).status).toBe(200);
+      },
+      INTEGRATION_TIMEOUT_MS,
+    );
+
+    test(
+      "yomi 以外が使っていれば別ポートを案内し、終了コード 1 で落ちる",
+      async () => {
+        const port = await findAvailablePort("127.0.0.1", 39360);
+        // yomi ではない何かがそのポートを掴んでいる状態を作る
+        const holder = Bun.listen({
+          hostname: "127.0.0.1",
+          port,
+          socket: { data() {}, open() {}, close() {} },
+        });
+        try {
+          const res = await runCli(["--port", String(port), "--no-open"], {
+            cwd: workDir,
+            state: stateDir,
+          });
+          expect(res.code).toBe(1);
+          expect(res.stderr).toContain(`ポート ${port} は既に使用されています`);
+          expect(res.stderr).toContain("別のポートを指定してください");
+          expect(res.stderr).not.toContain("起動失敗");
+          expect(res.stderr).not.toContain("EADDRINUSE");
+        } finally {
+          holder.stop(true);
+        }
+      },
+      INTEGRATION_TIMEOUT_MS,
+    );
+
+    test(
+      "--port を省略したときは自動探索が働き、衝突しない",
+      async () => {
+        const taken = await findAvailablePort("127.0.0.1", 39380);
+        await startForeground(taken);
+
+        // --port なしなら findAvailablePort が空きを探すので、事前検査に掛からず起動する
+        const proc = Bun.spawn([process.execPath, ENTRY, "--no-open"], {
+          cwd: workDir,
+          env: { ...process.env, XDG_STATE_HOME: stateDir },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        spawned.push(proc);
+
+        const deadline = Date.now() + 15_000;
+        let started = false;
+        while (Date.now() < deadline && !started) {
+          started = (await readInstances(paths)).length === 2;
+          if (!started) await new Promise((r) => setTimeout(r, 100));
+        }
+        expect(started).toBe(true);
+      },
+      INTEGRATION_TIMEOUT_MS,
+    );
+  });
+
   test(
     "フォアグラウンド起動もレジストリに記録され、list に出る",
     async () => {
