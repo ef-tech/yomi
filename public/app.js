@@ -1772,7 +1772,18 @@ const QUICK_OPEN_LIMIT = 50;
 function wireQuickOpen() {
   els.quickOpenInput.addEventListener("input", () => refreshQuickOpen());
 
-  els.quickOpenInput.addEventListener("keydown", (ev) => {
+  // **入力欄ではなくパネル全体で拾う。** 候補ボタンへフォーカスが移っても Esc が効くように
+  // するため (入力欄だけに付けると、Tab で出た先で閉じられなくなる)。
+  els.quickOpen.addEventListener("keydown", (ev) => {
+    // **IME 変換中は何もしない。** yomi は日本語のドキュメントを読む道具なので、
+    // ファイル名も日本語であることが普通にある。変換中のキーはすべて IME のもので、
+    // 横取りすると次のように壊れる:
+    //
+    // - `Enter`: 変換の確定が**そのままファイルを開いてしまう**（打ち終わる前に飛ぶ）
+    // - `↑` `↓`: IME の変換候補を選べない
+    // - `Esc`:   変換のキャンセルのつもりがパネルごと閉じる
+    if (ev.isComposing) return;
+
     if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
       ev.preventDefault();
       setQuickOpenIndex(
@@ -1791,7 +1802,24 @@ function wireQuickOpen() {
     }
     if (ev.key === "Escape") {
       ev.preventDefault();
+      // **バブルさせない。** このリポジトリは Esc の優先順位を各ハンドラのガードで
+      // 表現しているが (sidebar / overflow は外部リンクバナーに譲る)、ここは
+      // **最前面 (z-index 60) なので常に最優先**。素通りさせると 1 回の Esc で
+      // sidebar や外部リンクバナーまで一緒に閉じてしまう。
+      ev.stopPropagation();
       closeQuickOpen();
+      return;
+    }
+    if (ev.key === "Tab") {
+      // **フォーカスをパネルから出さない。** `aria-modal="true"` を宣言している以上、
+      // Tab で背後のヘッダやツリーへ抜けられるのは**宣言と実体の食い違い**になる
+      // (支援技術には「背後は無い」と伝えているのに、実際には触れてしまう)。
+      //
+      // 戻す先が入力欄だけで足りるのは、**候補ボタンを `tabIndex = -1` にしてある**ため
+      // (選択は `aria-activedescendant` で伝える)。パネル内でフォーカスを取れる要素は
+      // 入力欄しかないので、一般的なフォーカストラップ (先頭/末尾で折り返す) は要らない。
+      ev.preventDefault();
+      els.quickOpenInput.focus();
     }
   });
 
@@ -1801,7 +1829,9 @@ function wireQuickOpen() {
   });
 
   // スマホの ⋮ メニューからも開ける (マウス/キーボードが無い環境の導線)
-  els.overflowQuickOpen?.addEventListener("click", () => {
+  // `?.` を付けない。同じ ⋮ メニューの `overflowEdit` と同じく **必ず存在する要素**なので、
+  // 欠けたら静かに無効化されるより落ちたほうがよい (index.html との不整合に気づける)。
+  els.overflowQuickOpen.addEventListener("click", () => {
     setOverflowOpen(false);
     openQuickOpen();
   });
@@ -1837,6 +1867,11 @@ function refreshQuickOpen() {
     QUICK_OPEN_LIMIT,
   );
   renderQuickOpenList();
+  // 候補が 0 件のときに「展開中」と読み上げられないようにする
+  els.quickOpenInput.setAttribute(
+    "aria-expanded",
+    state.quickOpenHits.length > 0 ? "true" : "false",
+  );
   setQuickOpenIndex(state.quickOpenHits.length > 0 ? 0 : -1);
 }
 
@@ -1852,6 +1887,10 @@ function renderQuickOpenList() {
     btn.type = "button";
     btn.className = "quick-open-item";
     btn.id = `quick-open-item-${index}`;
+    // **tab 順から外す。** 選択は aria-activedescendant で伝えているので DOM フォーカスは
+    // 入力欄に留める。外さないと Tab で候補 → 背後の要素へ抜けられ、aria-modal="true" の
+    // 宣言と食い違う (背後は inert にしていない)。
+    btn.tabIndex = -1;
     btn.setAttribute("role", "option");
     btn.setAttribute("aria-selected", "false");
     btn.dataset.path = hit.path;
@@ -1859,9 +1898,15 @@ function renderQuickOpenList() {
 
     // **同名ファイルを相対パスで区別できるようにする** (DoD 2 行目)。
     // ファイル名を主、ディレクトリを従として並べる。
-    const slash = hit.path.lastIndexOf("/");
-    const dir = slash === -1 ? "" : hit.path.slice(0, slash);
-    const name = slash === -1 ? hit.path : hit.path.slice(slash + 1);
+    //
+    // **コードポイントで切る。** `hit.positions` はコードポイント index なので、
+    // `String#lastIndexOf` / `slice` の UTF-16 index と混ぜると絵文字入りのファイル名
+    // (`📁メモ帳.md` 等) で 1 つずつずれ、ハイライトが**サロゲートの片割れ**を囲んで
+    // `�` になる (実測で確認した)。
+    const chars = Array.from(hit.path);
+    const slash = chars.lastIndexOf("/");
+    const dir = slash === -1 ? "" : chars.slice(0, slash).join("");
+    const name = slash === -1 ? hit.path : chars.slice(slash + 1).join("");
 
     const nameEl = document.createElement("span");
     nameEl.className = "qo-name";
@@ -1894,9 +1939,15 @@ function renderQuickOpenList() {
  *
  * **innerHTML を使わない。** ファイル名は利用者のディスク上の名前で、`<` や `&` を
  * 含みうる。テキストノードと要素で組み立てれば、エスケープ漏れの経路そのものが無い。
+ *
+ * `positions` は**コードポイント index**（`searchPaths` の返り値と同じ単位）。
+ * ここも `Array.from` でコードポイントに割ってから走らせる —— UTF-16 のコードユニットで
+ * 数えると絵文字入りのファイル名でサロゲートペアが割れ、`<mark>` に孤立サロゲートが
+ * 入って `�` が出る。
  */
 function appendHighlighted(host, text, positions) {
-  const marks = new Set(positions.filter((p) => p >= 0 && p < text.length));
+  const chars = Array.from(text);
+  const marks = new Set(positions.filter((p) => p >= 0 && p < chars.length));
   let buffer = "";
   let inMark = false;
   const flush = () => {
@@ -1910,13 +1961,13 @@ function appendHighlighted(host, text, positions) {
     }
     buffer = "";
   };
-  for (let i = 0; i < text.length; i++) {
+  for (let i = 0; i < chars.length; i++) {
     const hit = marks.has(i);
     if (hit !== inMark) {
       flush();
       inMark = hit;
     }
-    buffer += text[i];
+    buffer += chars[i];
   }
   flush();
 }
@@ -2000,8 +2051,9 @@ function wireKeyboard() {
       const isKey = ev.code === "KeyP" || ev.key === "p" || ev.key === "P";
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isKey || ev.altKey || ev.shiftKey) return;
-      // 編集中は open しない (テキスト入力を邪魔しない)。閉じるのは Esc に任せる
-      if (state.editing) return;
+      // **編集中でも開ける。** 未保存の確認は navigateTo が持っているので、ここで
+      // 止める必要がない。⋮ メニューからの導線とも挙動が揃う (片方だけ禁止すると
+      // 「PC では開けないのにスマホでは開ける」という食い違いになる)。
       ev.preventDefault();
       ev.stopPropagation();
       if (els.quickOpen.hidden) openQuickOpen();

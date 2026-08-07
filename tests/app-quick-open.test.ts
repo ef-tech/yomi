@@ -168,29 +168,194 @@ describe("クイックオープン", () => {
     expect(panel().hidden).toBe(false);
   });
 
-  // **遷移は navigateTo に委ねているので、未保存確認が従来どおり働く** (DoD 4 行目)
-  test("未保存編集中に開こうとすると確認が出て、キャンセルすれば遷移しない", async () => {
+  // **遷移は navigateTo に委ねているので、未保存確認が従来どおり働く** (DoD 4 行目)。
+  // 独自の遷移経路を作っていないことが、この 2 本で担保される。
+  test("未保存編集中に開くと確認が出て、キャンセルすれば遷移しない", async () => {
+    h = await bootApp();
+    const before = h.el("current-path").textContent;
+    h.click(h.el("edit-btn"));
+    await h.flush();
+    typeInto(h.el<HTMLTextAreaElement>("editor"), "編集中");
+    await h.flush();
+
+    // **編集中でも開ける** (未保存の確認は navigateTo が持っている)
+    await open();
+    expect(panel().hidden).toBe(false);
+
+    h.confirmResult = false; // 破棄をキャンセルする
+    h.keydown(input(), { key: "ArrowDown" });
+    h.keydown(input(), { key: "Enter" });
+    await h.flush();
+
+    // 確認が出て、遷移していない。編集内容も残っている
+    expect(h.confirmMessages.length).toBeGreaterThan(0);
+    expect(h.el("current-path").textContent).toBe(before);
+    expect(h.el("content-body").classList.contains("is-editing")).toBe(true);
+    expect(h.el<HTMLTextAreaElement>("editor").value).toBe("編集中");
+  });
+
+  test("未保存編集中でも、確認で OK すれば遷移して編集モードを抜ける", async () => {
     h = await bootApp();
     h.click(h.el("edit-btn"));
     await h.flush();
     typeInto(h.el<HTMLTextAreaElement>("editor"), "編集中");
     await h.flush();
 
-    // 編集中は Ctrl+P で開かない (テキスト入力を邪魔しない)
-    pressCtrlP();
+    await open();
+    h.confirmResult = true; // 破棄して続行する
+    h.keydown(input(), { key: "ArrowDown" });
+    h.keydown(input(), { key: "Enter" });
     await h.flush();
-    expect(panel().hidden).toBe(true);
+
+    expect(h.confirmMessages.length).toBeGreaterThan(0);
+    expect(h.el("current-path").textContent).toBe("docs/guide.md");
+    expect(h.el("content-body").classList.contains("is-editing")).toBe(false);
   });
 
-  test("編集モードを抜ければ再び開ける", async () => {
-    h = await bootApp();
-    h.click(h.el("edit-btn"));
-    await h.flush();
-    h.click(h.el("discard-btn"));
-    await h.flush();
+  // **Esc の優先順位。** このリポジトリは Esc をリスナー登録順とガードで捌いており、
+  // 過去にそれで壊している。クイックオープンは最前面 (z-index 60) なので常に最優先で、
+  // 1 回の Esc で背後まで閉じてはいけない。
+  test("Esc はクイックオープンだけを閉じ、背後の sidebar は開いたまま", async () => {
+    h = await bootApp({ mobile: true });
+    h.click(h.el("menu-btn"));
+    expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
 
     await open();
+    h.keydown(input(), { key: "Escape" });
+    await h.flush();
+
+    expect(panel().hidden).toBe(true);
+    expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
+  });
+
+  test("Esc はクイックオープンだけを閉じ、外部 URL バナーは出たまま", async () => {
+    h = await bootApp();
+    const a = h.document.createElement("a");
+    a.setAttribute("href", "https://example.com/");
+    h.el("preview").appendChild(a);
+    h.click(a);
+    expect(h.el("external-link-banner").hidden).toBe(false);
+
+    await open();
+    h.keydown(input(), { key: "Escape" });
+    await h.flush();
+
+    expect(panel().hidden).toBe(true);
+    expect(h.el("external-link-banner").hidden).toBe(false);
+  });
+
+  test("候補ボタンは tab 順から外れている (aria-activedescendant で選択を伝える)", async () => {
+    h = await bootApp();
+    await open();
+    expect(items().every((b) => b.tabIndex === -1)).toBe(true);
+
+    const first = items()[0];
+    if (!first) throw new Error("候補が 1 件も無い");
+    expect(input().getAttribute("aria-activedescendant")).toBe(first.id);
+  });
+
+  // **IME 変換中のキーを横取りしない。** 日本語のファイル名を打っている最中、変換確定の
+  // Enter がそのまま「候補を開く」になると、打ち終わる前に別のファイルへ飛ぶ。
+  describe("IME 変換中", () => {
+    /** `isComposing: true` の keydown を送る */
+    function composingKeydown(key: string) {
+      const ev = new h.window.KeyboardEvent("keydown", {
+        key,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      input().dispatchEvent(ev);
+      return ev;
+    }
+
+    test("Enter でファイルを開かない（変換確定を横取りしない）", async () => {
+      h = await bootApp();
+      const before = h.el("current-path").textContent;
+      await open();
+
+      composingKeydown("Enter");
+      await h.flush();
+
+      expect(h.el("current-path").textContent).toBe(before);
+      expect(panel().hidden).toBe(false);
+    });
+
+    test("↑↓ で選択を動かさない（IME の変換候補を選ばせる）", async () => {
+      h = await bootApp();
+      await open();
+      expect(activeItem()?.dataset.path).toBe("README.md");
+
+      composingKeydown("ArrowDown");
+      expect(activeItem()?.dataset.path).toBe("README.md");
+    });
+
+    test("Esc で閉じない（変換のキャンセルを横取りしない）", async () => {
+      h = await bootApp();
+      await open();
+
+      composingKeydown("Escape");
+      await h.flush();
+
+      expect(panel().hidden).toBe(false);
+    });
+  });
+
+  // `aria-modal="true"` と宣言している以上、Tab で背後へ抜けられてはいけない。
+  //
+  // **jsdom は Tab によるフォーカス移動を実装していない**ので、「フォーカスが外へ出ない」を
+  // そのまま書くと**実装を消しても通る空テスト**になる (実測で確認済み)。代わりに実装の契約
+  // ——「既定動作を打ち消し、入力欄へ戻す」——を、`defaultPrevented` と、パネル内の別要素から
+  // 戻ることの 2 点で見る。
+  test("Tab は既定動作を打ち消してフォーカスを入力欄へ戻す", async () => {
+    h = await bootApp();
+    await open();
+
+    const send = (target: EventTarget, shiftKey: boolean) => {
+      const ev = new h.window.KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(ev);
+      return ev;
+    };
+
+    expect(send(input(), false).defaultPrevented).toBe(true);
+    expect(send(input(), true).defaultPrevented).toBe(true);
+
+    // パネル内の別要素にフォーカスが渡っていても入力欄へ引き戻す
+    const first = items()[0];
+    if (!first) throw new Error("候補が 1 件も無い");
+    first.focus();
+    expect(h.document.activeElement).toBe(first);
+    send(first, false);
+    expect(h.document.activeElement).toBe(input());
+  });
+
+  test("候補が無いとき aria-expanded を false にする", async () => {
+    h = await bootApp();
+    await open();
+    expect(input().getAttribute("aria-expanded")).toBe("true");
+
+    typeInto(input(), "zzzz");
+    await h.flush();
+    expect(input().getAttribute("aria-expanded")).toBe("false");
+    expect(input().hasAttribute("aria-activedescendant")).toBe(false);
+  });
+
+  test("スマホの ⋮ メニューからも開ける（編集中も含む）", async () => {
+    h = await bootApp({ mobile: true });
+    h.click(h.el("edit-btn"));
+    await h.flush();
+
+    h.click(h.el("overflow-btn"));
+    h.click(h.el("overflow-quick-open"));
+    await h.flush();
+
     expect(panel().hidden).toBe(false);
+    expect(h.el("overflow-menu").hidden).toBe(true);
   });
 
   // 除外・depth はサーバ側で適用済みなので、ツリーに無いものは候補にも出ない (DoD 3 行目)
@@ -212,6 +377,44 @@ describe("クイックオープン", () => {
     const marks = h.qa("#quick-open-list mark");
     expect(marks.length).toBeGreaterThan(0);
     expect(marks.map((m) => m.textContent?.toLowerCase()).join("")).toBe("rdm");
+  });
+
+  // **絵文字入りのファイル名でハイライトが割れない。** 候補検索はコードポイント index を
+  // 返すので、描画側が UTF-16 のコードユニットで数えると 1 つずつずれ、`<mark>` に
+  // サロゲートの片割れが入って `�` になる（実機で踏んだ）。
+  test("絵文字入りのファイル名でもハイライトが壊れない", async () => {
+    h = await bootApp({
+      tree: {
+        name: ".",
+        path: "",
+        type: "dir",
+        children: [
+          {
+            name: "docs",
+            path: "docs",
+            type: "dir",
+            children: [{ name: "📁メモ帳.md", path: "docs/📁メモ帳.md", type: "file" }],
+          },
+        ],
+      },
+      files: { "docs/📁メモ帳.md": { raw: "x", html: "<p>x</p>", sha: "s1" } },
+    });
+    await open();
+    typeInto(input(), "メモ");
+    await h.flush();
+
+    expect(items().map((b) => b.dataset.path)).toEqual(["docs/📁メモ帳.md"]);
+
+    const marks = h.qa("#quick-open-list mark");
+    expect(marks.map((m) => m.textContent).join("")).toBe("メモ");
+
+    // 孤立サロゲート（U+D800〜U+DFFF）が 1 つも残っていない
+    const rendered = h.el("quick-open-list").textContent ?? "";
+    expect(/[\uD800-\uDFFF]/.test(rendered.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""))).toBe(
+      false,
+    );
+    // 絵文字そのものは（ハイライトされずに）残っている
+    expect(rendered).toContain("📁");
   });
 
   test("閉じるとフォーカスが元の要素へ戻る", async () => {
