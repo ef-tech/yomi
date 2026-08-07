@@ -10,6 +10,15 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #80)
+
+- **ブラウザ E2E テスト基盤を追加した**: Playwright で実 Chromium を動かす E2E を `e2e/` に置き、`bun run test:e2e` で実行できる。`e2e/fixtures/` の固定ドキュメントに対して yomi を自動起動し、疎通確認用の最小 1 フロー（ファイル選択 → プレビュー表示 → URL 反映）を CI で通す
+- **失敗時に screenshot と trace を残す**: `test-results/` に出力され、CI では artifact として取得できる。trace は `playwright show-trace` で操作を再生できる
+- **CI は test ジョブと分けた**: ブラウザ導入だけで 100MB 超・数十秒かかるため、ユニットテストのフィードバックを遅らせない。E2E が落ちても test の結果は独立して読める。ブラウザバイナリは版ごとにキャッシュする
+- **chromium のみ・ubuntu のみで走らせる**: E2E が守るのは「実ブラウザでしか出ない結合」であって OS 差ではない（OS 差はユニット側の matrix が見ている）。macOS でも回すと CI 時間が倍になり、Issue #45 で踏んだ macOS 固有の flaky を E2E でも抱え込む
+- **flaky を持ち込まない方針を明文化した**: 固定 sleep を使わない / `retries` は CI でも 0 / `workers: 1`。責務分担（jsdom で書けるものは E2E に書かない）とあわせて README に記載
+- **`bunfig.toml` を追加**: `bun test` は `*.spec.ts` も拾うため、探索範囲を `tests/` に限定した。これが無いと素の `bun test` が Playwright のテストを bun のランナーで実行しようとして落ちる
+
 ## [0.19.0] - 2026-08-04
 
 **バックグラウンド実行**に対応しました (Issue #67 / #68 / #69)。`yomi up -d` でターミナルを占有せず常駐させ、`yomi list` で起動中の一覧を確認し、`yomi down` で停止できます。`docker compose` の `up -d` / `down` と同じ感覚で、複数のプロジェクトを同時に開いたままにできます。引数なしの `yomi` は従来どおりフォアグラウンド起動のままです。あわせて、リンクした csv 等のダウンロード (Issue #64) と、dependabot の依存更新 PR が CI で必ず落ちていた問題の解消 (Issue #72) が入っています。

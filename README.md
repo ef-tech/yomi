@@ -329,11 +329,47 @@ yomi が起動しました
 bun test
 ```
 
-`tests/` 配下に `*.test.ts` 形式で配置されています。サーバー側の純関数・セキュリティ関連・パーサ・ファイルスキャナに加え、DOM に依存しないクライアント純関数 (`public/new-file.js` 等) もカバーしています（DOM 結合した `app.js` 本体は対象外）。
+`tests/` 配下に `*.test.ts` 形式で配置されています。サーバー側の純関数・セキュリティ関連・パーサ・ファイルスキャナに加え、クライアント側の純関数 (`public/new-file.js` 等) と、jsdom 上で `public/app.js` の状態遷移を固定する特性テスト (Issue #77) をカバーしています。
 
 ```bash
 bun test tests/util/        # util ディレクトリだけ
 bun test tests/safepath     # ファイル名で絞り込み
+```
+
+### ブラウザ E2E テスト (Issue #80)
+
+実ブラウザ (Chromium) で動かす E2E は Playwright で書き、`e2e/` 配下に `*.spec.ts` として置きます。
+
+```bash
+bunx playwright install chromium   # 初回のみ (ブラウザバイナリの取得)
+bun run test:e2e                   # E2E を実行
+bunx playwright test --ui          # UI モードで対話的に実行
+```
+
+`e2e/fixtures/` の固定ドキュメントに対して yomi を起動し (Playwright が自動で立ち上げます)、ブラウザで操作します。ポートは `YOMI_E2E_PORT` で変えられます (既定 39901)。
+
+#### ユニットテストとの責務分担
+
+| | 何を守るか | 実行 |
+|---|---|---|
+| `bun test` (`tests/`) | サーバの API・純関数・**jsdom 上での `app.js` の状態遷移** | 常時。速い |
+| `bun run test:e2e` (`e2e/`) | **実ブラウザでしか出ない結合** — 実 CSS のレイアウト、実 DOM イベント、実 WebSocket、Mermaid の実描画、履歴 API | CI と手動。遅い |
+
+**jsdom で書けるものは E2E に書きません。** jsdom はレイアウトを持たず (`scrollTop` が常に 0)、`IntersectionObserver` も `TouchEvent` も無いため、特性テストはそこをスタブで埋めています。E2E は「スタブで埋めた部分が実物でも成り立つか」を見る場所で、ロジックの網羅はユニット側の仕事です。E2E を増やしすぎると CI が遅く不安定になります。
+
+#### flaky を持ち込まない方針
+
+過去に macOS CI の watcher テストが間欠的に落ちる問題 (Issue #45) を踏んでいるため、E2E では次を守ります。
+
+- **固定 sleep を使わない。** Playwright の auto-waiting と `expect(locator)` のリトライで同期する
+- **`retries` は CI でも 0。** 「たまに落ちるが再実行で通る」を許すと flaky が沈殿する。落ちたら直すか、その検証をユニット側へ移す
+- **`workers: 1`。** yomi は 1 プロセス 1 ディレクトリを見るサーバなので、並列にすると同じ fixture を複数のテストが書き換えて干渉する
+- **CI は chromium のみ・ubuntu のみ。** E2E が守るのは「実ブラウザでしか出ない結合」であって OS 差ではありません (OS 差はユニット側の matrix が見ています)
+
+失敗すると screenshot と trace が `test-results/` に残ります (CI では artifact として取得できます)。trace は操作を再生できます。
+
+```bash
+bunx playwright show-trace test-results/<テスト名>/trace.zip
 ```
 
 ### 型チェック
