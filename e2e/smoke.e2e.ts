@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /**
  * E2E 基盤が動くことを示す最小フロー (Issue #80)。
@@ -10,11 +10,20 @@ import { expect, test } from "@playwright/test";
  * 固定 sleep は使わない (`playwright.config.ts` の方針)。`expect(locator)` の
  * auto-retry で同期する。
  */
+/**
+ * ツリーの項目は `title` 属性にフルパスを持つ。
+ *
+ * **`getByRole("button", { name })` を使わない。** `.tree-item` の accessible name には
+ * 装飾アイコン (`.icon::before` の `≡` / `▸`) が混ざるため完全一致にできず、部分一致だと
+ * `README.md` が `SUB-README.md` にもマッチして strict mode violation になる (#82 で
+ * fixture が増えたときに踏む)。`title` なら一意で完全一致。
+ */
+const treeItem = (page: Page, path: string) => page.locator(`#tree .tree-item[title="${path}"]`);
+
 test("ファイルを選ぶとプレビューに描画される", async ({ page }) => {
   await page.goto("/");
 
-  const tree = page.locator("#tree");
-  await expect(tree.getByRole("button", { name: "README.md" })).toBeVisible();
+  await expect(treeItem(page, "README.md")).toBeVisible();
 
   // **起動時に開くのはツリー先頭のファイル。** scanner がディレクトリを先に並べるので
   // (`sortTree`)、fixture では `docs/guide.md` が先頭になる。README.md ではない。
@@ -22,7 +31,7 @@ test("ファイルを選ぶとプレビューに描画される", async ({ page 
   await expect(page.locator("#preview h1")).toHaveText("ガイド");
 
   // ルート直下のファイルへ遷移する
-  await tree.getByRole("button", { name: "README.md" }).click();
+  await treeItem(page, "README.md").click();
 
   await expect(page.locator("#current-path")).toHaveText("README.md");
   await expect(page.locator("#preview h1")).toHaveText("yomi E2E fixture");

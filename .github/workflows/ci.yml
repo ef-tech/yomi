@@ -77,6 +77,8 @@ jobs:
   e2e:
     name: E2E (chromium)
     runs-on: ubuntu-latest
+    # ブラウザバイナリの download や bun install が詰まったときに 6 時間走らせない
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -95,27 +97,37 @@ jobs:
 
       # ブラウザバイナリは版ごとにキャッシュする。@playwright/test を bump したら
       # キーが変わって取り直される。
+      #
+      # **版取得は失敗したら落とす。** 既定シェルは `bash -e` で pipefail が付かないので、
+      # 出力形式が変わって grep が空振りしても step は成功し、`playwright-Linux-` という
+      # 空版キーが保存される。restore-keys が無いため以後 bump してもそのキーに当たり続け、
+      # ブラウザが入らないまま E2E が落ち続ける (原因に辿り着きにくい)。
       - name: Get Playwright version
         id: pw
-        run: echo "version=$(bun pm ls | grep -oP '@playwright/test@\K[0-9.]+' | head -1)" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(bunx playwright --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')"
+          [ -n "$version" ] || { echo "::error::Playwright の版を取得できませんでした"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # arch とイメージ版もキーに入れる。runner.os は "Linux" としか出ないので、
+      # ubuntu-latest が次の LTS へ切り替わったとき古いイメージ用のキャッシュを引き継いでしまう。
       - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ steps.pw.outputs.version }}
 
+      # **cache-hit で分岐しない。** `--with-deps` はブラウザが既にあれば download を
+      # スキップして apt の依存だけ入れるので 1 step で足りる。分岐させると、install が
+      # 途中で失敗した run のキャッシュが保存されたときに以後ずっと install がスキップされ、
+      # 壊れたキャッシュから自力で回復できなくなる。
+      #
       # chromium だけ入れる。firefox / webkit は「実ブラウザでしか出ない結合」を見るのに
-      # 必須ではなく、導入時間と flaky を増やすだけなので入れない (必要になったら別 Issue)。
-      - name: Install Chromium
-        if: steps.pw-cache.outputs.cache-hit != 'true'
+      # 必須ではなく、導入時間と flaky を増やすだけ (必要になったら別 Issue)。
+      - name: Install Chromium (+ system deps)
         run: bunx playwright install --with-deps chromium
-
-      # キャッシュヒット時もシステム依存ライブラリは入っていないので、そこだけ入れる
-      - name: Install system deps
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
 
       - name: Run E2E
         run: bun run test:e2e
@@ -124,7 +136,7 @@ jobs:
       # `npx playwright show-trace <zip>` で操作を再生できる。
       - name: Upload E2E artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |

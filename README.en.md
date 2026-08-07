@@ -340,7 +340,7 @@ bun test tests/safepath     # filter by file name
 
 ### Browser E2E tests (Issue #80)
 
-End-to-end tests that drive a real browser (Chromium) are written with Playwright and live under `e2e/` as `*.spec.ts`.
+End-to-end tests that drive a real browser (Chromium) are written with Playwright and live under `e2e/` as **`*.e2e.ts`** (naming them `*.spec.ts` would make a bare `bun test` pick them up, so the two runners are kept disjoint by file name).
 
 ```bash
 bunx playwright install chromium   # first time only (fetch the browser binary)
@@ -348,7 +348,7 @@ bun run test:e2e                   # run the E2E suite
 bunx playwright test --ui          # interactive UI mode
 ```
 
-They start yomi against the fixed documents in `e2e/fixtures/` (Playwright launches it for you) and drive it in the browser. The port can be changed with `YOMI_E2E_PORT` (default 39901).
+The fixed documents in `e2e/fixtures/` are copied to a temporary directory first, and yomi is started against that copy (Playwright launches it for you). yomi has write APIs, so pointing it at the tracked fixtures would let editing tests dirty the git working tree. The port can be changed with `YOMI_E2E_PORT` (default 3950).
 
 #### How this splits with the unit tests
 
@@ -367,6 +367,7 @@ We already got burned by an intermittently failing watcher test on macOS CI (Iss
 - **`retries` is 0, even on CI.** Tolerating "fails sometimes, passes on re-run" is how flakiness accumulates. Fix it, or move the check to the unit tests
 - **`workers: 1`.** yomi is one process serving one directory, so running in parallel would let tests clobber the same fixture
 - **Chromium only, Ubuntu only on CI.** E2E guards browser-specific integration, not OS differences (the unit test matrix covers those)
+- **`locale` and timezone are pinned.** Chromium inherits the host locale, so without pinning the UI language differs between local (ja) and CI (en). **If you write label-based locators, this `locale` is the assumption they rest on**
 
 On failure a screenshot and a trace are written to `test-results/` (available as CI artifacts). The trace replays the run.
 

@@ -6,6 +6,8 @@
       "src/**/*.ts",
       "tests/**/*.ts",
       "scripts/**/*.ts",
+      "e2e/**/*.ts",
+      "playwright.config.ts",
       "public/**/*.js",
       "public/**/*.html",
       "public/**/*.css",

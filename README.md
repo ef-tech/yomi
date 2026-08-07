@@ -338,7 +338,7 @@ bun test tests/safepath     # ファイル名で絞り込み
 
 ### ブラウザ E2E テスト (Issue #80)
 
-実ブラウザ (Chromium) で動かす E2E は Playwright で書き、`e2e/` 配下に `*.spec.ts` として置きます。
+実ブラウザ (Chromium) で動かす E2E は Playwright で書き、`e2e/` 配下に **`*.e2e.ts`** として置きます（`*.spec.ts` にすると素の `bun test` が拾ってしまうため、命名で排他にしています）。
 
 ```bash
 bunx playwright install chromium   # 初回のみ (ブラウザバイナリの取得)
@@ -346,7 +346,7 @@ bun run test:e2e                   # E2E を実行
 bunx playwright test --ui          # UI モードで対話的に実行
 ```
 
-`e2e/fixtures/` の固定ドキュメントに対して yomi を起動し (Playwright が自動で立ち上げます)、ブラウザで操作します。ポートは `YOMI_E2E_PORT` で変えられます (既定 39901)。
+`e2e/fixtures/` の固定ドキュメントを一時ディレクトリへコピーしたうえで yomi を起動し (Playwright が自動で立ち上げます)、ブラウザで操作します。yomi は書き込み API を持つため、追跡下の fixture を直接見せると編集フローのテストが git のワークツリーを汚すためです。ポートは `YOMI_E2E_PORT` で変えられます (既定 3950)。
 
 #### ユニットテストとの責務分担
 
@@ -365,6 +365,7 @@ bunx playwright test --ui          # UI モードで対話的に実行
 - **`retries` は CI でも 0。** 「たまに落ちるが再実行で通る」を許すと flaky が沈殿する。落ちたら直すか、その検証をユニット側へ移す
 - **`workers: 1`。** yomi は 1 プロセス 1 ディレクトリを見るサーバなので、並列にすると同じ fixture を複数のテストが書き換えて干渉する
 - **CI は chromium のみ・ubuntu のみ。** E2E が守るのは「実ブラウザでしか出ない結合」であって OS 差ではありません (OS 差はユニット側の matrix が見ています)
+- **UI 言語 (`locale`) とタイムゾーンを固定。** Chromium はホストの locale を継承するため、固定しないとローカル (ja) と CI (en) で表示言語が変わります。**ラベルでロケータを書くならこの `locale` が前提**です
 
 失敗すると screenshot と trace が `test-results/` に残ります (CI では artifact として取得できます)。trace は操作を再生できます。
 
