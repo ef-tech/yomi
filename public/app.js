@@ -68,6 +68,7 @@ const els = {
   conflictDiffBody: document.getElementById("conflict-diff-body"),
   conflictDiffLegend: document.getElementById("conflict-diff-legend"),
   conflictDiffTruncated: document.getElementById("conflict-diff-truncated"),
+  conflictDiffNotice: document.getElementById("conflict-diff-notice"),
   conflictDiffCopyLocal: document.getElementById("conflict-diff-copy-local"),
   conflictDiffCopyServer: document.getElementById("conflict-diff-copy-server"),
   conflictDiffTakeServer: document.getElementById("conflict-diff-take-server"),
@@ -965,6 +966,9 @@ function reapplyDynamicI18n() {
   // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
   updateExpandToggleUi();
   if (state.tocVisible) refreshToc();
+  // 競合の差分は件数と「N 行省略」を組み立てているので、開いていれば作り直す
+  // (data-i18n では戻せない = applyI18n の対象外)
+  if (!els.conflictDiff.hidden) renderConflictDiff();
   // ステータスは key を保持しない一過性メッセージのため、言語切替時はクリアする
   // (旧言語の文言が残らないように。次の操作で新言語で再表示される。
   //  競合バナー等の操作可能な UI は別要素なので消えない)。
@@ -1357,13 +1361,23 @@ function confirmLeaveEdit() {
   return window.confirm(t("confirm.unsavedContinue"));
 }
 
-async function saveEdit({ force = false } = {}) {
-  if (!state.editing) return false;
+/**
+ * 編集内容を保存する。
+ *
+ * `body` を明示すると**編集モードでなくても保存する**。競合の「強制上書き」は
+ * エディタ以外の経路 (プレビューのチェックボックス) からも起こりうるが、そのときは
+ * 編集モードでないのでエディタから本文を取れない。明示しなければ従来どおり
+ * エディタの中身を保存し、編集モードでなければ何もしない。
+ *
+ * @param {{ force?: boolean, body?: string | null }} [options]
+ */
+async function saveEdit({ force = false, body: overrideBody = null } = {}) {
+  if (overrideBody === null && !state.editing) return false;
   if (!state.currentPath) {
     setStatus("error", t("status.saveNoFile"));
     return false;
   }
-  const body = els.editor.value;
+  const body = overrideBody ?? els.editor.value;
   const payload = { path: state.currentPath, body };
   if (!force && state.currentSha) payload.baseSha = state.currentSha;
 
@@ -1373,11 +1387,18 @@ async function saveEdit({ force = false } = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    hideConflict();
+    if (overrideBody !== null) {
+      // エディタ以外の経路。**applyFile に任せる** —— チェックボックスの再 attach や
+      // TOC の作り直しまで含めて、通常のファイル反映と同じ状態に戻す
+      applyFile(data);
+      setStatus("ok", t("status.saved", { path: state.currentPath }));
+      return true;
+    }
     state.currentRaw = data.raw;
     state.currentHtml = sanitize(data.html);
     state.currentSha = data.sha;
     setDirty(false);
-    hideConflict();
     if (state.viewMode !== "md") {
       els.preview.innerHTML = state.currentHtml;
       renderMermaid().catch(() => {});
@@ -1387,7 +1408,7 @@ async function saveEdit({ force = false } = {}) {
     return true;
   } catch (err) {
     if (err.status === 409 && err.payload) {
-      showConflict(err.payload);
+      showConflict(err.payload, body);
       setStatus("error", t("status.conflict"));
     } else {
       setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
@@ -1462,7 +1483,9 @@ async function onTaskCheckboxToggle(ev) {
     target.checked = !target.checked; // revert UI
     target.disabled = state.editing;
     if (err.status === 409 && err.payload) {
-      showConflict(err.payload);
+      // **エディタの中身ではなく、チェックを反映した本文を渡す。**
+      // この経路は編集モードでないのでエディタは空
+      showConflict(err.payload, body);
       setStatus("error", t("status.conflict"));
     } else {
       setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
@@ -1474,13 +1497,35 @@ async function onTaskCheckboxToggle(ev) {
 
 let conflictServerSnapshot = null;
 
-function showConflict(payload) {
+/**
+ * 競合したときに**保存しようとした本文**。
+ *
+ * **`els.editor.value` では代用できない。** 競合はエディタ以外からも起きる ——
+ * プレビューのチェックボックスを切り替えた保存 (`onTaskCheckboxToggle`) は
+ * **編集モードでない**ので、エディタは空のまま。それを「ローカル版」として差分に出すと
+ * 「自分の変更が全部消えている」という嘘を見せることになる。
+ */
+let conflictLocalBody = null;
+
+/**
+ * 競合を伝える。
+ *
+ * @param {object} payload 409 のレスポンス (サーバの最新内容)
+ * @param {string} localBody 保存しようとした本文
+ */
+function showConflict(payload, localBody) {
   conflictServerSnapshot = payload;
+  conflictLocalBody = localBody;
   els.conflictBanner.hidden = false;
+  // **開いたまま差し替わることがある。** watcher の連続通知やモーダル中の Ctrl+S で
+  // ここへ再入すると、画面は古い差分のままスナップショットだけが新しくなる。
+  // そのまま「サーバ内容を取り込む」を押すと**見ていない内容**が入ってしまう。
+  if (!els.conflictDiff.hidden) renderConflictDiff();
 }
 
 function hideConflict() {
   conflictServerSnapshot = null;
+  conflictLocalBody = null;
   els.conflictBanner.hidden = true;
   closeConflictDiff();
 }
@@ -1501,10 +1546,14 @@ function takeServerVersion() {
 }
 
 function forceOverwrite() {
-  // **スナップショットを先に読む。** hideConflict がそれを捨てるので、
-  // 順番を逆にすると差分ダイアログから押したときに何を上書きするか分からなくなる
+  // **`hideConflict` より先に読む。** そこで `conflictLocalBody` が捨てられる。
+  //
+  // 編集中ならエディタから取れるので渡さない (従来どおり)。編集モードでない経路
+  // (プレビューのチェックボックス) では、競合したときに保存しようとした本文がここにしかない。
+  // 渡さないと `saveEdit` の editing ガードに弾かれて**無言で何も起きない**。
+  const body = state.editing ? null : conflictLocalBody;
   hideConflict();
-  saveEdit({ force: true });
+  saveEdit({ force: true, body });
 }
 
 /* ===== 競合の差分ダイアログ (Issue #57) ===== */
@@ -1525,11 +1574,15 @@ function wireConflictDiff() {
   els.conflictDiffClose.addEventListener("click", () => closeConflictDiff());
   els.conflictDiffTakeServer.addEventListener("click", () => takeServerVersion());
   els.conflictDiffOverwrite.addEventListener("click", () => forceOverwrite());
-  els.conflictDiffCopyLocal.addEventListener("click", () =>
-    copyConflictSide(els.editor.value, "conflict.diff.copiedLocal"),
+  els.conflictDiffCopyLocal.addEventListener("click", (ev) =>
+    copyConflictSide(conflictLocalBody ?? "", "conflict.diff.copiedLocal", ev.currentTarget),
   );
-  els.conflictDiffCopyServer.addEventListener("click", () =>
-    copyConflictSide(conflictServerSnapshot?.raw ?? "", "conflict.diff.copiedServer"),
+  els.conflictDiffCopyServer.addEventListener("click", (ev) =>
+    copyConflictSide(
+      conflictServerSnapshot?.raw ?? "",
+      "conflict.diff.copiedServer",
+      ev.currentTarget,
+    ),
   );
 
   // 背景 (パネルの外) をクリックしたら閉じる
@@ -1592,14 +1645,35 @@ function handleConflictDiffKeydown(ev) {
 function conflictDiffFocusables() {
   return Array.from(
     els.conflictDiff.querySelectorAll("button:not([disabled]), [tabindex='0']"),
-  ).filter((el) => !el.hidden);
+  ).filter((el) => {
+    // **祖先の hidden まで見る。** `Element.hidden` は自要素の属性しか反映しないので、
+    // 隠したラッパーの中のボタンを拾ってしまう。`checkVisibility` があればそれを使う
+    // (jsdom には無いので、無ければ祖先を辿る。`offsetParent` はレイアウトが要るので使わない)
+    if (typeof el.checkVisibility === "function") return el.checkVisibility();
+    for (
+      let node = el;
+      node && node !== els.conflictDiff.parentElement;
+      node = node.parentElement
+    ) {
+      if (node.hidden) return false;
+    }
+    return true;
+  });
 }
 
 function openConflictDiff() {
   if (!conflictServerSnapshot) return;
+  // 再入すると戻り先がダイアログ内の要素で上書きされ、閉じたときの復帰が壊れる
+  if (!els.conflictDiff.hidden) return;
   conflictDiffReturnFocus = document.activeElement;
-  renderConflictDiff();
+  els.conflictDiffNotice.hidden = true;
+  els.conflictDiffNotice.textContent = "";
+  // **先に表示してから中身を書く。** live region (`role="status"`) の更新は
+  // 「表示されている領域が変化したとき」に通知される。hidden な祖先の中で
+  // textContent を書き換えてから表示しても、多くの支援技術は読み上げない。
+  // (開いた瞬間の読み上げには `aria-describedby` でも件数が乗る)
   els.conflictDiff.hidden = false;
+  renderConflictDiff();
   // 最初のフォーカスは先頭の要素へ。通常は差分本体なので、**まず中身を読ませる**形になる
   // (いきなり「サーバ内容を取り込む」に当てない —— 誤爆すると編集が消える)。
   // 大きすぎて差分を出せなかったときは本体が hidden なので、自動的に次の要素へ回る
@@ -1633,9 +1707,14 @@ function closeConflictDiff() {
 }
 
 function renderConflictDiff() {
-  const localText = els.editor.value;
+  const localText = conflictLocalBody ?? "";
   const serverText = conflictServerSnapshot?.raw ?? "";
   const result = diffLines(localText, serverText);
+
+  // サーバ側でファイルが消えていると `raw` は null。コピーしても空文字なので押させない
+  const serverGone = conflictServerSnapshot?.raw == null;
+  els.conflictDiffCopyServer.disabled = serverGone;
+  els.conflictDiffCopyServer.title = serverGone ? t("conflict.diff.serverGone") : "";
 
   els.conflictDiffTruncated.hidden = !result.truncated;
   els.conflictDiffBody.replaceChildren();
@@ -1708,13 +1787,24 @@ function buildConflictSkipRow(count) {
   return div;
 }
 
-async function copyConflictSide(text, messageKey) {
+async function copyConflictSide(text, messageKey, button) {
+  let message;
   try {
     await copyTextToClipboard(text);
-    setStatus("ok", t(messageKey));
+    message = t(messageKey);
+    setStatus("ok", message);
   } catch {
-    setStatus("error", t("conflict.diff.copyFailed"));
+    message = t("conflict.diff.copyFailed");
+    setStatus("error", message);
   }
+  // **パネルの中にも出す。** `#status` は topbar にあり、このダイアログのスクリムの下
+  // (z-index 70) に隠れて見えない
+  els.conflictDiffNotice.textContent = message;
+  els.conflictDiffNotice.hidden = false;
+  // **フォーカスを押したボタンへ戻す。** 非セキュアコンテキスト (LAN の HTTP = yomi の
+  // 主用途) では `execCommand` フォールバックが一時 textarea を作って消すので、
+  // 終わったときフォーカスが `<body>` に落ちている
+  if (button?.isConnected) button.focus();
 }
 
 /* ===== リンクナビゲーション ===== */
@@ -2084,7 +2174,7 @@ async function handleLiveEvent(msg) {
       // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
       try {
         const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
-        showConflict(latest);
+        showConflict(latest, els.editor.value);
         setStatus("error", t("status.fileUpdatedElsewhere"));
       } catch (err) {
         setStatus("error", errorText(err));
