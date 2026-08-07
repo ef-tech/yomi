@@ -39,6 +39,10 @@ coverage/
 *.tmp
 .cache/
 
+# ベンチマークの fixture (Issue #83)。数万ファイルを追跡してもレビューできず、
+# scripts/bench-fixture.ts があれば同じものを再生成できる
+.bench/
+
 # Claude Code 作業ファイル
 .claude/
 .gstack/
