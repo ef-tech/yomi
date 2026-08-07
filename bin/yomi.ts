@@ -9,6 +9,7 @@ import {
   shouldOpenBrowser,
 } from "../src/cli.ts";
 import {
+  assertPortIsFree,
   DETACHED_ENV,
   describeNoStopTarget,
   describeStop,
@@ -54,7 +55,22 @@ async function runUp(options: CliOptions) {
   const rootDir = process.cwd();
   // ポートは親側で確定させる。子に自動探索させると親が実ポートを知れず、
   // レジストリに書けない (= down / list から辿れない)。
+  // **--port を明示したときは事前に空きを確かめる (Issue #94)。**
+  // 省略時は findAvailablePort が空きを探すので衝突しない。明示指定だけが
+  // 検査されずに createServer へ渡り、Bun.serve の throw が生のまま出ていた。
+  //
+  // **切り離された子 (up -d の実体) では検査しない。** 親の startDetached が
+  // 起動直前に同じ検査を済ませており、子でもう一度読むとレジストリに書かれた
+  // 「自分自身の記録」を見つけて「既に起動しています」と誤判定する。
   const port = options.port !== null ? options.port : await findAvailablePort(options.host);
+  if (options.port !== null && !options.detach && process.env[DETACHED_ENV] !== "1") {
+    try {
+      await assertPortIsFree(options.host, port);
+    } catch (err) {
+      console.error(`エラー: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
 
   if (options.detach) {
     await runDetached(options, rootDir, port);
@@ -80,8 +96,11 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 
   // レジストリに記録して yomi list / yomi down の対象にする (Issue #90)。
   //
-  // **createServer より後に置く。** Bun.serve は使用中ポートで throw するので、
-  // 二重起動はここへ来る前に落ちる = 先に動いているインスタンスの記録を上書きしない。
+  // **createServer より後に置く。** 二重起動が先に動いているインスタンスの記録を
+  // 上書きしないようにするため。Issue #94 で `runUp` に `assertPortIsFree` を足したので
+  // **`--port` 明示時はここへ来る前に落ちる**が、この順序自体は残す ——
+  // 事前検査と `Bun.serve` の間には隙間があり (別プロセスがその間に掴みうる)、
+  // 検査を通り抜けた二重起動を最終的に止めるのは `Bun.serve` の throw だから。
   //
   // **切り離された子 (up -d の実体) は記録しない。** 親の startDetached が
   // logPath 付きの記録を書くので、ここでも書くと logPath が空の記録で上書きしてしまう。

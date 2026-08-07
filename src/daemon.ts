@@ -118,8 +118,17 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
  * 掴んでいる場合に、子が即死していても接続に成功して「起動できた」と誤判定**する。
  * その状態でレジストリを書くと、先に動いていたインスタンスの記録を死んだ pid で
  * 上書きし、生きているプロセスが down からも list からも辿れない孤児になる。
+ *
+ * **フォアグラウンド起動 (`bin/yomi.ts` の `runUp`) からも使う (Issue #94)。**
+ * バックグラウンドだけに掛けていたため、`yomi --port <使用中>` は `Bun.serve` の
+ * throw がそのまま `main().catch` へ流れ、ソースの抜粋つきスタックトレースが出ていた。
+ * 判定と文面をここに集約して、どちらの経路でも同じ案内を出す。
  */
-async function assertPortIsFree(host: string, port: number, paths: RegistryPaths): Promise<void> {
+export async function assertPortIsFree(
+  host: string,
+  port: number,
+  paths: RegistryPaths = resolvePaths(),
+): Promise<void> {
   const existing = (await readInstances(paths)).find((r) => r.port === port);
   if (existing && isAlive(existing.pid)) {
     throw new Error(
