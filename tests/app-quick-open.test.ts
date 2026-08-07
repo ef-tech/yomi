@@ -301,6 +301,52 @@ describe("クイックオープン", () => {
     });
   });
 
+  // **フォーカスがパネルの外にあってもキー操作が効く。**
+  //
+  // パネル内には空リスト帯やリストの padding、スクロールバーといった**フォーカスを取れない
+  // 可視領域**があり、実ブラウザではそこを mousedown すると `activeElement` が `<body>` に
+  // 戻る。リスナーをパネル要素に付けているとそこで処理系が丸ごと迂回され、
+  // 「Esc でパネルが閉じず、背後の sidebar だけが閉じる」という逆向きの壊れ方をする。
+  // （jsdom はそのフォーカス挙動を実装していないので、body へ直接キーを送って再現する）
+  describe("フォーカスがパネルの外に落ちているとき", () => {
+    test("Esc でパネルが閉じ、背後の sidebar は開いたまま", async () => {
+      h = await bootApp({ mobile: true });
+      h.click(h.el("menu-btn"));
+      expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
+      await open();
+
+      h.keydown(h.document.body, { key: "Escape" });
+      await h.flush();
+
+      expect(panel().hidden).toBe(true);
+      expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
+    });
+
+    test("↑↓ で候補を選び、Enter で開ける", async () => {
+      h = await bootApp();
+      await open();
+      expect(activeItem()?.dataset.path).toBe("README.md");
+
+      h.keydown(h.document.body, { key: "ArrowDown" });
+      expect(activeItem()?.dataset.path).toBe("docs/guide.md");
+
+      h.keydown(h.document.body, { key: "Enter" });
+      await h.flush();
+      expect(h.el("current-path").textContent).toBe("docs/guide.md");
+    });
+
+    test("Tab でフォーカスを入力欄へ引き戻す", async () => {
+      h = await bootApp();
+      await open();
+      // blur でフォーカスが body に落ちた状態を作る（実ブラウザで空白を mousedown した状態）
+      input().blur();
+      expect(h.document.activeElement).not.toBe(input());
+
+      h.keydown(h.document.body, { key: "Tab" });
+      expect(h.document.activeElement).toBe(input());
+    });
+  });
+
   // `aria-modal="true"` と宣言している以上、Tab で背後へ抜けられてはいけない。
   //
   // **jsdom は Tab によるフォーカス移動を実装していない**ので、「フォーカスが外へ出ない」を
@@ -345,6 +391,24 @@ describe("クイックオープン", () => {
     expect(input().hasAttribute("aria-activedescendant")).toBe(false);
   });
 
+  // **⋮ から開いたときも、閉じたらフォーカスの起点が残る。**
+  // 戻り先の `#overflow-quick-open` は閉じたメニューの中にいるので `focus()` が空振りする
+  // （`isConnected` は true なので素朴なガードではすり抜ける）。実機で `<body>` に落ちた。
+  test("⋮ メニューから開いて閉じても、フォーカスが body に落ちない", async () => {
+    h = await bootApp({ mobile: true });
+    h.click(h.el("overflow-btn"));
+    h.click(h.el("overflow-quick-open"));
+    await h.flush();
+    expect(panel().hidden).toBe(false);
+
+    h.keydown(input(), { key: "Escape" });
+    await h.flush();
+
+    expect(panel().hidden).toBe(true);
+    expect(h.document.activeElement).not.toBe(h.document.body);
+    expect(h.document.activeElement).toBe(h.el("overflow-btn"));
+  });
+
   test("スマホの ⋮ メニューからも開ける（編集中も含む）", async () => {
     h = await bootApp({ mobile: true });
     h.click(h.el("edit-btn"));
@@ -358,14 +422,68 @@ describe("クイックオープン", () => {
     expect(h.el("overflow-menu").hidden).toBe(true);
   });
 
-  // 除外・depth はサーバ側で適用済みなので、ツリーに無いものは候補にも出ない (DoD 3 行目)
-  test("ツリーに無いファイルは候補に出ない", async () => {
-    h = await bootApp();
+  // **除外・depth はサーバ側で適用済み**なので、ツリーに無いものは候補にも出ない (DoD 3 行目)。
+  //
+  // 母集団に無い文字列を打って 0 件を確認するだけでは同語反復になる（実装が母集団をどう
+  // 作っていても 0 件になる）。**サーバには存在するがツリーには出ないファイル**を用意して、
+  // 候補がツリー由来であることを見る。
+  test("サーバにあってもツリーに無ければ候補に出ない", async () => {
+    h = await bootApp({
+      tree: {
+        name: ".",
+        path: "",
+        type: "dir",
+        // `.yomiignore` や --depth で落ちた想定。ツリーには secret.md が無い
+        children: [{ name: "README.md", path: "README.md", type: "file" }],
+      },
+      files: {
+        "README.md": { raw: "r", html: "<p>r</p>", sha: "s1" },
+        "secret.md": { raw: "秘密", html: "<p>秘密</p>", sha: "s2" },
+      },
+    });
     await open();
+
+    // 何も打たない状態（= 全件）にも出ない
+    expect(items().map((b) => b.dataset.path)).toEqual(["README.md"]);
 
     typeInto(input(), "secret");
     await h.flush();
     expect(items()).toHaveLength(0);
+    expect(h.el("quick-open-empty").hidden).toBe(false);
+  });
+
+  // **ファイル名は利用者のディスク上の名前**なので `<` や `&` を含みうる。
+  // `appendHighlighted` が innerHTML を使わない設計をテストで固定する（次に触る人が戻せないように）。
+  test("HTML メタ文字を含むファイル名を要素として解釈しない", async () => {
+    const name = "<img src=x onerror=alert(1)>&amp;.md";
+    const nasty = `docs/${name}`;
+    h = await bootApp({
+      tree: {
+        name: ".",
+        path: "",
+        type: "dir",
+        children: [
+          {
+            name: "docs",
+            path: "docs",
+            type: "dir",
+            children: [{ name, path: nasty, type: "file" }],
+          },
+        ],
+      },
+      files: { [nasty]: { raw: "x", html: "<p>x</p>", sha: "s1" } },
+    });
+    await open();
+    typeInto(input(), "img");
+    await h.flush();
+
+    const item = items()[0];
+    if (!item) throw new Error("候補が出ていない");
+    // 要素として生えていない
+    expect(item.querySelector("img")).toBeNull();
+    // 生の文字列がそのままテキストとして出ている（`&amp;` が `&` に解釈されてもいない）
+    expect(item.textContent).toContain(name);
+    expect(item.dataset.path).toBe(nasty);
   });
 
   test("一致した文字がハイライトされる", async () => {
@@ -415,6 +533,39 @@ describe("クイックオープン", () => {
     );
     // 絵文字そのものは（ハイライトされずに）残っている
     expect(rendered).toContain("📁");
+  });
+
+  // **開いたまま watcher の tree イベントが来たら候補も引き直す。** 母集団だけ更新して
+  // 表示を放置すると、消えたファイルが一覧に残って Enter で 404 になる。
+  test("パネルを開いたままツリーが更新されたら候補も追随する", async () => {
+    h = await bootApp();
+    await open();
+    expect(items().map((b) => b.dataset.path)).toEqual([
+      "README.md",
+      "docs/guide.md",
+      "docs/deep/note.md",
+    ]);
+
+    // docs/guide.md が消え、docs/added.md が増えた
+    h.tree = {
+      name: ".",
+      path: "",
+      type: "dir",
+      children: [
+        { name: "README.md", path: "README.md", type: "file" },
+        {
+          name: "docs",
+          path: "docs",
+          type: "dir",
+          children: [{ name: "added.md", path: "docs/added.md", type: "file" }],
+        },
+      ],
+    };
+    h.files["docs/added.md"] = { raw: "a", html: "<p>a</p>", sha: "s9" };
+    h.ws.emit({ type: "tree" });
+    await h.flush();
+
+    expect(items().map((b) => b.dataset.path)).toEqual(["README.md", "docs/added.md"]);
   });
 
   test("閉じるとフォーカスが元の要素へ戻る", async () => {

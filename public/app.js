@@ -17,7 +17,7 @@ import {
 } from "./navigation.js";
 import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
-import { collectFilePaths, moveSelection, searchPaths } from "./quick-open.js";
+import { collectFilePaths, moveSelection, QUICK_OPEN_LIMIT, searchPaths } from "./quick-open.js";
 import { SANITIZE_CONFIG } from "./sanitize-config.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
@@ -298,6 +298,10 @@ function renderTree(root) {
   // クイックオープンの母集団を張り直す (Issue #54)。**ツリーと同じものを見る**ので、
   // 除外設定と --depth はサーバ側の適用結果がそのまま効く。
   state.quickOpenPaths = collectFilePaths(root);
+  // **開いたまま watcher の tree イベントが来たら候補も引き直す。** 母集団だけ更新して
+  // 表示を放置すると、消えたファイルが一覧に残って Enter で 404 になり、増えたファイルは
+  // 打ち直すまで出てこない。
+  if (!els.quickOpen.hidden) refreshQuickOpen();
 }
 
 function renderNode(node) {
@@ -1766,61 +1770,34 @@ function teardownTocObserver() {
 
 /* ===== クイックオープン (Issue #54) ===== */
 
-/** 候補として出す最大件数。これ以上は絞り込んでもらう (DOM を作りすぎない)。 */
-const QUICK_OPEN_LIMIT = 50;
-
 function wireQuickOpen() {
   els.quickOpenInput.addEventListener("input", () => refreshQuickOpen());
 
-  // **入力欄ではなくパネル全体で拾う。** 候補ボタンへフォーカスが移っても Esc が効くように
-  // するため (入力欄だけに付けると、Tab で出た先で閉じられなくなる)。
-  els.quickOpen.addEventListener("keydown", (ev) => {
-    // **IME 変換中は何もしない。** yomi は日本語のドキュメントを読む道具なので、
-    // ファイル名も日本語であることが普通にある。変換中のキーはすべて IME のもので、
-    // 横取りすると次のように壊れる:
-    //
-    // - `Enter`: 変換の確定が**そのままファイルを開いてしまう**（打ち終わる前に飛ぶ）
-    // - `↑` `↓`: IME の変換候補を選べない
-    // - `Esc`:   変換のキャンセルのつもりがパネルごと閉じる
-    if (ev.isComposing) return;
+  // **`document` の capture で拾う。** パネル要素に付けると、**フォーカスがパネルの外に
+  // 落ちた瞬間にキー処理が丸ごと死ぬ**。パネル内には空リスト帯 (`#quick-open-empty`) や
+  // リストの padding、スクロールバーといった**フォーカスを取れない可視領域**があり、
+  // そこを mousedown すると `activeElement` は `<body>` に戻る。すると:
+  //
+  // - Esc がここに届かず、`document` の sidebar / 外部リンクバナーのハンドラにだけ届く
+  //   → **パネルは開いたまま背後だけが閉じる**（stopPropagation で潰したはずの壊れ方が逆向きに出る）
+  // - Tab の preventDefault が走らず、フォーカストラップをすり抜ける
+  //
+  // capture なら DOM のどこにフォーカスがあっても最初に通るので、この迂回路が消える。
+  // 開いている間だけ効かせるため、先頭で `hidden` を門番にする (Ctrl/Cmd+P と同じ形)。
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (els.quickOpen.hidden) return;
+      handleQuickOpenKeydown(ev);
+    },
+    true,
+  );
 
-    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-      ev.preventDefault();
-      setQuickOpenIndex(
-        moveSelection(
-          state.quickOpenIndex,
-          ev.key === "ArrowDown" ? 1 : -1,
-          state.quickOpenHits.length,
-        ),
-      );
-      return;
-    }
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      openSelectedQuickOpen();
-      return;
-    }
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      // **バブルさせない。** このリポジトリは Esc の優先順位を各ハンドラのガードで
-      // 表現しているが (sidebar / overflow は外部リンクバナーに譲る)、ここは
-      // **最前面 (z-index 60) なので常に最優先**。素通りさせると 1 回の Esc で
-      // sidebar や外部リンクバナーまで一緒に閉じてしまう。
-      ev.stopPropagation();
-      closeQuickOpen();
-      return;
-    }
-    if (ev.key === "Tab") {
-      // **フォーカスをパネルから出さない。** `aria-modal="true"` を宣言している以上、
-      // Tab で背後のヘッダやツリーへ抜けられるのは**宣言と実体の食い違い**になる
-      // (支援技術には「背後は無い」と伝えているのに、実際には触れてしまう)。
-      //
-      // 戻す先が入力欄だけで足りるのは、**候補ボタンを `tabIndex = -1` にしてある**ため
-      // (選択は `aria-activedescendant` で伝える)。パネル内でフォーカスを取れる要素は
-      // 入力欄しかないので、一般的なフォーカストラップ (先頭/末尾で折り返す) は要らない。
-      ev.preventDefault();
-      els.quickOpenInput.focus();
-    }
+  // **パネル内の空白でフォーカスを落とさない。** 上の capture で実害は消えているが、
+  // フォーカスが `<body>` へ飛ぶこと自体が「閉じたときに元へ戻す」を壊す (戻り先ではなく
+  // body から再開することになる)。入力欄だけは既定動作を残す (テキスト選択・カーソル移動)。
+  els.quickOpen.addEventListener("mousedown", (ev) => {
+    if (ev.target !== els.quickOpenInput) ev.preventDefault();
   });
 
   // 背景 (パネルの外) をクリックしたら閉じる
@@ -1831,10 +1808,68 @@ function wireQuickOpen() {
   // スマホの ⋮ メニューからも開ける (マウス/キーボードが無い環境の導線)
   // `?.` を付けない。同じ ⋮ メニューの `overflowEdit` と同じく **必ず存在する要素**なので、
   // 欠けたら静かに無効化されるより落ちたほうがよい (index.html との不整合に気づける)。
+  //
+  // **開いてから閉じる。** 逆にすると `openQuickOpen` が戻り先を覚える時点で ⋮ メニューが
+  // 既に `hidden` になっており、閉じたときの `focus()` が非表示要素相手で空振りして
+  // フォーカスが `<body>` に落ちる。
   els.overflowQuickOpen.addEventListener("click", () => {
-    setOverflowOpen(false);
     openQuickOpen();
+    setOverflowOpen(false);
   });
+}
+
+/** クイックオープンが開いている間のキー操作。`wireQuickOpen` の capture リスナーから呼ぶ。 */
+function handleQuickOpenKeydown(ev) {
+  // **IME 変換中は何もしない。** yomi は日本語のドキュメントを読む道具なので、
+  // ファイル名も日本語であることが普通にある。変換中のキーはすべて IME のもので、
+  // 横取りすると次のように壊れる:
+  //
+  // - `Enter`: 変換の確定が**そのままファイルを開いてしまう**（打ち終わる前に飛ぶ）
+  // - `↑` `↓`: IME の変換候補を選べない
+  // - `Esc`:   変換のキャンセルのつもりがパネルごと閉じる
+  if (ev.isComposing) return;
+
+  // **処理したキーは伝播も止める。** パネルは最前面 (z-index 60) なので、拾ったキーは
+  // ここで終わり。とくに Esc は、素通りさせると 1 回で sidebar や外部リンクバナーまで
+  // 一緒に閉じる (それらは `document` の bubble で Esc を見ている)。capture で止めれば
+  // bubble フェーズ自体が起きないので、ガードを増やさずに優先順位を表現できる。
+  const consume = () => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    consume();
+    setQuickOpenIndex(
+      moveSelection(
+        state.quickOpenIndex,
+        ev.key === "ArrowDown" ? 1 : -1,
+        state.quickOpenHits.length,
+      ),
+    );
+    return;
+  }
+  if (ev.key === "Enter") {
+    consume();
+    openSelectedQuickOpen();
+    return;
+  }
+  if (ev.key === "Escape") {
+    consume();
+    closeQuickOpen();
+    return;
+  }
+  if (ev.key === "Tab") {
+    // **フォーカスをパネルから出さない。** `aria-modal="true"` を宣言している以上、
+    // Tab で背後のヘッダやツリーへ抜けられるのは**宣言と実体の食い違い**になる
+    // (支援技術には「背後は無い」と伝えているのに、実際には触れてしまう)。
+    //
+    // 戻す先が入力欄だけで足りるのは、**候補ボタンを `tabIndex = -1` にしてある**ため
+    // (選択は `aria-activedescendant` で伝える)。パネル内でフォーカスを取れる要素は
+    // 入力欄しかないので、一般的なフォーカストラップ (先頭/末尾で折り返す) は要らない。
+    consume();
+    els.quickOpenInput.focus();
+  }
 }
 
 function openQuickOpen() {
@@ -1855,8 +1890,32 @@ function closeQuickOpen() {
   state.quickOpenIndex = -1;
   const back = state.quickOpenReturnFocus;
   state.quickOpenReturnFocus = null;
-  // 開く前の要素が DOM から消えていることがある (ツリー再描画等) ので確認してから戻す
-  if (back?.isConnected && typeof back.focus === "function") back.focus();
+  restoreFocusAfterQuickOpen(back);
+}
+
+/**
+ * クイックオープンを閉じたあとのフォーカス復帰。
+ *
+ * **`isConnected` だけでは足りない。** DOM に繋がっていても**祖先が `hidden`** なら
+ * `focus()` は何も起こさず、フォーカスは `<body>` に落ちてキーボード操作の起点が消える。
+ * スマホの ⋮ メニューから開いた場合がまさにこれで、戻り先の `#overflow-quick-open` は
+ * パネルを開いた時点で既に閉じたメニューの中にいる（実機で確認した）。
+ *
+ * **順序を入れ替えても解決しない** —— メニューを閉じるのが先でも後でも、*閉じるとき*には
+ * どのみち非表示になっているため。実際に効いたかどうかを見て、駄目ならフォールバックする。
+ */
+function restoreFocusAfterQuickOpen(back) {
+  if (back?.isConnected && typeof back.focus === "function") {
+    back.focus();
+    if (document.activeElement === back) return;
+  }
+  // 戻せなかったときの受け皿。**スマホは ⋮ ボタン**（そこから開いたのだから自然な帰り先）、
+  // デスクトップは編集ボタン。`#tree` は `<nav>` でフォーカスを取れないので候補にしない。
+  for (const el of [els.overflowBtn, els.editBtn]) {
+    if (!el?.isConnected) continue;
+    el.focus();
+    if (document.activeElement === el) return;
+  }
 }
 
 /** 入力に応じて候補を作り直す。選択は常に先頭へ戻す (絞り込むたびに 1 番上を見たいため)。 */
@@ -2048,6 +2107,11 @@ function wireKeyboard() {
   document.addEventListener(
     "keydown",
     (ev) => {
+      // **IME 変換中は横取りしない。** 変換中は `ev.key` が `"Process"` になるが、
+      // ここは `ev.code === "KeyP"` も見ているので**変換中でも成立してしまう**。
+      // macOS の日本語 IME は変換中の `Ctrl+P` を「前の候補へ」に割り当てているのが既定
+      // なので、日本語のファイル名を打っている最中に変換操作でパネルが開閉してしまう。
+      if (ev.isComposing) return;
       const isKey = ev.code === "KeyP" || ev.key === "p" || ev.key === "P";
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isKey || ev.altKey || ev.shiftKey) return;
