@@ -75,7 +75,7 @@ export function createServer(config: ServerConfig): ServerHandle {
         if (req.method === "POST") {
           if (!checkOrigin(req))
             return forbidden("Origin が許可されていません", "origin_forbidden");
-          return handleFileWrite(config.rootDir, req, saveMark);
+          return handleFileWrite(config.rootDir, req, saveMark, excludes);
         }
         return new Response("Method Not Allowed", {
           status: 405,
@@ -242,10 +242,14 @@ async function handleTree(
 }
 
 /**
- * 除外配下への読み取りを拒否するレスポンス (Issue #65)。
+ * 除外配下へのアクセスを拒否するレスポンス (Issue #65)。
  *
  * **ファイルの存在確認より前に返す**ため、除外配下にあるパスは実在しても存在しなくても
  * 同じ 400 になる (存在有無を漏らさない)。
+ *
+ * 読み取り (`/api/file` GET・`/api/asset`) と保存 (`/api/file` POST) の両方で使う。
+ * 保存を塞ぐのは整合性のためだけでなく、**書き込み経路が読み取りの迂回路になる**ため:
+ * baseSha を故意に外すと 409 の競合レスポンスに現在の中身 (`raw`) が載る。
  *
  * 対象は `.yomiignore` と `DEFAULT_EXCLUDES` だけで、**`--depth` 超過は含めない**。
  * depth は `tree -L` 相当の走査深さの上限で、境界のディレクトリはツリーに残る
@@ -255,7 +259,7 @@ async function handleTree(
  */
 function excludedPathResponse(rel: string): Response {
   return Response.json(
-    { error: `除外設定により読み取れません: ${rel}`, code: "excluded_path" },
+    { error: `除外設定により読み書きできません: ${rel}`, code: "excluded_path" },
     { status: 400 },
   );
 }
@@ -307,6 +311,7 @@ async function handleFileWrite(
   rootDir: string,
   req: Request,
   saveMark: SaveMark,
+  excludes: ReadonlySet<string>,
 ): Promise<Response> {
   const lengthHeader = req.headers.get("content-length");
   if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
@@ -355,6 +360,14 @@ async function handleFileWrite(
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
+  }
+
+  // 除外配下は保存もできない (Issue #65)。読み取りだけ塞いでも、baseSha を故意に外して
+  // 409 を引けば競合レスポンスの `raw` で中身が返るため、**書き込み経路が読み取りの
+  // 迂回路になる**。ここで先に弾くことで、その経路と除外配下の上書きの両方を止める。
+  // /api/file/create は同種のチェックを既に持っている (excluded_dir)。
+  if (isExcludedPath(safe.rel, excludes)) {
+    return excludedPathResponse(safe.rel);
   }
 
   if (typeof baseSha === "string") {

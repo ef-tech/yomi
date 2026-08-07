@@ -937,6 +937,41 @@ describe("server - 除外配下の読み取り拒否 (Issue #65)", () => {
     expect(await codeOf(res)).toBe("excluded_path");
   });
 
+  // 読み取りだけ塞いでも、baseSha を故意に外せば 409 の競合レスポンスに現在の中身 (raw)
+  // が載るため、書き込み経路がそのまま読み取りの迂回路になる。
+  test("除外配下は /api/file への保存もできない (409 経由の読み取り迂回を塞ぐ)", async () => {
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: url },
+      body: JSON.stringify({ path: "private/secret.md", body: "# 上書き\n" }),
+    });
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("excluded_path");
+    // ディスクが書き換わっていないこと
+    expect(await readFile(join(root, "private", "secret.md"), "utf-8")).toBe("# secret\n");
+  });
+
+  test("baseSha 不一致でも除外配下の中身は返らない (409 にならず 400)", async () => {
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: url },
+      body: JSON.stringify({ path: "private/secret.md", body: "", baseSha: "0".repeat(64) }),
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { code?: string; raw?: string };
+    expect(json.code).toBe("excluded_path");
+    expect(json.raw).toBeUndefined();
+  });
+
+  test("除外されていないファイルへの保存は従来どおり通る", async () => {
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: url },
+      body: JSON.stringify({ path: "public.md", body: "# public 2\n" }),
+    });
+    expect(res.status).toBe(200);
+  });
+
   test("除外配下は存在しなくても同じ 400 (存在有無を漏らさない)", async () => {
     const exists = await fetch(`${url}/api/asset?path=private/creds.csv`);
     const missing = await fetch(`${url}/api/asset?path=private/nope.csv`);

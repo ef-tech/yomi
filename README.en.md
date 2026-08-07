@@ -270,7 +270,7 @@ backup
 
 Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not.
 
-**Exclusions apply to reads, not just to the tree view (Issue #65).** An excluded path cannot be fetched from `/api/file` (Markdown source) or `/api/asset` (images and attachments) either; requesting the URL directly is rejected with a 400. Excluded paths return the same response whether or not the file exists, so their existence is not revealed either. If a Markdown file references an image stored under an excluded directory, that image will no longer render (changed in v0.20.0; it used to be served).
+**Exclusions apply to reads and saves, not just to the tree view (Issue #65).** An excluded path cannot be fetched from `/api/file` (Markdown source) or `/api/asset` (images and attachments), and cannot be saved to either; requesting the URL directly is rejected with a 400. Excluded paths return the same response whether or not the file exists, so their existence is not revealed either. If a Markdown file references an image stored under an excluded directory, that image will no longer render (changed in v0.20.0; it used to be both readable and writable).
 
 Note that `--depth` is a different thing and **does not restrict reads**. Like `tree -L`, it caps how deep the startup scan goes, and directories beyond the depth still appear in the tree (they are simply not opened). Internal links from a shallow Markdown file to a deeper one still work as before. To hide something, use `.yomiignore` rather than `--depth`.
 
