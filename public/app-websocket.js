@@ -28,18 +28,18 @@ export function createWebSocketClient(ctx) {
         try {
           const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
           ctx.editor.showConflict(latest);
-          ctx.status.setStatus("error", t("status.fileUpdatedElsewhere"));
+          ctx.setStatus("error", t("status.fileUpdatedElsewhere"));
         } catch (err) {
-          ctx.status.setStatus("error", errorText(err));
+          ctx.setStatus("error", errorText(err));
         }
         return;
       }
       try {
         const data = await ctx.document.loadFile(state.currentPath);
         ctx.document.applyFile(data);
-        ctx.status.setStatus("ok", t("status.reloaded", { path: data.path }));
+        ctx.setStatus("ok", t("status.reloaded", { path: data.path }));
       } catch (err) {
-        ctx.status.setStatus("error", errorText(err));
+        ctx.setStatus("error", errorText(err));
       }
       return;
     }
@@ -52,11 +52,11 @@ export function createWebSocketClient(ctx) {
           if (state.fileButtons.has(state.currentPath)) {
             ctx.tree.highlightSelected(state.currentPath);
           } else {
-            ctx.status.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
+            ctx.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
           }
         }
       } catch (err) {
-        ctx.status.setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
+        ctx.setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
       }
     }
   }

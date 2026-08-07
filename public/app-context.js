@@ -207,14 +207,15 @@ export function restorePreferences(state) {
  *
  * toast のタイマーを閉じ込めたいのでファクトリにする。モジュールレベルに置くと
  * boot をまたいで前の jsdom のタイマーが残る (このファイル冒頭の理由)。
+ *
+ * **`mobileQuery` は ctx 直下に置く** (`els` / `state` と同格)。status の内部詳細ではなく
+ * 横断的な関心事で、ここに載せると「スマホ UI がステータス表示に依存する」という
+ * 説明のつかない依存ができるため。
  */
 export function createStatus(ctx) {
-  const mobileQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
   let toastTimer = null;
 
   return {
-    mobileQuery,
-
     setStatus(kind, text) {
       const { status } = ctx.els;
       status.textContent = text;
@@ -222,7 +223,7 @@ export function createStatus(ctx) {
       if (kind === "ok") status.classList.add("is-ok");
       else if (kind === "error") status.classList.add("is-error");
       // スマホでは toast 表示 (Issue #30): CSS animation 完了後に class を除去
-      if (mobileQuery.matches && text) {
+      if (ctx.mobileQuery.matches && text) {
         status.classList.add("is-toast");
         if (toastTimer) clearTimeout(toastTimer);
         toastTimer = setTimeout(() => {

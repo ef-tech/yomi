@@ -5,7 +5,8 @@ import {
   errorText,
   fetchJson,
   LANG_MODES,
-  restorePreferences as restorePrefsInto,
+  MOBILE_MEDIA_QUERY,
+  restorePreferences,
 } from "./app-context.js";
 import { createDocument } from "./app-document.js";
 import { createEditor } from "./app-editor.js";
@@ -44,9 +45,10 @@ import { prefs } from "./prefs.js";
  */
 const els = createElements();
 const state = createState();
-const ctx = { els, state };
-ctx.status = createStatus(ctx);
-const { setStatus, clearStatus } = ctx.status;
+// mobileQuery は横断的関心事なので els / state と同格に置く (status の内部詳細ではない)。
+const ctx = { els, state, mobileQuery: window.matchMedia(MOBILE_MEDIA_QUERY) };
+Object.assign(ctx, createStatus(ctx));
+const { setStatus, clearStatus } = ctx;
 
 // **モジュールを先に全部組み立ててから配線する。** 互いを `ctx` 経由で呼ぶので、
 // 生成順は関係ない (document ⇄ preview ⇄ editor ⇄ tree は循環している)。
@@ -62,7 +64,7 @@ ctx.ws = createWebSocketClient(ctx);
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
 onLangChange(reapplyDynamicI18n);
 
-restorePreferences();
+restorePreferences(state);
 ctx.preview.applyViewMode(state.viewMode);
 ctx.preview.applyThemeMode(state.themeMode);
 applyLang(state.langMode);
@@ -120,10 +122,6 @@ async function init() {
     els.tree.removeAttribute("aria-busy");
     els.tree.textContent = t("status.loadError", { msg: errorText(err) });
   }
-}
-
-function restorePreferences() {
-  restorePrefsInto(state);
 }
 
 /* ===== UI 言語切替 (Issue #48) ===== */

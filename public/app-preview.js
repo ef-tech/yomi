@@ -24,7 +24,6 @@ import mermaid from "./vendor/mermaid.js";
 
 export function createPreview(ctx) {
   const { els, state } = ctx;
-  const setStatus = (kind, text) => ctx.status.setStatus(kind, text);
 
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -62,7 +61,7 @@ export function createPreview(ctx) {
       await mermaid.run({ nodes });
     } catch (err) {
       console.error("Mermaid render error:", err);
-      setStatus("error", t("status.mermaidError", { msg: err.message ?? err }));
+      ctx.setStatus("error", t("status.mermaidError", { msg: err.message ?? err }));
     }
   }
 
@@ -179,21 +178,26 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * 表示モードを選ぶ。**PC のトグルとスマホの ⋮ メニューが共有する**
+   * (入口が違うだけで挙動は同じ)。不正値・同一モードは無視する。
+   */
+  function selectViewMode(mode) {
+    if (!mode || !VIEW_MODES.includes(mode)) return;
+    if (state.viewMode === mode) return;
+    // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
+    // (後から TOC を閉じても、ユーザの選択を尊重する)
+    state.tocPreviewOverride = false;
+    applyViewMode(mode);
+    saveViewMode();
+    if (state.currentHtml && mode !== "md") {
+      renderMermaid().catch(() => {});
+    }
+  }
+
   function wireViewToggle() {
     for (const btn of els.toggleButtons) {
-      btn.addEventListener("click", () => {
-        const mode = btn.dataset.mode;
-        if (!mode || !VIEW_MODES.includes(mode)) return;
-        if (state.viewMode === mode) return;
-        // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
-        // (後から TOC を閉じても、ユーザの選択を尊重する)
-        state.tocPreviewOverride = false;
-        applyViewMode(mode);
-        saveViewMode();
-        if (state.currentHtml && mode !== "md") {
-          renderMermaid().catch(() => {});
-        }
-      });
+      btn.addEventListener("click", () => selectViewMode(btn.dataset.mode));
     }
   }
 
@@ -221,19 +225,21 @@ export function createPreview(ctx) {
     }
   }
 
+  /** テーマを選ぶ。**PC のトグルとスマホの ⋮ メニューが共有する**。 */
+  function selectThemeMode(mode) {
+    if (!mode || !THEME_MODES.includes(mode)) return;
+    if (state.themeMode === mode) return;
+    applyThemeMode(mode);
+    saveThemeMode();
+    initMermaid(mode);
+    if (state.currentHtml && state.viewMode !== "md") {
+      renderCurrentFile();
+    }
+  }
+
   function wireThemeToggle() {
     for (const btn of els.themeButtons) {
-      btn.addEventListener("click", () => {
-        const mode = btn.dataset.themeMode;
-        if (!mode || !THEME_MODES.includes(mode)) return;
-        if (state.themeMode === mode) return;
-        applyThemeMode(mode);
-        saveThemeMode();
-        initMermaid(mode);
-        if (state.currentHtml && state.viewMode !== "md") {
-          renderCurrentFile();
-        }
-      });
+      btn.addEventListener("click", () => selectThemeMode(btn.dataset.themeMode));
     }
   }
 
@@ -254,7 +260,7 @@ export function createPreview(ctx) {
     if (newChecked === null) {
       // ソース上に該当タスクなし (markdown と DOM index がズレた)
       target.checked = !target.checked; // revert
-      setStatus("error", t("status.taskLocateFailed"));
+      ctx.setStatus("error", t("status.taskLocateFailed"));
       return;
     }
 
@@ -272,7 +278,7 @@ export function createPreview(ctx) {
       });
       // applyFile 経由で再描画: state 更新 + DOM + TOC + チェックボックス再 attach を一括
       ctx.document.applyFile(data);
-      setStatus(
+      ctx.setStatus(
         "ok",
         t("status.taskUpdated", {
           path: state.currentPath,
@@ -284,9 +290,9 @@ export function createPreview(ctx) {
       target.disabled = state.editing;
       if (err.status === 409 && err.payload) {
         ctx.editor.showConflict(err.payload);
-        setStatus("error", t("status.conflict"));
+        ctx.setStatus("error", t("status.conflict"));
       } else {
-        setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
+        ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
       }
     }
   }
@@ -489,9 +495,11 @@ export function createPreview(ctx) {
     wireScrollSync,
     applyViewMode,
     saveViewMode,
+    selectViewMode,
     wireViewToggle,
     applyThemeMode,
     saveThemeMode,
+    selectThemeMode,
     wireThemeToggle,
     wireTaskCheckboxes,
     wireTocActions,

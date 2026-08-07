@@ -12,8 +12,6 @@
  * **overflow メニューは操作の入口が増えただけ**で、挙動を二重に持たせない。
  */
 
-import { THEME_MODES, VIEW_MODES } from "./app-context.js";
-
 const TOPBAR_HIDE_THRESHOLD = 5; // この px 以上下スクロールで hide
 const TOPBAR_TOP_GUARD = 30; // 上端 30px 以内では常に show
 
@@ -23,7 +21,9 @@ const SWIPE_MAX_DY = 50;
 
 export function createMobileUi(ctx) {
   const { els, state } = ctx;
-  const mobileQuery = ctx.status.mobileQuery;
+  // **生成時に他モジュールを読まない。** ctx.mobileQuery は app.js が els / state と一緒に
+  // 作るので、ここで掴んでもモジュールの生成順に依存しない。
+  const { mobileQuery } = ctx;
 
   function setSidebarOpen(open) {
     els.sidebar.classList.toggle("is-open", open);
@@ -80,34 +80,13 @@ export function createMobileUi(ctx) {
       setOverflowOpen(false);
     });
 
-    // overflow-theme-btn → applyThemeMode (PC 側 wireThemeToggle と同じロジックを再利用)
+    // **PC 側トグルと同じ関数を呼ぶ。** overflow メニューは操作の入口が増えただけで、
+    // 挙動を二重に持たせない (分割前は同じ本文が 2 箇所に重複していた)。
     for (const btn of els.overflowThemeBtns) {
-      btn.addEventListener("click", () => {
-        const mode = btn.dataset.themeMode;
-        if (!mode || !THEME_MODES.includes(mode)) return;
-        if (state.themeMode === mode) return;
-        ctx.preview.applyThemeMode(mode);
-        ctx.preview.saveThemeMode();
-        ctx.preview.initMermaid(mode);
-        if (state.currentHtml && state.viewMode !== "md") {
-          ctx.preview.renderCurrentFile();
-        }
-      });
+      btn.addEventListener("click", () => ctx.preview.selectThemeMode(btn.dataset.themeMode));
     }
-
-    // overflow-view-btn → applyViewMode
     for (const btn of els.overflowViewBtns) {
-      btn.addEventListener("click", () => {
-        const mode = btn.dataset.mode;
-        if (!mode || !VIEW_MODES.includes(mode)) return;
-        if (state.viewMode === mode) return;
-        state.tocPreviewOverride = false;
-        ctx.preview.applyViewMode(mode);
-        ctx.preview.saveViewMode();
-        if (state.currentHtml && mode !== "md") {
-          ctx.preview.renderMermaid().catch(() => {});
-        }
-      });
+      btn.addEventListener("click", () => ctx.preview.selectViewMode(btn.dataset.mode));
     }
 
     // overflow-edit → 編集モード toggle (既存 editBtn と同じ動作)

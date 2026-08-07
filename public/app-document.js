@@ -36,7 +36,6 @@ const COPY_FEEDBACK_MS = 1500;
 
 export function createDocument(ctx) {
   const { els, state } = ctx;
-  const setStatus = (kind, text) => ctx.status.setStatus(kind, text);
 
   /**
    * popstate のキャンセル復元中フラグ。
@@ -131,7 +130,7 @@ export function createDocument(ctx) {
     try {
       data = await loadFile(path);
     } catch (err) {
-      setStatus("error", t("status.openFailed", { path, msg: errorText(err) }));
+      ctx.setStatus("error", t("status.openFailed", { path, msg: errorText(err) }));
       return false;
     }
 
@@ -141,7 +140,7 @@ export function createDocument(ctx) {
     if (mode === "push") ctx.mobile.closeSidebarIfMobile();
 
     if (mode === "none") {
-      setStatus("ok", t("status.showing", { path: data.path }));
+      ctx.setStatus("ok", t("status.showing", { path: data.path }));
       return true;
     }
 
@@ -155,7 +154,7 @@ export function createDocument(ctx) {
       window.history.replaceState(entry, "", url);
     }
 
-    setStatus("ok", t("status.showing", { path: data.path }));
+    ctx.setStatus("ok", t("status.showing", { path: data.path }));
     return true;
   }
 
@@ -207,9 +206,9 @@ export function createDocument(ctx) {
         const data = await loadFile(target.path);
         applyFile(data);
         scrollIntoHash(target.hash);
-        setStatus("ok", t("status.showing", { path: data.path }));
+        ctx.setStatus("ok", t("status.showing", { path: data.path }));
       } catch (err) {
-        setStatus("error", t("status.openFailed", { path: target.path, msg: errorText(err) }));
+        ctx.setStatus("error", t("status.openFailed", { path: target.path, msg: errorText(err) }));
       }
     });
   }
@@ -238,7 +237,7 @@ export function createDocument(ctx) {
     const { path: hrefPath, hash } = splitHrefHash(href);
     const resolved = resolveRelativePath(state.currentPath, hrefPath);
     if (!resolved) {
-      setStatus("error", t("status.fileNotFound", { href }));
+      ctx.setStatus("error", t("status.fileNotFound", { href }));
       return;
     }
 
@@ -249,11 +248,13 @@ export function createDocument(ctx) {
 
     const hit = candidates.find((c) => state.fileButtons.has(c));
     if (!hit) {
-      setStatus("error", t("status.fileNotFound", { href }));
+      ctx.setStatus("error", t("status.fileNotFound", { href }));
       return;
     }
 
-    navigateTo(hit, { history: "push", hash }).catch((err) => setStatus("error", errorText(err)));
+    navigateTo(hit, { history: "push", hash }).catch((err) =>
+      ctx.setStatus("error", errorText(err)),
+    );
   }
 
   function wireLinkNavigation() {
@@ -276,7 +277,7 @@ export function createDocument(ctx) {
 
       // Issue #22: javascript: 以外の危険スキーム (vbscript / file / chrome-extension / data 等) も同じ扱い
       if (isUnsafeScheme(href)) {
-        setStatus("error", t("status.blockedLink"));
+        ctx.setStatus("error", t("status.blockedLink"));
         return;
       }
 
@@ -352,9 +353,9 @@ export function createDocument(ctx) {
       try {
         await copyTextToClipboard(state.currentPath);
         flashCopied();
-        setStatus("ok", t("status.pathCopied", { path: state.currentPath }));
+        ctx.setStatus("ok", t("status.pathCopied", { path: state.currentPath }));
       } catch (err) {
-        setStatus("error", t("status.copyFailed", { msg: err.message }));
+        ctx.setStatus("error", t("status.copyFailed", { msg: err.message }));
       }
     });
   }

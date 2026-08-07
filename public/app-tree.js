@@ -21,7 +21,6 @@ import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-too
 
 export function createTree(ctx) {
   const { els, state } = ctx;
-  const setStatus = (kind, text) => ctx.status.setStatus(kind, text);
 
   function saveOpenDirs() {
     prefs.openDirs.save([...state.openDirs]);
@@ -106,7 +105,7 @@ export function createTree(ctx) {
       state.fileButtons.set(node.path, button);
       button.addEventListener("click", () => {
         ctx.document.navigateTo(node.path, { history: "push" }).catch((err) => {
-          setStatus("error", errorText(err));
+          ctx.setStatus("error", errorText(err));
         });
       });
     }
@@ -224,7 +223,7 @@ export function createTree(ctx) {
   async function submitNewFile(rawName, dirPath) {
     const name = completeMarkdownFileName(rawName);
     if (name === null) {
-      setStatus("error", t("status.invalidName"));
+      ctx.setStatus("error", t("status.invalidName"));
       return;
     }
     const path = joinTreePath(dirPath, name);
@@ -243,14 +242,14 @@ export function createTree(ctx) {
       if (!moved) {
         // 編集中に破棄をキャンセルした等で遷移がブロックされた場合、ファイルは
         // 作成済みだが古いエディタは触らない (誤ったキャレット移動・状態表示を避ける)
-        setStatus("ok", t("status.createdNotOpened", { path: created.path }));
+        ctx.setStatus("ok", t("status.createdNotOpened", { path: created.path }));
         return;
       }
       if (!state.editing) ctx.editor.enterEditMode();
       els.editor.setSelectionRange(0, 0);
-      setStatus("ok", t("status.created", { path: created.path }));
+      ctx.setStatus("ok", t("status.created", { path: created.path }));
     } catch (err) {
-      setStatus("error", t("status.createFailed", { path, msg: errorText(err) }));
+      ctx.setStatus("error", t("status.createFailed", { path, msg: errorText(err) }));
     }
   }
 

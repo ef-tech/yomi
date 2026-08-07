@@ -16,7 +16,6 @@ import { t } from "./i18n.js";
 
 export function createEditor(ctx) {
   const { els, state } = ctx;
-  const setStatus = (kind, text) => ctx.status.setStatus(kind, text);
 
   /** 409 で受け取ったサーバ側スナップショット (取り込み時に使う)。 */
   let conflictServerSnapshot = null;
@@ -108,7 +107,7 @@ export function createEditor(ctx) {
   async function saveEdit({ force = false } = {}) {
     if (!state.editing) return false;
     if (!state.currentPath) {
-      setStatus("error", t("status.saveNoFile"));
+      ctx.setStatus("error", t("status.saveNoFile"));
       return false;
     }
     const body = els.editor.value;
@@ -131,14 +130,14 @@ export function createEditor(ctx) {
         ctx.preview.renderMermaid().catch(() => {});
       }
       els.source.textContent = data.raw;
-      setStatus("ok", t("status.saved", { path: state.currentPath }));
+      ctx.setStatus("ok", t("status.saved", { path: state.currentPath }));
       return true;
     } catch (err) {
       if (err.status === 409 && err.payload) {
         showConflict(err.payload);
-        setStatus("error", t("status.conflict"));
+        ctx.setStatus("error", t("status.conflict"));
       } else {
-        setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
+        ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
       }
       return false;
     }
@@ -158,7 +157,7 @@ export function createEditor(ctx) {
   function toggleEditMode() {
     if (state.editing) {
       // 編集モード中の「完了」: 未保存があれば保存 → 成功で閉じる、失敗なら編集モード継続
-      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
+      handleFinishEdit().catch((err) => ctx.setStatus("error", errorText(err)));
     } else {
       enterEditMode();
     }
@@ -188,7 +187,7 @@ export function createEditor(ctx) {
     els.source.textContent = state.currentRaw;
     if (state.viewMode !== "md") ctx.preview.renderMermaid().catch(() => {});
     hideConflict();
-    setStatus("ok", t("status.serverTaken"));
+    ctx.setStatus("ok", t("status.serverTaken"));
   }
 
   function forceOverwrite() {
