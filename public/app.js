@@ -10,6 +10,7 @@ import {
   THEME_MODES,
   VIEW_MODES,
 } from "./app-context.js";
+import { createEditor } from "./app-editor.js";
 import { createMobileUi } from "./app-mobile.js";
 import { createTree } from "./app-tree.js";
 import { createWebSocketClient } from "./app-websocket.js";
@@ -91,18 +92,6 @@ darkQuery.addEventListener("change", () => {
 // モジュールから同じ形で見えるようオブジェクトにして公開する (段階的分割の足場。
 // 分割が終われば createXxx(ctx) の戻り値に置き換わる)。
 ctx.document = { loadFile, applyFile, navigateTo };
-ctx.editor = {
-  showConflict,
-  enterEditMode,
-  /** 編集モードの toggle (編集ボタンと ⋮ メニューの両方から使う) */
-  toggleEditMode() {
-    if (state.editing) {
-      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
-    } else {
-      enterEditMode();
-    }
-  },
-};
 ctx.preview = {
   applyThemeMode,
   saveThemeMode,
@@ -112,8 +101,12 @@ ctx.preview = {
   saveViewMode,
   renderMermaid,
   toggleToc,
+  applyTocVisibility,
+  wireTaskCheckboxes,
+  rebuildScrollSyncPairs,
 };
 ctx.tree = createTree(ctx);
+ctx.editor = createEditor(ctx);
 ctx.mobile = createMobileUi(ctx);
 ctx.ws = createWebSocketClient(ctx);
 
@@ -129,7 +122,7 @@ initMermaid(state.themeMode);
 wireViewToggle();
 wireThemeToggle();
 wireLangToggle();
-wireEditActions();
+ctx.editor.wireEditActions();
 wireCopyPath();
 // **登録順を変えない。** sidebar の Esc ハンドラは外部 URL バナーが開いていたら譲る
 // 設計で、後から登録される wireKeyboard 側がバナーを閉じる。順序が逆転すると
@@ -143,7 +136,7 @@ ctx.mobile.wireSidebarSwipe();
 wireTocActions();
 wireLinkNavigation();
 wireKeyboard();
-wireBeforeUnload();
+ctx.editor.wireBeforeUnload();
 wireHistoryNavigation();
 wireScrollSync();
 
@@ -207,15 +200,15 @@ function applyFile(data) {
   state.currentHtml = sanitize(data.html);
   state.currentSha = data.sha ?? null;
   els.currentPath.textContent = data.path;
-  hideConflict();
+  ctx.editor.hideConflict();
   if (state.editing) {
     // applyFile で別ファイルに切替 = 編集解除
-    exitEditMode();
+    ctx.editor.exitEditMode();
   }
   renderCurrentFile();
   ctx.tree.highlightSelected(data.path);
   ctx.tree.expandAncestors(data.path);
-  enableEditActions(true);
+  ctx.editor.enableEditActions(true);
   refreshToc();
   wireTaskCheckboxes();
 }
@@ -234,7 +227,7 @@ function applyFile(data) {
 // 戻り値: 実際にファイルへ遷移/表示できたら true、編集中の破棄キャンセルや
 // 読み込み失敗で遷移しなかったら false (呼び出し側はこれを見て後続処理を分岐できる)。
 async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
-  if (mode === "push" && !confirmLeaveEdit()) return false;
+  if (mode === "push" && !ctx.editor.confirmLeaveEdit()) return false;
 
   let data;
   try {
@@ -312,7 +305,7 @@ function wireHistoryNavigation() {
     };
 
     if (state.editing) {
-      if (!confirmLeaveEdit()) {
+      if (!ctx.editor.confirmLeaveEdit()) {
         // キャンセル: history.go(delta) で編集中のエントリへ戻す
         // re-push しない（forward 履歴と scroll restoration を壊さないため）
         const delta = currentNavIndex() - target.navIndex;
@@ -327,7 +320,7 @@ function wireHistoryNavigation() {
         }
         return;
       }
-      exitEditMode();
+      ctx.editor.exitEditMode();
     }
 
     // 到達先 navIndex まで進めておく。次の push は target.navIndex+1 から
@@ -575,7 +568,7 @@ function reapplyDynamicI18n() {
     state.newFileInput.input.setAttribute("aria-label", t("tree.newFileInput.aria"));
   }
   // 編集モードのボタン表記 (applyI18n が data-i18n で編集前ラベルに戻すため、この後に上書き)
-  syncEditButtonLabels();
+  ctx.editor.syncEditButtonLabels();
   // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
   updateExpandToggleUi();
   if (state.tocVisible) refreshToc();
@@ -583,71 +576,6 @@ function reapplyDynamicI18n() {
   // (旧言語の文言が残らないように。次の操作で新言語で再表示される。
   //  競合バナー等の操作可能な UI は別要素なので消えない)。
   clearStatus();
-}
-
-/** 編集モードの状態に応じて編集ボタン / overflow ボタンの表記を現在言語で設定する。 */
-function syncEditButtonLabels() {
-  if (state.editing) {
-    els.editBtn.textContent = t("edit.saveClose");
-    els.editBtn.title = t("edit.saveClose.title");
-    if (els.overflowEdit) els.overflowEdit.textContent = t("edit.saveClose.emoji");
-  } else {
-    els.editBtn.textContent = t("edit.button");
-    els.editBtn.title = t("edit.button.title");
-    if (els.overflowEdit) els.overflowEdit.textContent = t("overflow.editMode");
-  }
-}
-
-/* ===== 編集モード ===== */
-
-function wireEditActions() {
-  enableEditActions(false);
-  els.editBtn.addEventListener("click", () => {
-    if (state.editing) {
-      // 編集モード中の「完了」: 未保存があれば保存 → 成功で閉じる、失敗なら編集モード継続
-      handleFinishEdit().catch((err) => setStatus("error", errorText(err)));
-    } else {
-      enterEditMode();
-    }
-  });
-
-  els.discardBtn.addEventListener("click", () => {
-    if (!confirmDiscard()) return;
-    exitEditMode();
-  });
-
-  els.editor.addEventListener("input", () => {
-    const dirty = els.editor.value !== state.currentRaw;
-    setDirty(dirty);
-  });
-
-  // 競合バナー
-  els.conflictTakeServer.addEventListener("click", () => takeServerVersion());
-  els.conflictOverwrite.addEventListener("click", () => forceOverwrite());
-  els.conflictDismiss.addEventListener("click", () => hideConflict());
-}
-
-async function handleFinishEdit() {
-  if (!state.editing) return;
-  if (!state.dirty) {
-    exitEditMode();
-    return;
-  }
-  const ok = await saveEdit();
-  if (ok) exitEditMode();
-}
-
-function confirmDiscard() {
-  if (!state.dirty) return true;
-  return window.confirm(t("confirm.discardEditEnd"));
-}
-
-function enableEditActions(enabled) {
-  els.editBtn.disabled = !enabled;
-  els.tocBtn.disabled = !enabled;
-  els.tocFab.disabled = !enabled;
-  els.currentPath.disabled = !enabled;
-  if (els.overflowEdit) els.overflowEdit.disabled = !enabled;
 }
 
 /* ===== パスコピー (Issue #24, パス自体タップ — Issue #30) ===== */
@@ -712,102 +640,6 @@ function flashCopied() {
     els.currentPath.classList.remove("is-copied");
     copyResetTimer = null;
   }, COPY_FEEDBACK_MS);
-}
-
-function enterEditMode() {
-  if (!state.currentPath) return;
-  state.editing = true;
-  els.contentBody.classList.add("is-editing");
-  els.editor.value = state.currentRaw;
-  els.editor.hidden = false;
-  els.editBtn.setAttribute("aria-pressed", "true");
-  // Issue #30: スマホ用 overflow menu の編集ボタンも同期
-  if (els.overflowEdit) els.overflowEdit.setAttribute("aria-pressed", "true");
-  syncEditButtonLabels();
-  els.discardBtn.hidden = false;
-  setDirty(false);
-  // TOC を一時退避 (編集終了で復元)
-  state.tocSuspended = state.tocVisible;
-  if (state.tocVisible) applyTocVisibility(false, { persist: false });
-  els.tocBtn.disabled = true;
-  els.tocFab.disabled = true;
-  // 編集中はプレビューのチェックボックスを disabled に
-  wireTaskCheckboxes();
-  setTimeout(() => els.editor.focus(), 0);
-}
-
-function exitEditMode() {
-  state.editing = false;
-  els.contentBody.classList.remove("is-editing");
-  els.editor.hidden = true;
-  els.editBtn.setAttribute("aria-pressed", "false");
-  // Issue #30: スマホ用 overflow menu の編集ボタンも同期
-  if (els.overflowEdit) els.overflowEdit.setAttribute("aria-pressed", "false");
-  syncEditButtonLabels();
-  els.discardBtn.hidden = true;
-  setDirty(false);
-  // TOC 復元 (編集前に開いていれば再表示)。currentPath がなければ disabled のまま
-  els.tocBtn.disabled = !state.currentPath;
-  els.tocFab.disabled = !state.currentPath;
-  if (state.tocSuspended) {
-    applyTocVisibility(true, { persist: false });
-    state.tocSuspended = false;
-  }
-  // 編集終了でチェックボックスを再びクリック可能に
-  wireTaskCheckboxes();
-  // Issue #9: 編集モード中は同期 OFF だったので、出た時に pair を再構築して復活させる
-  if (state.viewMode === "split") {
-    requestAnimationFrame(() => rebuildScrollSyncPairs());
-  }
-}
-
-function setDirty(dirty) {
-  state.dirty = dirty;
-  els.dirtyIndicator.hidden = !dirty;
-}
-
-function confirmLeaveEdit() {
-  if (!state.editing || !state.dirty) return true;
-  return window.confirm(t("confirm.unsavedContinue"));
-}
-
-async function saveEdit({ force = false } = {}) {
-  if (!state.editing) return false;
-  if (!state.currentPath) {
-    setStatus("error", t("status.saveNoFile"));
-    return false;
-  }
-  const body = els.editor.value;
-  const payload = { path: state.currentPath, body };
-  if (!force && state.currentSha) payload.baseSha = state.currentSha;
-
-  try {
-    const data = await fetchJson("/api/file", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    state.currentRaw = data.raw;
-    state.currentHtml = sanitize(data.html);
-    state.currentSha = data.sha;
-    setDirty(false);
-    hideConflict();
-    if (state.viewMode !== "md") {
-      els.preview.innerHTML = state.currentHtml;
-      renderMermaid().catch(() => {});
-    }
-    els.source.textContent = data.raw;
-    setStatus("ok", t("status.saved", { path: state.currentPath }));
-    return true;
-  } catch (err) {
-    if (err.status === 409 && err.payload) {
-      showConflict(err.payload);
-      setStatus("error", t("status.conflict"));
-    } else {
-      setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
-    }
-    return false;
-  }
 }
 
 /* ===== インタラクティブ チェックボックス (Issue #17) ===== */
@@ -876,46 +708,12 @@ async function onTaskCheckboxToggle(ev) {
     target.checked = !target.checked; // revert UI
     target.disabled = state.editing;
     if (err.status === 409 && err.payload) {
-      showConflict(err.payload);
+      ctx.editor.showConflict(err.payload);
       setStatus("error", t("status.conflict"));
     } else {
       setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
     }
   }
-}
-
-/* ===== 競合バナー ===== */
-
-let conflictServerSnapshot = null;
-
-function showConflict(payload) {
-  conflictServerSnapshot = payload;
-  els.conflictBanner.hidden = false;
-}
-
-function hideConflict() {
-  conflictServerSnapshot = null;
-  els.conflictBanner.hidden = true;
-}
-
-function takeServerVersion() {
-  if (!conflictServerSnapshot) return;
-  const snap = conflictServerSnapshot;
-  state.currentRaw = snap.raw ?? "";
-  state.currentHtml = sanitize(snap.html);
-  state.currentSha = snap.sha ?? null;
-  els.editor.value = state.currentRaw;
-  setDirty(false);
-  els.preview.innerHTML = state.currentHtml;
-  els.source.textContent = state.currentRaw;
-  if (state.viewMode !== "md") renderMermaid().catch(() => {});
-  hideConflict();
-  setStatus("ok", t("status.serverTaken"));
-}
-
-function forceOverwrite() {
-  hideConflict();
-  saveEdit({ force: true });
 }
 
 /* ===== リンクナビゲーション ===== */
@@ -1187,9 +985,9 @@ function wireKeyboard() {
       if (!state.editing) return;
       ev.preventDefault();
       ev.stopPropagation();
-      saveEdit().catch((err) =>
-        setStatus("error", t("status.saveFailed", { msg: errorText(err) })),
-      );
+      ctx.editor
+        .saveEdit()
+        .catch((err) => setStatus("error", t("status.saveFailed", { msg: errorText(err) })));
     },
     { capture: true },
   );
@@ -1230,14 +1028,5 @@ function wireKeyboard() {
     ta.selectionStart = ta.selectionEnd = start + 2;
     // input イベントは自動発火しないので明示
     ta.dispatchEvent(new Event("input"));
-  });
-}
-
-function wireBeforeUnload() {
-  window.addEventListener("beforeunload", (ev) => {
-    if (state.editing && state.dirty) {
-      ev.preventDefault();
-      ev.returnValue = "";
-    }
   });
 }
