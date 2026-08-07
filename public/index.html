@@ -261,6 +261,7 @@
           role="dialog"
           aria-modal="true"
           aria-labelledby="conflict-diff-title"
+          aria-describedby="conflict-diff-summary"
           hidden
         >
           <div class="conflict-diff-panel">
@@ -289,6 +290,12 @@
             <p id="conflict-diff-truncated" class="conflict-diff-truncated" data-i18n="conflict.diff.truncated" hidden>
               文書が大きいため差分の表示を省略しました。内容を確認してから選んでください。
             </p>
+
+            <!--
+              コピーの成否はここに出す。`#status` は topbar の中にあり、
+              このダイアログのスクリム (z-index 70) の下に隠れて見えない。
+            -->
+            <p id="conflict-diff-notice" class="conflict-diff-notice" role="status" hidden></p>
 
             <div class="conflict-diff-actions">
               <button type="button" id="conflict-diff-copy-local" class="conflict-action" data-i18n="conflict.diff.copyLocal">

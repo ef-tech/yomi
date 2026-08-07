@@ -538,6 +538,16 @@ body {
   user-select: none;
 }
 
+.conflict-diff-notice {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.conflict-diff-notice[hidden] {
+  display: none;
+}
+
 .conflict-diff-truncated {
   margin: 0;
   font-size: 0.8rem;

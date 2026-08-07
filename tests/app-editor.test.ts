@@ -510,10 +510,10 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
 
     // **フォールバック（戻り先が消えていたとき）は jsdom では確認できない。**
     // 採用・上書きを選ぶとバナーごと閉じるので、実ブラウザなら戻り先が非表示になって
-    // `focus()` が空振りする。だが jsdom は `hidden` を無視してフォーカスを当ててしまい、
-    // **実装を消しても通る空テストにしかならない**（実測で確認した）。
-    // 実装側にはフォールバックを入れてあり、動作は実機で確認している
-    // （`.ef/verify/issue-57/REPORT.md`）。
+    // `focus()` が空振りする。だが **jsdom は `hidden` を無視して `focus()` を通す**ので
+    // （実測: `el.hidden = true` の後でも `activeElement` がその要素になる）、
+    // ここに書いても実装を消して通る空テストにしかならない。実装側にはフォールバックが
+    // あり、実ブラウザで「取り込み後にフォーカスが editor へ返る」ことを確認している。
 
     // 最前面 (z-index 70) なので、1 回の Esc で背後まで閉じてはいけない
     test("Esc は差分ダイアログだけを閉じ、背後の sidebar は開いたまま", async () => {
@@ -625,6 +625,95 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
       expect(rows().length).toBeLessThan(20);
       expect(h.qa("#conflict-diff-body .conflict-diff-skip").length).toBeGreaterThan(0);
     });
+  });
+
+  // **エディタ以外からも競合は起きる。** プレビューのチェックボックスを切り替えた保存は
+  // 編集モードでないので、エディタは空。それをローカル版として出すと「自分の変更が全部
+  // 消えている」という嘘になる（レビューで発覚）。
+  describe("エディタ以外の経路（プレビューのチェックボックス）", () => {
+    async function provokeCheckboxConflict(harness: AppHarness) {
+      const file = harness.files["README.md"];
+      if (!file) throw new Error("fixture が無い");
+      file.raw = "- [ ] やること\n";
+      file.html = '<ul><li><input type="checkbox" data-task-index="0"> やること</li></ul>';
+      file.sha = "sha-task-1";
+      harness.click(harness.treeItem("README.md"));
+      await harness.flush(4);
+
+      const box = harness.q<HTMLInputElement>('#preview input[type="checkbox"]');
+      // サーバ側だけ先に進める
+      file.raw = "- [ ] やること\n- [ ] 増えた行\n";
+      file.sha = "sha-task-2";
+
+      box.checked = true;
+      box.dispatchEvent(new harness.window.Event("change", { bubbles: true }));
+      await harness.flush(6);
+      return box;
+    }
+
+    test("チェックを反映した本文をローカル版として差分に出す（エディタの空文字ではない）", async () => {
+      h = await bootApp();
+      await provokeCheckboxConflict(h);
+      expect(h.el("conflict-banner").hidden).toBe(false);
+      expect(h.el<HTMLTextAreaElement>("editor").value).toBe(""); // エディタは空のまま
+
+      h.click(h.el("conflict-show-diff"));
+      await h.flush();
+
+      // ローカル版は「チェックを付けた本文」であって空文字ではない
+      const shown = sketch();
+      expect(shown).toContain("-- [x] やること");
+      expect(shown).toContain("+- [ ] やること");
+      expect(shown).toContain("+- [ ] 増えた行");
+    });
+
+    test("編集モードでなくても「強制上書き」が効く（無言で終わらない）", async () => {
+      h = await bootApp();
+      await provokeCheckboxConflict(h);
+      h.click(h.el("conflict-show-diff"));
+      await h.flush();
+
+      h.click(h.el("conflict-diff-overwrite"));
+      await h.flush(6);
+
+      const posts = savePosts(h);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]?.body).not.toHaveProperty("baseSha");
+      expect(h.files["README.md"]?.raw).toBe("- [x] やること\n");
+      expect(h.el("conflict-banner").hidden).toBe(true);
+    });
+  });
+
+  // 差分を読んでいる最中に watcher の通知が重なると、画面は古いままスナップショットだけが
+  // 新しくなる。そのまま「取り込む」を押すと**見ていない内容**が入る（レビューで発覚）
+  test("開いている間にサーバ内容が差し替わったら差分を描き直す", async () => {
+    await openDiff("ローカル版\n", "サーバ版1\n");
+    expect(sketch()).toContain("+サーバ版1");
+
+    // watcher の 2 発目相当
+    const file = h.files["README.md"];
+    if (file) {
+      file.raw = "サーバ版2\n";
+      file.html = "<p>サーバ版2</p>";
+      file.sha = "sha-readme-3";
+    }
+    h.ws.emit({ type: "changed", path: "README.md" });
+    await h.flush(6);
+
+    expect(sketch()).toContain("+サーバ版2");
+    expect(sketch()).not.toContain("+サーバ版1");
+  });
+
+  test("コピーの結果をパネル内にも出す（スクリムの下に隠れないように）", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+    expect(h.el("conflict-diff-notice").hidden).toBe(true);
+
+    h.click(h.el("conflict-diff-copy-local"));
+    await h.flush();
+
+    expect(h.el("conflict-diff-notice").hidden).toBe(false);
+    expect(h.el("conflict-diff-notice").textContent).toContain("コピー");
+    expect(h.el("conflict-diff-notice").getAttribute("role")).toBe("status");
   });
 
   // ファイル名も中身も利用者のものなので、HTML として解釈してはいけない (#21 / #59 の方針)
