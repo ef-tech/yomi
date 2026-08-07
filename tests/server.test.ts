@@ -846,3 +846,143 @@ describe("checkOrigin (unit)", () => {
     expect(checkOrigin(req)).toBe(false);
   });
 });
+
+describe("server - 除外配下の読み取り拒否 (Issue #65)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  const PNG = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000005000170c0bedb0000000049454e44ae426082",
+    "hex",
+  );
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-excl-read-"));
+    // ディレクトリ名での除外 (.yomiignore に `private` と書いた場合)
+    await mkdir(join(root, "private"), { recursive: true });
+    await writeFile(join(root, "private", "secret.md"), "# secret\n");
+    await writeFile(join(root, "private", "creds.csv"), "user,password\n");
+    await writeFile(join(root, "private", "hidden.png"), PNG);
+    // ファイル名での除外 (.yomiignore に `memo.md` と書いた場合)
+    await writeFile(join(root, "memo.md"), "# memo\n");
+    await writeFile(join(root, "memo.csv"), "a,b\n");
+    // 除外されない対照
+    await writeFile(join(root, "public.md"), "# public\n");
+    await writeFile(join(root, "public.csv"), "a,b\n");
+    // 除外配下を指すリンクを root 直下に置いても迂回できないこと
+    await symlink(join(root, "private", "creds.csv"), join(root, "link.csv"));
+
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      excludes: new Set(["private", "memo.md", "memo.csv"]),
+    });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function codeOf(res: Response): Promise<string | undefined> {
+    return ((await res.json()) as { code?: string }).code;
+  }
+
+  test("前提: 除外したものは /api/tree に出ない", async () => {
+    const tree = (await (await fetch(`${url}/api/tree`)).json()) as {
+      children: { name: string }[];
+    };
+    const names = tree.children.map((c) => c.name);
+    expect(names).toContain("public.md");
+    expect(names).not.toContain("private");
+    expect(names).not.toContain("memo.md");
+  });
+
+  test("ディレクトリ除外配下は /api/file から読めない", async () => {
+    const res = await fetch(`${url}/api/file?path=private/secret.md`);
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("excluded_path");
+  });
+
+  test("ディレクトリ除外配下は /api/asset から取得できない", async () => {
+    for (const p of ["private/creds.csv", "private/hidden.png"]) {
+      const res = await fetch(`${url}/api/asset?path=${p}`);
+      expect(res.status).toBe(400);
+      expect(await codeOf(res)).toBe("excluded_path");
+    }
+  });
+
+  test("ファイル名での除外も /api/file / /api/asset の両方に効く", async () => {
+    const md = await fetch(`${url}/api/file?path=memo.md`);
+    expect(md.status).toBe(400);
+    expect(await codeOf(md)).toBe("excluded_path");
+
+    const csv = await fetch(`${url}/api/asset?path=memo.csv`);
+    expect(csv.status).toBe(400);
+    expect(await codeOf(csv)).toBe("excluded_path");
+  });
+
+  test("除外されていないファイルは従来どおり読める", async () => {
+    expect((await fetch(`${url}/api/file?path=public.md`)).status).toBe(200);
+    expect((await fetch(`${url}/api/asset?path=public.csv`)).status).toBe(200);
+  });
+
+  test("除外配下を指す symlink 経由でも取得できない (解決後の rel で判定)", async () => {
+    const res = await fetch(`${url}/api/asset?path=link.csv`);
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("excluded_path");
+  });
+
+  test("除外配下は存在しなくても同じ 400 (存在有無を漏らさない)", async () => {
+    const exists = await fetch(`${url}/api/asset?path=private/creds.csv`);
+    const missing = await fetch(`${url}/api/asset?path=private/nope.csv`);
+    expect(exists.status).toBe(400);
+    expect(missing.status).toBe(400);
+    expect(await codeOf(exists)).toBe(await codeOf(missing));
+    // 除外の外なら「存在しない」は 404 のまま (除外判定が 404 を潰していない)
+    expect((await fetch(`${url}/api/asset?path=nope.csv`)).status).toBe(404);
+  });
+});
+
+describe("server - --depth 超過は読み取りを塞がない (Issue #65)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-depth-read-"));
+    await mkdir(join(root, "docs", "deep"), { recursive: true });
+    await writeFile(join(root, "top.md"), "# top\n");
+    await writeFile(join(root, "docs", "deep", "guide.md"), "# guide\n");
+    await writeFile(join(root, "docs", "deep", "data.csv"), "a,b\n");
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      maxDepth: 1,
+    });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // depth は `tree -L` 相当の走査上限で、除外ではない (境界の dir はツリーに残る)。
+  // 浅い md から深い md への内部リンク遷移を壊さないため、読み取りには適用しない。
+  test("depth を超えた md は /api/file から読める", async () => {
+    const res = await fetch(`${url}/api/file?path=docs/deep/guide.md`);
+    expect(res.status).toBe(200);
+  });
+
+  test("depth を超えた asset は /api/asset から取得できる", async () => {
+    const res = await fetch(`${url}/api/asset?path=docs/deep/data.csv`);
+    expect(res.status).toBe(200);
+  });
+});
