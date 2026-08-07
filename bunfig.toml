@@ -1,0 +1,8 @@
+# bun test の探索範囲を tests/ に限定する (Issue #80)。
+#
+# bun test は `*.spec.ts` も拾うため、これが無いと `e2e/*.spec.ts` (Playwright) を
+# bun のランナーで実行しようとして落ちる。`bun run test` は package.json 側で
+# `tests/` を渡しているが、**素の `bun test` を打つ人が普通にいる**ので、
+# 設定側で塞いでおく。E2E は `bun run test:e2e` (playwright test) から実行する。
+[test]
+root = "tests"

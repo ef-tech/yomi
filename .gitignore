@@ -35,6 +35,12 @@ yarn-error.log*
 coverage/
 .nyc_output/
 
+# Playwright (Issue #80): 失敗時の screenshot / trace とレポート。生成物なので追跡しない
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
 # Temporary
 *.tmp
 .cache/
