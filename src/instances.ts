@@ -1,8 +1,9 @@
 import { realpathSync, rmSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { writeFileAtomic } from "./util/atomic-write.ts";
 
 /**
  * 起動中の yomi 1 インスタンスの記録 (Issue #68)。
@@ -102,14 +103,7 @@ export async function saveInstance(
 ): Promise<void> {
   await ensureDirs(paths);
   const target = recordPath(record.port, paths);
-  const temp = `${target}.${process.pid}.tmp`;
-  try {
-    await writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    await rename(temp, target);
-  } catch (err) {
-    await rm(temp, { force: true });
-    throw err;
-  }
+  await writeFileAtomic(target, `${JSON.stringify(record, null, 2)}\n`);
 }
 
 export async function removeInstance(
