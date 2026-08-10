@@ -106,8 +106,9 @@ yomi up [options]
                   (exposed without authentication; trusted networks only)
                   Cannot be combined with --host
   --depth <n>, -L <n>
-                  Limit the scan depth (equivalent to tree -L; default: unlimited)
-                  1 = root level only. Deeper md files are neither loaded nor watched
+                  Limit the scan/watch depth (equivalent to tree -L; default: unlimited)
+                  1 = root level only. Deeper md files are neither listed nor watched,
+                  but can still be opened by following a link (use .yomiignore to hide)
   --help, -h      Help
 
 yomi down [options]
@@ -116,7 +117,9 @@ yomi down [options]
   --port <n>      Stop the yomi on the given port
 ```
 
-For large directory trees, `--depth` (short form `-L`) narrows the levels scanned/watched at startup. Just like `tree -L <level>`, the root level counts as depth 1. Markdown beyond the depth is not loaded and is also excluded from file watching (live reload), so startup is faster and the number of inotify watches is lower. To view deeper levels, restart with a higher depth.
+For large directory trees, `--depth` (short form `-L`) narrows the levels scanned/watched at startup. Just like `tree -L <level>`, the root level counts as depth 1. Markdown beyond the depth is left out of the startup scan (its contents do not appear in the tree) and is also excluded from file watching (live reload), so startup is faster and the number of inotify watches is lower. To browse deeper levels from the tree, restart with a higher depth.
+
+**`--depth` is not a way to hide things.** Directories beyond the depth still appear in the tree (they are simply not opened), and the Markdown inside them can still be opened by following a link. To hide something, use [`.yomiignore`](#customizing-exclude-patterns-yomiignore).
 
 ### Running in the background (Issue #68, #69)
 
@@ -141,6 +144,28 @@ yomi down --port 3939
 - State and logs live under `${XDG_STATE_HOME:-~/.local/state}/yomi/` (`instances/<port>.json` and `logs/<port>.log`)
 - Records left behind by an abnormal exit are pruned automatically when you run `yomi list` or `yomi down`
 - `-d` does not open the browser. Use `yomi up -d --open` if you want it opened
+
+### Quick open (Ctrl/Cmd+P) — Issue #54
+
+`Ctrl/Cmd+P` opens a file search panel so you can **switch files without touching the mouse** (on mobile, use "🔍 Search files" in the ⋮ menu).
+
+| Key | Action |
+|---|---|
+| `Ctrl/Cmd+P` | Open / close |
+| Typing | Filter by file name and relative path |
+| `↑` / `↓` | Move through the candidates (wraps at the ends) |
+| `Enter` | Open the selected file |
+| `Esc` | Close (focus returns to where it was) |
+
+- Matching is **subsequence-based**, so you can skip characters (`dsgn` → `design/design-notes.md`). Case is ignored
+- **Files with the same name are distinguished by their path** (`guide.md docs` vs `guide.md docs/api`, with the file name as the primary label and the directory as secondary)
+- Matched characters are shown in bold with an underline (not signalled by colour alone)
+- **The candidates are exactly what the left tree shows.** Files excluded by `.yomiignore` or beyond `--depth` never appear
+- Navigation goes through the same path as a normal file selection, so the **unsaved-changes prompt, browser history, and tree highlighting all behave as before**
+- **It opens while editing too.** Choosing a candidate with unsaved changes shows the same discard prompt as a normal file selection
+- **Japanese file names are searchable too.** Keys are left alone while an IME is composing, so confirming a conversion with `Enter` never opens a file by accident
+
+Full-text search of file contents is out of scope.
 
 ### File tree
 
@@ -268,7 +293,17 @@ backup
 .archive
 ```
 
-Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not.
+Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not. The syntax has three limitations. Since exclusions now also deny reads and writes, each of them can silently leave something unprotected:
+
+- **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually — and no warning is emitted. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
+- **Matching happens against the resolved real path.** If the thing you want to exclude is a symlink, also list the **target directory name**, not just the link name (the link name alone is caught by the literal check on the requested path, but requests made through the real path are not).
+- **Matching is case-sensitive.** `private` does not match `Private/`. Behavior may differ on case-insensitive filesystems such as macOS (see #98).
+
+There is currently **no way to undo the default exclude patterns** (`node_modules`, `dist`, `build`, `vendor`, …). `.yomiignore` only adds to the default set; negation patterns (`!name`) are not supported (see #97).
+
+**Exclusions apply to reads and saves, not just to the tree view (Issue #65).** An excluded path cannot be fetched from `/api/file` (Markdown source) or `/api/asset` (images and attachments), and cannot be saved to either; requesting the URL directly is rejected with a 400. Excluded paths return the same response whether or not the file exists, so their existence is not revealed either. If a Markdown file references an image stored under an excluded directory, that image will no longer render (changed in v0.20.0; it used to be both readable and writable).
+
+Note that `--depth` is a different thing and **does not restrict reads**. Like `tree -L`, it caps how deep the startup scan goes, and directories beyond the depth still appear in the tree (they are simply not opened). Internal links from a shallow Markdown file to a deeper one still work as before. To hide something, use `.yomiignore` rather than `--depth`. Note, however, that files beyond the depth are **not watched**, so even when you can open one, changes made elsewhere are not reflected automatically (reload manually).
 
 ### Editing
 
@@ -277,7 +312,24 @@ Pressing the "Edit" button in the right pane's header switches to a `<textarea>`
 - **Save**: the "Save and close" button (save → end editing), or `Ctrl/Cmd+S` (save only, keep editing)
 - **Discard**: the "Discard" button drops unsaved changes and exits edit mode
 - **Unsaved indicator**: `● Unsaved` lights up in the header. Closing the tab prompts a warning
-- **Concurrent edit (Lost Update) detection**: if another process rewrites the same file while editing, a conflict banner appears on save. Choose from "Load server version", "Force overwrite", or "Close"
+- **Concurrent edit (Lost Update) detection**: if another process rewrites the same file while editing, a conflict banner appears on save. Choose from "Show diff", "Load server version", "Force overwrite", or "Close"
+
+##### Diff on conflict (Issue #57)
+
+"Show diff" in the conflict banner lets you **compare your edits with the latest server content line by line** before deciding which one to keep.
+
+| Marker | Meaning |
+|---|---|
+| `-` (red, left rule) | Line that only exists in your version |
+| `+` (green, left rule) | Line that only exists on the server |
+| `N line(s) hidden` | Unchanged lines far from any change, collapsed |
+
+- **Not signalled by colour alone.** The `-` / `+` markers and the left rule carry the same information (light and dark themes both supported)
+- "Load server version" and "Force overwrite" can be run straight from the diff view, and either side can be **copied**
+- **Your edits are never lost before you choose** — closing the dialog leaves you in edit mode with your text intact
+- Fully keyboard operable (`Tab` cycles inside the dialog, `Esc` closes it)
+- **Large documents skip the diff** (over 2000 lines / 512 KB *after* trimming the common head and tail). A frozen screen is worse than no diff, so the choices and the copy buttons remain. Because the limit is measured on what actually gets compared, a long document with only a small change is still diffed
+- **No automatic merge.** At the point the save fails the client no longer has the common ancestor, so merging would produce a third version that is neither side
 
 #### Creating new files
 
@@ -331,11 +383,63 @@ Run all tests with `bun test`.
 bun test
 ```
 
-They live under `tests/` as `*.test.ts`. In addition to server-side pure functions, security-related code, the parser, and the file scanner, they cover DOM-independent client pure functions (`public/new-file.js`, etc.) — the DOM-coupled `app.js` itself is out of scope.
+They live under `tests/` as `*.test.ts`. In addition to server-side pure functions, security-related code, the parser, and the file scanner, they cover client-side pure functions (`public/new-file.js`, etc.) and characterization tests that pin down `public/app.js` state transitions under jsdom (Issue #77).
 
 ```bash
 bun test tests/util/        # just the util directory
 bun test tests/safepath     # filter by file name
+```
+
+### Benchmarks (Issue #83)
+
+Measures three metrics: directory scan time, `/api/tree` response, and client-side rendering. Used to compare before and after the incremental-update work (#84).
+
+```bash
+bun run bench                  # measure at 1,000 / 5,000 / 10,000 files
+bun run bench 1000 5000        # pick the sizes
+rm -rf .bench                  # remove the generated fixtures
+```
+
+Fixtures are generated by `scripts/bench-fixture.ts` (`.bench/` is not tracked). They use 20 files per directory and nest one level deeper every 10 directories, roughly matching the shape of a real project.
+
+Each number is the **median of 5 runs** (after discarding one warmup). A mean would be skewed by a single GC pause or page-cache miss; a minimum would only show the ideal case.
+
+**The baseline for the current implementation is recorded in [`docs/bench/tree-baseline.md`](docs/bench/tree-baseline.md).**
+### Browser E2E tests (Issue #80)
+
+End-to-end tests that drive a real browser (Chromium) are written with Playwright and live under `e2e/` as **`*.e2e.ts`** (naming them `*.spec.ts` would make a bare `bun test` pick them up, so the two runners are kept disjoint by file name).
+
+```bash
+bunx playwright install chromium   # first time only (fetch the browser binary)
+bun run test:e2e                   # run the E2E suite
+bunx playwright test --ui          # interactive UI mode
+```
+
+The fixed documents in `e2e/fixtures/` are copied to a temporary directory first, and yomi is started against that copy (Playwright launches it for you). yomi has write APIs, so pointing it at the tracked fixtures would let editing tests dirty the git working tree. The port can be changed with `YOMI_E2E_PORT` (default 3950).
+
+#### How this splits with the unit tests
+
+| | What it guards | When |
+|---|---|---|
+| `bun test` (`tests/`) | Server APIs, pure functions, and **`app.js` state transitions under jsdom** | Always. Fast |
+| `bun run test:e2e` (`e2e/`) | **Integration that only shows up in a real browser** — real CSS layout, real DOM events, real WebSockets, actual Mermaid rendering, the History API | CI and on demand. Slow |
+
+**Anything expressible in jsdom does not belong in E2E.** jsdom has no layout (`scrollTop` is always 0) and no `IntersectionObserver` or `TouchEvent`, so the characterization tests stub those out. E2E exists to check that what was stubbed also holds for real; covering logic exhaustively is the unit tests' job. Too many E2E tests make CI slow and flaky.
+
+#### Keeping flakiness out
+
+We already got burned by an intermittently failing watcher test on macOS CI (Issue #45), so the E2E suite sticks to these rules:
+
+- **No fixed sleeps.** Synchronize with Playwright's auto-waiting and `expect(locator)` retries
+- **`retries` is 0, even on CI.** Tolerating "fails sometimes, passes on re-run" is how flakiness accumulates. Fix it, or move the check to the unit tests
+- **`workers: 1`.** yomi is one process serving one directory, so running in parallel would let tests clobber the same fixture
+- **Chromium only, Ubuntu only on CI.** E2E guards browser-specific integration, not OS differences (the unit test matrix covers those)
+- **`locale` and timezone are pinned.** Chromium inherits the host locale, so without pinning the UI language differs between local (ja) and CI (en). **If you write label-based locators, this `locale` is the assumption they rest on**
+
+On failure a screenshot and a trace are written to `test-results/` (available as CI artifacts). The trace replays the run.
+
+```bash
+bunx playwright show-trace test-results/<test name>/trace.zip
 ```
 
 ### Type check
@@ -416,6 +520,41 @@ sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 ```
 
 If you cannot raise the limit (e.g., no `sudo`), you can also narrow the watched levels with [`--depth`](#options). For example, `yomi --depth 2` watches only two levels, keeping the watch count low.
+
+### Automatic recovery when yomi stops responding (Issue #91)
+
+A long-running yomi can end up in a state where **connections are accepted but no response comes back, and neither Ctrl+C nor `kill` (SIGTERM) stops it** (observed after more than 7 days of uptime; `kill -9` still works). The main thread stalls on an internal lock and never returns to the event loop; because signal handlers are dispatched from that same event loop, Ctrl+C never arrives either.
+
+**The root cause has not been identified yet.** yomi therefore runs a watchdog thread: if the main thread stops responding for 60 seconds, it prints a message like the following and force-terminates the process. Restarting recovers it.
+
+```
+yomi: メインスレッドが 63 秒間応答していません。
+  event loop が停止しており、Ctrl+C も kill も効かない状態です (Issue #91)。
+  復旧のためプロセスを強制終了します。再起動してください。
+  稼働時間: 682341 秒
+  この状態を踏んだことを https://github.com/ef-tech/yomi/issues/91 に報告してもらえると助かります。
+  スレッドの状態 (この情報が原因究明の手がかりになります):
+    tid=3300359 comm=bun wchan=futex_do_wait
+    ...
+```
+
+**If you see this message, please paste it into [#91](https://github.com/ef-tech/yomi/issues/91).** The reproduction conditions are still unknown, and the thread states are the only lead we have (the line marked `<<< メインスレッド` is the key one). When running in the background (`yomi up -d`), the message goes to the log in the state directory.
+
+Because this is not a graceful shutdown, it has two side effects:
+
+- **The exit code is 137**, which supervisors such as systemd treat as a crash.
+- A registry entry is left behind under `~/.local/state/yomi/instances/<port>.json`, but it is pruned automatically on the next `yomi list` or `yomi down`.
+
+The watchdog does **not** affect normal operation. If the whole process is frozen (for example when a laptop sleeps), it tells that apart from a real stall by looking at its own scheduling delay, so it does not fire spuriously.
+
+**If it ever fires spuriously, or you simply do not want the watchdog, you can turn it off:**
+
+```bash
+YOMI_NO_WATCHDOG=1 yomi              # disable the watchdog
+YOMI_WATCHDOG_TIMEOUT_MS=180000 yomi # raise the threshold to 3 minutes
+```
+
+Since the root cause is still unidentified, there is no guarantee this heuristic behaves correctly in every environment. **If you hit a false positive, please report that to [#91](https://github.com/ef-tech/yomi/issues/91) as well.**
 
 ## License
 
