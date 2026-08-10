@@ -1,5 +1,5 @@
 import type { FileHandle } from "node:fs/promises";
-import { open, readFile, writeFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "./renderer.ts";
@@ -7,6 +7,7 @@ import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanMarkdownTree } from "./scanner.ts";
 import { assetContentType, assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
+import { writeFileAtomic } from "./util/atomic-write.ts";
 import { buildContentDisposition } from "./util/content-disposition.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
@@ -460,10 +461,16 @@ async function handleFileWrite(
   const newSha = sha256(buf);
   saveMark.set(safe.rel, newSha);
   try {
-    await writeFile(safe.abs, buf);
+    await writeFileAtomic(safe.abs, buf);
   } catch (err) {
     saveMark.clear(safe.rel);
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // **生のメッセージを返さない。** 一時ファイルの絶対パスと pid が載るので、
+    // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）
+    console.error(`保存に失敗しました (${safe.rel}):`, err);
+    return Response.json(
+      { error: `ファイルの保存に失敗しました: ${path}`, code: "write_failed" },
+      { status: 500 },
+    );
   }
 
   const html = await renderMarkdown(body, { currentPath: safe.rel });

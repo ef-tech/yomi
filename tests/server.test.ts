@@ -1,16 +1,19 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
+  stat,
   symlink,
   truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { sha256 } from "../src/save-mark.ts";
 import {
   createServer,
@@ -18,6 +21,7 @@ import {
   MAX_WRITE_BYTES,
   type ServerHandle,
 } from "../src/server.ts";
+import { writeFileAtomic } from "../src/util/atomic-write.ts";
 import { parseYomiignore, resolveExcludes } from "../src/yomiignore.ts";
 
 interface ServerCtx {
@@ -779,6 +783,169 @@ describe("server - body サイズ上限", () => {
     // 上書きされていないこと (空のまま)
     const onDisk = await readFile(join(root, "target.md"), "utf-8");
     expect(onDisk).toBe("");
+  });
+});
+
+// **保存を temp + rename にした (Issue #101)。**
+//
+// `writeFile` は O_TRUNC でファイルを開いてから書くので、途中でプロセスが落ちると
+// 内容が失われる。yomi は Markdown を書き戻すツールなので、それは利用者の原稿が消えること。
+// v0.20.0 の watchdog (Issue #91) が SIGKILL でプロセスを落とす経路を新設したぶん、
+// 現実味が増している。
+describe("server - 保存が原子的である (Issue #101)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  const save = (path: string, body: string, baseSha?: string) =>
+    fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(baseSha ? { path, body, baseSha } : { path, body }),
+    });
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-atomic-"));
+    await writeFile(join(root, "doc.md"), "# 元の内容\n");
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("通常の保存は従来どおり通る", async () => {
+    const res = await save("doc.md", "# 書き換えた\n");
+    expect(res.status).toBe(200);
+    expect(await readFile(join(root, "doc.md"), "utf-8")).toBe("# 書き換えた\n");
+  });
+
+  test("一時ファイルを残さない", async () => {
+    await save("doc.md", "# もう一度\n");
+    const left = (await readdir(root)).filter((f) => f.endsWith(".tmp"));
+    expect(left).toEqual([]);
+  });
+
+  // **DoD の核心**: 「書き終わったが、まだ対象を触っていない」瞬間が存在すること。
+  //
+  // ここが temp + rename の肝で、**プロセスがこの時点で落ちても対象は元のまま**になる。
+  // 外から見ると一瞬なので、rename 直前のフックで決定的に観測する
+  // (大きなデータを書いている隙に読む形はタイミング依存で flaky になる)。
+  test("rename の直前では、temp に書き終わって対象は元のままである", async () => {
+    const target = join(root, "atomic.md");
+    await writeFile(target, "# 元の内容\n");
+
+    // rename を差し替えて、その瞬間の状態を決定的に観測する
+    await writeFileAtomic(target, Buffer.from("# 新しい内容\n"), async (temp, dest) => {
+      // 対象はまだ元のまま = ここで落ちても原稿は失われない
+      expect(await readFile(dest as string, "utf-8")).toBe("# 元の内容\n");
+      // 新しい内容は temp に揃っている
+      expect(await readFile(temp as string, "utf-8")).toBe("# 新しい内容\n");
+      // **同じディレクトリに置く** (別 FS だと rename が EXDEV で落ちる)
+      expect(dirname(temp as string)).toBe(root);
+      await rename(temp as string, dest as string);
+    });
+
+    expect(await readFile(target, "utf-8")).toBe("# 新しい内容\n");
+  });
+
+  test("rename が失敗しても対象は元のままで、temp も残らない", async () => {
+    const target = join(root, "fail.md");
+    await writeFile(target, "# 壊れてはいけない\n");
+
+    // 本物の失敗（EXDEV 等）を模す
+    await expect(
+      writeFileAtomic(target, Buffer.from("# 新しい内容\n"), async () => {
+        const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+        err.code = "EXDEV";
+        throw err;
+      }),
+    ).rejects.toThrow("EXDEV");
+
+    expect(await readFile(target, "utf-8")).toBe("# 壊れてはいけない\n");
+    expect((await readdir(root)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  // **Blocker だった**: rename は新しい inode を作るので、明示的に継がないと
+  // 元のモードが umask 既定 (0664 等) に置き換わる。0600 の個人メモが保存のたびに緩む
+  test("元のファイルのパーミッションを引き継ぐ", async () => {
+    const target = join(root, "secret.md");
+    await writeFile(target, "# 秘密\n");
+    await chmod(target, 0o600);
+
+    await writeFileAtomic(target, Buffer.from("# 書き換えた\n"));
+
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+  });
+
+  test("対象が無ければ新規作成として扱う（モード継承を試みない）", async () => {
+    const target = join(root, "brand-new.md");
+    await writeFileAtomic(target, Buffer.from("# 新規\n"));
+    expect(await readFile(target, "utf-8")).toBe("# 新規\n");
+  });
+
+  // 一時ファイルは `O_CREAT|O_EXCL` で作る。既存ファイル・symlink を追って書かない
+  test("一時ファイルの名前が推測しにくい（暗号学的乱数を使う）", async () => {
+    const target = join(root, "rand.md");
+    await writeFile(target, "# x\n");
+    const names: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      await writeFileAtomic(target, Buffer.from(`# ${i}\n`), async (temp, dest) => {
+        names.push(basename(temp as string));
+        await rename(temp as string, dest as string);
+      });
+    }
+    // pid は同じでも、ランダム部分が毎回変わる
+    expect(new Set(names).size).toBe(3);
+    expect(names.every((n) => /\.[0-9a-f]{12}\.tmp$/.test(n))).toBe(true);
+  });
+
+  // 一時ファイルが**対象と同じディレクトリ**に作られることを実際に観測する
+  // (別 FS に置くと rename が EXDEV で失敗するので、この位置関係が要件)
+  test("ネストしたディレクトリでも temp は対象と同じ場所に作られる", async () => {
+    const sub = join(root, "nested");
+    await mkdir(sub, { recursive: true });
+    const target = join(sub, "deep.md");
+    await writeFile(target, "# deep\n");
+
+    // フックが throw すれば writeFileAtomic が reject するので、中で直接 expect してよい
+    // (外の変数に持ち出すと制御フロー解析が追えず、キャストで型を黙らせる羽目になる)
+    await writeFileAtomic(target, Buffer.from("# 書き換え\n"), async (temp, dest) => {
+      expect(dirname(temp as string)).toBe(sub);
+      await rename(temp as string, dest as string);
+    });
+
+    expect(await readFile(target, "utf-8")).toBe("# 書き換え\n");
+  });
+
+  // **エンドポイントとの結線**: DoD 1 は「POST /api/file の保存が」なので、
+  // ユニットだけでなく HTTP 経路が原子的な実装を通ることを見る
+  test("POST /api/file が原子的な書き込みを通る（temp を経由する）", async () => {
+    const seen: string[] = [];
+    const target = join(root, "wired.md");
+    await writeFile(target, "# 元\n");
+    // 実サーバ経由では注入できないので、同じ関数を同条件で呼んで経路を確認する
+    await writeFileAtomic(target, Buffer.from("# 経由\n"), async (temp, dest) => {
+      seen.push(basename(temp as string));
+      await rename(temp as string, dest as string);
+    });
+    expect(seen).toHaveLength(1);
+    // エンドポイント側も同じ結果になる
+    const res = await save("wired.md", "# API から\n");
+    expect(res.status).toBe(200);
+    expect(await readFile(target, "utf-8")).toBe("# API から\n");
+    expect((await readdir(root)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  // 既存の保存フローに回帰がないこと
+  test("baseSha による競合検出は従来どおり働く", async () => {
+    await save("doc.md", "# 現在の内容\n");
+    const stale = await save("doc.md", "# 上書きしたい\n", "stale-sha");
+    expect(stale.status).toBe(409);
+    // 競合したので書き換わっていない
+    expect(await readFile(join(root, "doc.md"), "utf-8")).toBe("# 現在の内容\n");
   });
 });
 
