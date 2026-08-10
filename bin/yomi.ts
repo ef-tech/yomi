@@ -178,6 +178,12 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
+  // **親でも `.yomiignore` を読んで警告する。** 実際に除外を適用するのは子 (runForeground) だが、
+  // 子の stderr はログファイルへ流れるので、そこに出しても**利用者の端末には届かない**。
+  // 「書いたのに効いていない」を知らせるのが目的なので、見える側にも出す。
+  const yomiignore = await loadYomiignore(rootDir);
+  if (yomiignore.invalid.length > 0) console.warn(describeInvalidLines(yomiignore.invalid));
+
   let record: InstanceRecord;
   try {
     record = await startDetached({ rootDir, host: options.host, port, depth: options.depth });
@@ -193,6 +199,10 @@ async function runDetached(options: CliOptions, rootDir: string, port: number) {
     depth: options.depth,
     detached: { pid: record.pid, logPath: record.logPath },
   });
+  // 警告と同じ理由で親にも出す。**`!build` が効いたかを確かめたいのは -d の利用者**で、
+  // その確認先がログファイルだけなのは不便（子は同じものをログへ出す）
+  const yomiignoreSummary = describeYomiignore(yomiignore);
+  if (yomiignoreSummary) console.log(yomiignoreSummary);
 
   if (shouldOpenBrowser(options)) {
     openBrowser(pickBrowserUrl(options.host, record.port));

@@ -281,9 +281,9 @@ function excludedPathResponse(requested: string): Response {
  * 除外の判定に違いは無い。クライアントが操作ごとに文言を出し分けられるように 2 つある。
  *
  * **`_dir` という名前は正確ではない** —— `.yomiignore` はファイル名も書けるので、
- * ファイル名の除外でもこのコードが返る。それでも**改名しない**: Issue #48 の i18n 辞書と
- * README がこのコードを前提にしており、**API の破壊的変更に見合う利益が無い**
- * (意味は上の表で確定しており、誤解するのは名前だけ)。
+ * ファイル名の除外でもこのコードが返る。それでも**改名しない**: Issue #48 の i18n 辞書
+ * (`public/i18n.js`) と `tests/server.test.ts` がこのコードを前提にしており、
+ * **API の破壊的変更に見合う利益が無い** (意味は上の表で確定しており、誤解するのは名前だけ)。
  */
 function excludedDirResponse(requested: string): Response {
   return Response.json(
