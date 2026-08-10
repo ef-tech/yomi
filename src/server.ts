@@ -270,12 +270,20 @@ function excludedPathResponse(requested: string): Response {
 /**
  * 除外配下への **作成** を拒否するレスポンス (`/api/file/create`)。
  *
- * 判定式は `excludedPathResponse` と同一 (`isExcludedPath`) だが、**コードは
- * `excluded_dir` のまま維持する** —— Issue #48 の i18n 辞書と README がこのコードを
- * 前提にしており、既存クライアントの表示を壊さないため。読み書き側 (`excluded_path`)
- * との使い分けは「エンドポイントの違い」であって判定の違いではない。
- * なお `.yomiignore` はファイル名も書けるので、この文言の「ディレクトリ」は
- * 厳密には正しくない (既存の不正確さ。統一は #97 で扱う)。
+ * ## 2 つのコードの使い分け (Issue #97 で整理)
+ *
+ * | code | 返す場所 | 意味 |
+ * |---|---|---|
+ * | `excluded_path` | `/api/file`（読み書き）/ `/api/asset` | 除外配下を**読もう・書こう**とした |
+ * | `excluded_dir` | `/api/file/create` | 除外配下に**作ろう**とした |
+ *
+ * **判定式は同一** (`isExcludedPath`)。**分かれているのはエンドポイントの違いだけ**で、
+ * 除外の判定に違いは無い。クライアントが操作ごとに文言を出し分けられるように 2 つある。
+ *
+ * **`_dir` という名前は正確ではない** —— `.yomiignore` はファイル名も書けるので、
+ * ファイル名の除外でもこのコードが返る。それでも**改名しない**: Issue #48 の i18n 辞書と
+ * README がこのコードを前提にしており、**API の破壊的変更に見合う利益が無い**
+ * (意味は上の表で確定しており、誤解するのは名前だけ)。
  */
 function excludedDirResponse(requested: string): Response {
   return Response.json(

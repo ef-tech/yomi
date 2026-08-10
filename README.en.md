@@ -293,13 +293,34 @@ backup
 .archive
 ```
 
-Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not. The syntax has three limitations. Since exclusions now also deny reads and writes, each of them can silently leave something unprotected:
+#### Undoing a default exclude (`!name`)
 
-- **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually — and no warning is emitted. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
+**A line starting with `!` is a negation** and removes that name from the exclude set. This works on the default patterns too (`node_modules`, `dist`, `build`, `vendor`, …).
+
+```
+# .yomiignore
+# I want to read the md generated into build/ as well
+!build
+```
+
+- **Negations apply both to the defaults and to lines you added yourself in `.yomiignore`.** The order is fixed as two steps: union of defaults + additions, then subtract the negations
+- Because of that, writing both `foo` and `!foo` means **the negation wins regardless of the order you wrote them in**
+- To exclude a name that literally starts with `!`, write `\!name`
+
+#### Syntax limitations
+
+Only exact directory/file name matches are supported; globs (`*`, `**`) are not.
+
+- **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
 - **Matching happens against the resolved real path.** If the thing you want to exclude is a symlink, also list the **target directory name**, not just the link name (the link name alone is caught by the literal check on the requested path, but requests made through the real path are not).
 - **Matching is case-sensitive.** `private` does not match `Private/`. Behavior may differ on case-insensitive filesystems such as macOS (see #98).
 
-There is currently **no way to undo the default exclude patterns** (`node_modules`, `dist`, `build`, `vendor`, …). `.yomiignore` only adds to the default set; negation patterns (`!name`) are not supported (see #97).
+**Lines that cannot be matched are reported at startup.** Lines containing `/` or a glob, and a bare `!`, are ignored and listed on stderr with their line numbers. Exclusions decide read/write access, so "you wrote it but it does nothing" is never passed over silently.
+
+```
+警告: .yomiignore に無視した行があります (1 件)
+  .yomiignore:3: private/creds.csv — `/` を含む行は照合できません (セグメント名のみ指定できます)
+```
 
 **Exclusions apply to reads and saves, not just to the tree view (Issue #65).** An excluded path cannot be fetched from `/api/file` (Markdown source) or `/api/asset` (images and attachments), and cannot be saved to either; requesting the URL directly is rejected with a 400. Excluded paths return the same response whether or not the file exists, so their existence is not revealed either. If a Markdown file references an image stored under an excluded directory, that image will no longer render (changed in v0.20.0; it used to be both readable and writable).
 
