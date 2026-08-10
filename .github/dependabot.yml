@@ -26,3 +26,6 @@ updates:
           - "@types/*"
           - "typescript"
           - "@biomejs/*"
+          # Playwright は minor が頻繁に出る。単独 PR を毎週積まず、bump のたびに
+          # CI がブラウザを取り直すコストもまとめる (Issue #80)
+          - "@playwright/*"
