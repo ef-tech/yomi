@@ -131,6 +131,44 @@ describe("テーマ", () => {
     expect(h.document.documentElement.hasAttribute("data-theme")).toBe(false);
   });
 
+  // Issue #85: 言語トグルは見た目を揃えるため `.theme-toggle-btn` も持っているので、
+  // 素の class セレクタで集めると applyThemeMode が言語ボタンの aria-pressed を潰す。
+  // 起動時は applyThemeMode → applyLang の順なので初期表示は正しく、**テーマを操作した
+  // 後だけ**壊れる（気づきにくい）。両方向とも固定する。
+  test("テーマを切り替えても言語トグルの aria-pressed が壊れない (Issue #85)", async () => {
+    h = await bootApp();
+    const langPressed = () =>
+      [...h.document.querySelectorAll<HTMLElement>(".lang-toggle-btn")].map(
+        (b) => `${b.dataset.langMode}=${b.getAttribute("aria-pressed")}`,
+      );
+    expect(langPressed()).toEqual(["auto=true", "en=false", "ja=false"]);
+
+    h.click(themeBtn(h, "dark"));
+    await h.flush();
+    // テーマ操作は言語トグルに触らない
+    expect(langPressed()).toEqual(["auto=true", "en=false", "ja=false"]);
+
+    h.click(themeBtn(h, "light"));
+    await h.flush();
+    expect(langPressed()).toEqual(["auto=true", "en=false", "ja=false"]);
+  });
+
+  test("言語を切り替えてもテーマトグルの aria-pressed が壊れない (Issue #85)", async () => {
+    h = await bootApp();
+    h.click(themeBtn(h, "dark"));
+    await h.flush();
+
+    const langBtn = [...h.document.querySelectorAll<HTMLElement>(".lang-toggle-btn")].find(
+      (b) => b.dataset.langMode === "en",
+    );
+    h.click(langBtn as HTMLElement);
+    await h.flush();
+
+    expect(themeBtn(h, "dark").getAttribute("aria-pressed")).toBe("true");
+    expect(themeBtn(h, "auto").getAttribute("aria-pressed")).toBe("false");
+    expect(themeBtn(h, "light").getAttribute("aria-pressed")).toBe("false");
+  });
+
   test("テーマ変更で Mermaid を初期化し直し、プレビューを再描画する", async () => {
     h = await bootApp({
       files: {
