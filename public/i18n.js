@@ -100,6 +100,12 @@ const MESSAGES = {
     "toc.collapseH4": "▴ H4- 折りたたみ",
     "toc.collapseH4.title": "H4 以下を隠す",
     "toc.empty": "目次がありません",
+    // クイックオープン (Issue #54)
+    "quickOpen.label": "ファイルを検索して開く",
+    "quickOpen.placeholder": "ファイル名で絞り込み",
+    "quickOpen.input.aria": "ファイル名で絞り込み (↑↓ で選択、Enter で開く、Esc で閉じる)",
+    "quickOpen.empty": "一致するファイルがありません",
+    "quickOpen.open": "🔍 ファイルを検索",
     // ステータス (動的)
     "status.fileCount": "ファイル {count} 件",
     "status.initFailed": "初期化失敗: {msg}",
@@ -219,6 +225,12 @@ const MESSAGES = {
     "toc.collapseH4": "▴ Hide H4-",
     "toc.collapseH4.title": "Hide H4 and deeper",
     "toc.empty": "No headings",
+    // Quick open (Issue #54)
+    "quickOpen.label": "Search and open a file",
+    "quickOpen.placeholder": "Filter by file name",
+    "quickOpen.input.aria": "Filter by file name (↑↓ to select, Enter to open, Esc to close)",
+    "quickOpen.empty": "No matching files",
+    "quickOpen.open": "🔍 Search files",
     // status (dynamic)
     "status.fileCount": "{count} files",
     "status.initFailed": "Initialization failed: {msg}",

@@ -145,6 +145,28 @@ yomi down --port 3939
 - Records left behind by an abnormal exit are pruned automatically when you run `yomi list` or `yomi down`
 - `-d` does not open the browser. Use `yomi up -d --open` if you want it opened
 
+### Quick open (Ctrl/Cmd+P) — Issue #54
+
+`Ctrl/Cmd+P` opens a file search panel so you can **switch files without touching the mouse** (on mobile, use "🔍 Search files" in the ⋮ menu).
+
+| Key | Action |
+|---|---|
+| `Ctrl/Cmd+P` | Open / close |
+| Typing | Filter by file name and relative path |
+| `↑` / `↓` | Move through the candidates (wraps at the ends) |
+| `Enter` | Open the selected file |
+| `Esc` | Close (focus returns to where it was) |
+
+- Matching is **subsequence-based**, so you can skip characters (`dsgn` → `design/design-notes.md`). Case is ignored
+- **Files with the same name are distinguished by their path** (`guide.md docs` vs `guide.md docs/api`, with the file name as the primary label and the directory as secondary)
+- Matched characters are shown in bold with an underline (not signalled by colour alone)
+- **The candidates are exactly what the left tree shows.** Files excluded by `.yomiignore` or beyond `--depth` never appear
+- Navigation goes through the same path as a normal file selection, so the **unsaved-changes prompt, browser history, and tree highlighting all behave as before**
+- **It opens while editing too.** Choosing a candidate with unsaved changes shows the same discard prompt as a normal file selection
+- **Japanese file names are searchable too.** Keys are left alone while an IME is composing, so confirming a conversion with `Enter` never opens a file by accident
+
+Full-text search of file contents is out of scope.
+
 ### File tree
 
 The toolbar at the top of the left tree lets you expand/collapse the whole tree at once.

@@ -123,6 +123,7 @@
         </div>
       </div>
       <div class="overflow-section">
+        <button type="button" id="overflow-quick-open" class="overflow-action" data-i18n="quickOpen.open">🔍 ファイルを検索</button>
         <button type="button" id="overflow-edit" class="overflow-action" data-i18n="overflow.editMode">✏️ 編集モード</button>
       </div>
     </div>
@@ -309,6 +310,46 @@
         </div>
       </section>
     </main>
+    <!-- クイックオープン (Issue #54)。Ctrl/Cmd+P で開く。
+         role="dialog" + aria-modal で、開いている間はここだけを操作対象にする。 -->
+    <div
+      id="quick-open"
+      class="quick-open"
+      role="dialog"
+      aria-modal="true"
+      data-i18n-aria-label="quickOpen.label"
+      aria-label="ファイルを検索して開く"
+      hidden
+    >
+      <div class="quick-open-panel">
+        <input
+          type="text"
+          id="quick-open-input"
+          class="quick-open-input"
+          autocomplete="off"
+          spellcheck="false"
+          role="combobox"
+          aria-expanded="false"
+          aria-controls="quick-open-list"
+          aria-autocomplete="list"
+          data-i18n-placeholder="quickOpen.placeholder"
+          data-i18n-aria-label="quickOpen.input.aria"
+          placeholder="ファイル名で絞り込み"
+          aria-label="ファイル名で絞り込み (↑↓ で選択、Enter で開く、Esc で閉じる)"
+        />
+        <ul id="quick-open-list" class="quick-open-list" role="listbox"></ul>
+        <p
+          id="quick-open-empty"
+          class="quick-open-empty"
+          role="status"
+          data-i18n="quickOpen.empty"
+          hidden
+        >
+          一致するファイルがありません
+        </p>
+      </div>
+    </div>
+
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>

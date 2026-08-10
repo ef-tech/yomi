@@ -12,6 +12,7 @@ import { createDocument } from "./app-document.js";
 import { createEditor } from "./app-editor.js";
 import { createMobileUi } from "./app-mobile.js";
 import { createPreview } from "./app-preview.js";
+import { createQuickOpen } from "./app-quick-open.js";
 import { createTree } from "./app-tree.js";
 import { createWebSocketClient } from "./app-websocket.js";
 import { applyI18n, onLangChange, resolveLang, setLang, t } from "./i18n.js";
@@ -32,6 +33,7 @@ import { prefs } from "./prefs.js";
  * | `app-editor.js` | 編集モード、保存、競合バナー |
  * | `app-preview.js` | Mermaid、表示モード、テーマ、スクロール同期、TOC、タスクリスト |
  * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
+ * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
  * | `app-websocket.js` | ライブリロード |
  *
  * ここに残しているのは、どのモジュールにも属さない横断的なもの
@@ -59,6 +61,7 @@ ctx.tree = createTree(ctx);
 ctx.editor = createEditor(ctx);
 ctx.mobile = createMobileUi(ctx);
 ctx.ws = createWebSocketClient(ctx);
+ctx.quickOpen = createQuickOpen(ctx);
 
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
@@ -86,6 +89,7 @@ ctx.mobile.wireTopbarAutohide();
 ctx.mobile.wireSidebarSwipe();
 ctx.preview.wireTocActions();
 ctx.document.wireLinkNavigation();
+ctx.quickOpen.wire();
 wireKeyboard();
 ctx.editor.wireBeforeUnload();
 ctx.document.wireHistoryNavigation();

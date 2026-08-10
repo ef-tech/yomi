@@ -99,6 +99,12 @@ export function createElements() {
     overflowBtn: document.getElementById("overflow-btn"),
     overflowMenu: document.getElementById("overflow-menu"),
     overflowEdit: document.getElementById("overflow-edit"),
+    overflowQuickOpen: document.getElementById("overflow-quick-open"),
+    // クイックオープン (Issue #54)
+    quickOpen: document.getElementById("quick-open"),
+    quickOpenInput: document.getElementById("quick-open-input"),
+    quickOpenList: document.getElementById("quick-open-list"),
+    quickOpenEmpty: document.getElementById("quick-open-empty"),
     overflowThemeBtns: Array.from(document.querySelectorAll(".overflow-theme-btn")),
     overflowViewBtns: Array.from(document.querySelectorAll(".overflow-view-btn")),
     // FAB 目次 (Issue #30, スマホ専用)
@@ -179,6 +185,15 @@ export function createState() {
     scrollSyncEnabled: true,
     /** Issue #6: 表示中の新規ファイル名インライン入力 { li, input } (非表示時は null) */
     newFileInput: null,
+
+    /** Issue #54: クイックオープンの母集団 (ツリー再描画のたびに張り直す) */
+    quickOpenPaths: [],
+    /** Issue #54: いま表示している候補 */
+    quickOpenHits: [],
+    /** Issue #54: 候補内の選択位置 (候補が無ければ -1) */
+    quickOpenIndex: -1,
+    /** Issue #54: 開く直前のフォーカス (閉じたら戻す) */
+    quickOpenReturnFocus: null,
   };
 }
 

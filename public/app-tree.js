@@ -129,6 +129,9 @@ export function createTree(ctx) {
     }
     els.tree.appendChild(ul);
     updateTreeToolbarState();
+    // クイックオープンの母集団を張り直す (Issue #54)。**ツリーと同じものを見る**ので、
+    // 除外設定と --depth はサーバ側の適用結果がそのまま効く
+    ctx.quickOpen.syncPaths(root);
   }
 
   function wireTreeToolbar() {
