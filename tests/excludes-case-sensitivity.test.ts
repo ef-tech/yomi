@@ -27,6 +27,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSafe } from "../src/safepath.ts";
+import { createServer, type ServerHandle } from "../src/server.ts";
 import { isExcludedPath } from "../src/util/excludes.ts";
 
 /** 実際にファイルを作って、綴り違いで開けるか試す（プラットフォーム名で決め打ちしない） */
@@ -118,5 +119,63 @@ describe("除外判定と大小の区別 (Issue #98)", () => {
       .then(() => true)
       .catch(() => false);
     expect(reachable).toBe(false);
+  });
+});
+
+/**
+ * **存在オラクル。** Issue #65 は「除外配下のパスは実在しても存在しなくても同じ 400」を
+ * 保証していた（実在を漏らさないため）。
+ *
+ * 大小を区別しない環境では、**字句判定 (`isRequestExcluded`) が綴り違いを弾かない**ので
+ * 次の順で処理が進む:
+ *
+ * 1. 字句判定: `Private/x.md` は `private` と一致せず**通過**
+ * 2. `resolveSafe`: **実在すれば** realpath が `private/x.md` に正規化 → 解決後判定で 400
+ * 3. **実在しなければ** leaf を解決できず lexical fallback → `Private/x.md` のまま → 通過 → open が ENOENT → 404
+ *
+ * つまり **400 と 404 が分かれ、綴りを変えるだけで「除外配下にそのファイルがあるか」が分かる**。
+ * これが成立するかを実際の応答で確かめる。
+ */
+describe("存在オラクル（大小を区別しない環境で綴りを変えたとき）", () => {
+  let handle: ServerHandle | null = null;
+  let url = "";
+
+  beforeAll(async () => {
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      excludes: new Set(["private"]),
+    });
+    url = `http://127.0.0.1:${handle.server.port}`;
+    await writeFile(join(root, "private", "secret.md"), "# secret\n");
+  });
+
+  afterAll(() => {
+    handle?.close();
+  });
+
+  test("正しい綴りは実在・非実在とも同じ 400（#65 の保証）", async () => {
+    const exists = await fetch(`${url}/api/file?path=private/secret.md`);
+    const missing = await fetch(`${url}/api/file?path=private/nope.md`);
+    expect(exists.status).toBe(400);
+    expect(missing.status).toBe(400);
+  });
+
+  test("綴りを変えても実在・非実在で応答が分かれないこと", async () => {
+    const exists = await fetch(`${url}/api/file?path=Private/secret.md`);
+    const missing = await fetch(`${url}/api/file?path=Private/nope.md`);
+    const codes = {
+      exists: exists.status,
+      missing: missing.status,
+      existsCode: ((await exists.json()) as { code?: string }).code,
+      missingCode: ((await missing.json()) as { code?: string }).code,
+    };
+    console.log(`[Issue #98 oracle] caseInsensitive=${caseInsensitive} ${JSON.stringify(codes)}`);
+
+    // **実在の有無で応答が変わってはいけない。** 変わると、綴りを変えるだけで
+    // 除外配下のファイルの実在を問い合わせられる
+    expect(codes.exists).toBe(codes.missing);
   });
 });
