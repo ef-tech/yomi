@@ -70,12 +70,12 @@ export function createServer(config: ServerConfig): ServerHandle {
 
       if (url.pathname === "/api/file") {
         if (req.method === "GET") {
-          return handleFileRead(config.rootDir, url.searchParams.get("path"));
+          return handleFileRead(config.rootDir, url.searchParams.get("path"), excludes);
         }
         if (req.method === "POST") {
           if (!checkOrigin(req))
             return forbidden("Origin が許可されていません", "origin_forbidden");
-          return handleFileWrite(config.rootDir, req, saveMark);
+          return handleFileWrite(config.rootDir, req, saveMark, excludes);
         }
         return new Response("Method Not Allowed", {
           status: 405,
@@ -97,7 +97,7 @@ export function createServer(config: ServerConfig): ServerHandle {
 
       if (url.pathname === "/api/asset") {
         if (req.method === "GET" || req.method === "HEAD") {
-          return handleAssetRead(config.rootDir, url.searchParams.get("path"), req);
+          return handleAssetRead(config.rootDir, url.searchParams.get("path"), req, excludes);
         }
         return new Response("Method Not Allowed", {
           status: 405,
@@ -241,16 +241,92 @@ async function handleTree(
   }
 }
 
-async function handleFileRead(rootDir: string, requested: string | null): Promise<Response> {
+/**
+ * 除外配下へのアクセスを拒否するレスポンス (Issue #65)。
+ *
+ * **ファイルの存在確認より前に返す**ため、除外配下にあるパスは実在しても存在しなくても
+ * 同じ 400 になる (存在有無を漏らさない)。
+ *
+ * 読み取り (`/api/file` GET・`/api/asset`) と保存 (`/api/file` POST) の両方で使う。
+ * 保存を塞ぐのは整合性のためだけでなく、**書き込み経路が読み取りの迂回路になる**ため:
+ * baseSha を故意に外すと 409 の競合レスポンスに現在の中身 (`raw`) が載る。
+ *
+ * 対象は `.yomiignore` と `DEFAULT_EXCLUDES` だけで、**`--depth` 超過は含めない**。
+ * depth は `tree -L` 相当の走査深さの上限で、境界のディレクトリはツリーに残る
+ * (`scanner.ts` の `truncatedDirs`) = 「中を見ていない」ことの表明であって除外ではない。
+ * README も起動時間と inotify watch 数を下げるための指定として説明している。
+ * 読み取りまで塞ぐと、浅い md から深い md への内部リンク遷移が動かなくなる。
+ */
+function excludedPathResponse(requested: string): Response {
+  // echo するのは **クライアントが送った文字列**。解決後の `rel` を返すと、symlink 名で
+  // 要求したときに除外ディレクトリ内の実パスを教えてしまい、さらに「echo が要求と違う」
+  // こと自体がリンク先の実在を証明する。not_found が requested を echo しているのにも揃う。
+  return Response.json(
+    { error: `除外設定により読み書きできません: ${requested}`, code: "excluded_path" },
+    { status: 400 },
+  );
+}
+
+/**
+ * 除外配下への **作成** を拒否するレスポンス (`/api/file/create`)。
+ *
+ * 判定式は `excludedPathResponse` と同一 (`isExcludedPath`) だが、**コードは
+ * `excluded_dir` のまま維持する** —— Issue #48 の i18n 辞書と README がこのコードを
+ * 前提にしており、既存クライアントの表示を壊さないため。読み書き側 (`excluded_path`)
+ * との使い分けは「エンドポイントの違い」であって判定の違いではない。
+ * なお `.yomiignore` はファイル名も書けるので、この文言の「ディレクトリ」は
+ * 厳密には正しくない (既存の不正確さ。統一は #97 で扱う)。
+ */
+function excludedDirResponse(requested: string): Response {
+  return Response.json(
+    { error: `除外設定により作成できません: ${requested}`, code: "excluded_dir" },
+    { status: 400 },
+  );
+}
+
+/**
+ * 解決前の要求パスを、字句のまま除外判定する (Issue #65)。
+ *
+ * `resolveSafe` の後だけで判定すると 2 つ穴が残る:
+ *
+ * 1. **存在オラクル**: 除外配下にルート外を指す symlink があると `resolveSafe` が先に
+ *    throw し、`excluded_path` ではなく `unsafe_path` が返る。応答の differ で
+ *    「除外配下にそのエントリがある」ことが分かってしまう
+ * 2. **除外名が symlink のときのすり抜け**: `.yomiignore` に書いた名前が実ディレクトリ
+ *    でなく symlink だと、realpath がその名前を消すので除外に一致しなくなる
+ *
+ * 字句側で先に弾けばどちらも塞がる。解決後のチェックは symlink でルート内の除外配下へ
+ * 入る経路を止めるために残す (両方要る。片方では不足)。
+ */
+function isRequestExcluded(requested: string, excludes: ReadonlySet<string>): boolean {
+  // resolveSafe は `[\\/]` の両方をセパレータとして扱うので、判定側も合わせる
+  // (`private\creds.csv` で素通りさせない)。
+  return isExcludedPath(requested.replace(/\\/g, "/"), excludes);
+}
+
+async function handleFileRead(
+  rootDir: string,
+  requested: string | null,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
   if (!isMarkdownPath(requested)) {
     return Response.json({ error: "Markdown ファイル以外は読み取れません" }, { status: 400 });
   }
+  // 解決前に字句で弾く (unsafe_path オラクルと symlink 除外名のすり抜けを塞ぐ)
+  if (isRequestExcluded(requested, excludes)) {
+    return excludedPathResponse(requested);
+  }
 
   try {
     const safe = await resolveSafe(rootDir, requested);
+    // 除外設定に一致するものは読めない。解決後の rel でも判定するので、除外配下を指す
+    // リンクを root 直下に置いても迂回できない。
+    if (isExcludedPath(safe.rel, excludes)) {
+      return excludedPathResponse(requested);
+    }
     const buf = await readFile(safe.abs);
     const raw = buf.toString("utf-8");
     const html = await renderMarkdown(raw, { currentPath: safe.rel });
@@ -279,6 +355,7 @@ async function handleFileWrite(
   rootDir: string,
   req: Request,
   saveMark: SaveMark,
+  excludes: ReadonlySet<string>,
 ): Promise<Response> {
   const lengthHeader = req.headers.get("content-length");
   if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
@@ -318,6 +395,13 @@ async function handleFileWrite(
   if (Buffer.byteLength(body, "utf-8") > MAX_WRITE_BYTES) {
     return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
   }
+  // 除外配下は保存もできない (Issue #65)。読み取りだけ塞いでも、baseSha を故意に外して
+  // 409 を引けば競合レスポンスの `raw` で中身が返るため、**書き込み経路が読み取りの
+  // 迂回路になる**。ここで先に弾くことで、その経路と除外配下の上書きの両方を止める。
+  // /api/file/create は同種のチェックを持つが、歴史的に別コード (excluded_dir) を返す。
+  if (isRequestExcluded(path, excludes)) {
+    return excludedPathResponse(path);
+  }
 
   let safe: { rel: string; abs: string };
   try {
@@ -327,6 +411,10 @@ async function handleFileWrite(
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
+  }
+
+  if (isExcludedPath(safe.rel, excludes)) {
+    return excludedPathResponse(path);
   }
 
   if (typeof baseSha === "string") {
@@ -426,6 +514,11 @@ async function handleFileCreate(
       { status: 400 },
     );
   }
+  // 解決前にも弾く (Issue #65)。他エンドポイントと同じく unsafe_path オラクルを塞ぎ、
+  // already_exists(409) / parent_missing(400) による存在オラクルも除外配下には効かせない。
+  if (isRequestExcluded(path, excludes)) {
+    return excludedDirResponse(path);
+  }
 
   let safe: { rel: string; abs: string };
   try {
@@ -439,10 +532,7 @@ async function handleFileCreate(
 
   // 除外ディレクトリ配下はツリーに表示されないファイルが出来て混乱するため拒否
   if (isExcludedPath(safe.rel, excludes)) {
-    return Response.json(
-      { error: `除外ディレクトリ配下には作成できません: ${safe.rel}`, code: "excluded_dir" },
-      { status: 400 },
-    );
+    return excludedDirResponse(path);
   }
 
   let handle: FileHandle;
@@ -488,12 +578,18 @@ async function handleAssetRead(
   rootDir: string,
   requested: string | null,
   req: Request,
+  excludes: ReadonlySet<string>,
 ): Promise<Response> {
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
   if (!isAssetExtension(requested)) {
     return Response.json({ error: "対応していない拡張子です" }, { status: 400 });
+  }
+  // 除外配下は開く前に弾く (Issue #65)。fd を取る前に返すので、除外配下のファイルは
+  // 実在しても ENOENT との区別がつかない。
+  if (isRequestExcluded(requested, excludes)) {
+    return excludedPathResponse(requested);
   }
 
   let safe: { rel: string; abs: string };
@@ -504,6 +600,10 @@ async function handleAssetRead(
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
     }
     throw err;
+  }
+
+  if (isExcludedPath(safe.rel, excludes)) {
+    return excludedPathResponse(requested);
   }
 
   // Issue #22: TOCTOU 対策 + 強 ETag (sha256 ベース)。

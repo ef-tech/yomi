@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "bench": "bun run scripts/bench-tree.ts",
+    "test:e2e": "playwright test"
   },
   "files": [
     "bin",
@@ -30,6 +32,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
+    "@playwright/test": "^1.62.1",
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.3",
     "dompurify": "3.4.12",
