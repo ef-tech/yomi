@@ -315,7 +315,9 @@ Only exact directory/file name matches are supported; globs (`*`, `**`) are not.
 
 - **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
 - **Matching happens against the resolved real path.** If the thing you want to exclude is a symlink, also list the **target directory name**, not just the link name (the link name alone is caught by the literal check on the requested path, but requests made through the real path are not).
-- **Matching is case-sensitive.** `private` does not match `Private/`. Behavior may differ on case-insensitive filesystems such as macOS (see #98).
+- **Matching follows the filesystem's own rules.** Pattern comparison itself is case-sensitive, but **whether it takes effect depends on the filesystem** (verified on real macOS CI runners in Issue #98):
+  - **Case-sensitive filesystems (Linux, …)**: `private` does not match `Private/`. They are **different directories**, so this is the correct behavior.
+  - **Case-insensitive filesystems (macOS APFS / HFS+, …)**: `Private/` is the same entity as `private/`, so writing `private` also excludes requests like `Private/creds.csv` (path resolution normalizes the spelling to the on-disk name). Requesting a non-existent file with a different spelling returns the same 400, so **nothing is revealed about what lives under an excluded directory** (Issue #98 also confirmed that the existence of intermediate directories does not leak).
 
 **Lines that cannot be matched are reported at startup.** Lines containing `/` or a glob, and a bare `!`, are ignored and listed on stderr with their line numbers. Exclusions decide read/write access, so "you wrote it but it does nothing" is never passed over silently. The CLI prints in Japanese; the message looks like this ("1 line was ignored: line 3 contains `/`, which cannot be matched — specify a single segment name"):
 
