@@ -35,9 +35,18 @@ yarn-error.log*
 coverage/
 .nyc_output/
 
+# Playwright (Issue #80): 失敗時の screenshot / trace とレポート。生成物なので追跡しない
+test-results/
+playwright-report/
+blob-report/
+
 # Temporary
 *.tmp
 .cache/
+
+# ベンチマークの fixture (Issue #83)。数万ファイルを追跡してもレビューできず、
+# scripts/bench-fixture.ts があれば同じものを再生成できる
+.bench/
 
 # Claude Code 作業ファイル
 .claude/

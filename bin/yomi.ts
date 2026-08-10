@@ -9,6 +9,7 @@ import {
   shouldOpenBrowser,
 } from "../src/cli.ts";
 import {
+  assertPortIsFree,
   DETACHED_ENV,
   describeNoStopTarget,
   describeStop,
@@ -23,6 +24,7 @@ import {
   type InstanceRecord,
   liveInstances,
   removeInstanceSync,
+  resolvePaths,
   saveInstance,
 } from "../src/instances.ts";
 import { pickBrowserUrl } from "../src/network.ts";
@@ -30,6 +32,7 @@ import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
 import { DEFAULT_EXCLUDES } from "../src/util/excludes.ts";
+import { startWatchdog, type WatchdogHandle } from "../src/watchdog.ts";
 import { loadYomiignore } from "../src/yomiignore.ts";
 
 async function main() {
@@ -54,7 +57,26 @@ async function runUp(options: CliOptions) {
   const rootDir = process.cwd();
   // ポートは親側で確定させる。子に自動探索させると親が実ポートを知れず、
   // レジストリに書けない (= down / list から辿れない)。
-  const port = options.port !== null ? options.port : await findAvailablePort(options.host);
+  const explicitPort = options.port !== null;
+  const port = explicitPort ? (options.port as number) : await findAvailablePort(options.host);
+
+  // **--port を明示したときだけ事前に空きを確かめる (Issue #94)。**
+  // 省略時は findAvailablePort が空きを探すので衝突しない。明示指定だけが検査されずに
+  // createServer へ渡り、Bun.serve の throw が生のまま出ていた。
+  //
+  // **up -d と、切り離された子 (up -d の実体) では掛けない。** どちらも親の
+  // startDetached が起動直前に同じ検査を済ませているので二度手間になる。
+  // (親が記録を書くのは子が listen した後なので、子が「自分自身の記録」を見て
+  //  誤判定することは通常経路では無い。子側のガードは、親の検査後〜子の listen 前に
+  //  別プロセスがポートを奪った場合の保険として残す)
+  if (explicitPort && !options.detach && process.env[DETACHED_ENV] !== "1") {
+    try {
+      await assertPortIsFree(options.host, port, resolvePaths());
+    } catch (err) {
+      console.error(`エラー: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
 
   if (options.detach) {
     await runDetached(options, rootDir, port);
@@ -80,8 +102,15 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 
   // レジストリに記録して yomi list / yomi down の対象にする (Issue #90)。
   //
-  // **createServer より後に置く。** Bun.serve は使用中ポートで throw するので、
-  // 二重起動はここへ来る前に落ちる = 先に動いているインスタンスの記録を上書きしない。
+  // **createServer より後に置く。** 二重起動が先に動いているインスタンスの記録を
+  // 上書きしないようにするため。Issue #94 で `runUp` に `assertPortIsFree` を足したので
+  // **`--port` 明示時はここへ来る前に落ちる**が、この順序自体は残す ——
+  // 事前検査と `Bun.serve` の間には隙間があり (別プロセスがその間に掴みうる)、
+  // 検査を通り抜けた二重起動を最終的に止めるのは `Bun.serve` の throw だから。
+  //
+  // **その窓に入ると利用者向けの出力は #94 以前のスタックトレースに戻る**
+  // (レジストリは上のとおり守られる)。窓が極めて狭く、塞ぐには createServer を
+  // try/catch して EADDRINUSE を文面へ変換する必要があるため、#107 で扱う。
   //
   // **切り離された子 (up -d の実体) は記録しない。** 親の startDetached が
   // logPath 付きの記録を書くので、ここでも書くと logPath が空の記録で上書きしてしまう。
@@ -121,8 +150,13 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
     openBrowser(pickBrowserUrl(options.host, port));
   }
 
+  // event loop が停止したら自力でプロセスを終わらせる (Issue #91)。
+  // **installShutdownHandlers より前に置く。** シグナルハンドラを入れた瞬間から
+  // 「ブロックすると SIGINT も SIGTERM も効かない」状態が成立するので、逃げ道を先に用意する。
+  const watchdog = startWatchdog();
+
   // 記録した本人だけが後始末する (切り離された子の記録は親のもの = stopInstance が消す)
-  installShutdownHandlers(handle, registered ? port : null);
+  installShutdownHandlers(handle, registered ? port : null, watchdog);
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
@@ -191,9 +225,15 @@ function parseCommandOrExit(): ParsedCommand {
  * 削除は**同期版**を使う —— ここで await すると exit が遅れ、await しないと
  * 消える前にプロセスが落ちる (`removeInstanceSync` のコメント)。
  */
-function installShutdownHandlers(handle: ServerHandle, registeredPort: number | null): void {
+function installShutdownHandlers(
+  handle: ServerHandle,
+  registeredPort: number | null,
+  watchdog?: WatchdogHandle,
+): void {
   const shutdown = (message?: string) => {
     if (message !== undefined) console.log(message);
+    // 先に止める。以降は正常な終了経路なので、監視が誤って割り込む余地を残さない
+    watchdog?.close();
     handle.close();
     if (registeredPort !== null) removeInstanceSync(registeredPort);
     process.exit(0);
