@@ -110,10 +110,16 @@ export function createElements() {
     conflictOverwrite: document.getElementById("conflict-overwrite"),
     conflictDismiss: document.getElementById("conflict-dismiss"),
     toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
-    // **セレクタは分割前のまま**にする (Issue #78 は挙動を変えない refactor)。
-    // 言語トグルがスタイル共有のため `.theme-toggle-btn` を持っており、ここに混入して
-    // `applyThemeMode` が言語ボタンの aria-pressed を潰す不具合があるが、修正は #85 が扱う。
-    themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn")),
+    // **`[data-theme-mode]` で絞る (Issue #85)。** 言語トグルは見た目を揃えるために
+    // `class="theme-toggle-btn lang-toggle-btn"` を持っており、素の class セレクタだと
+    // ここに混入する。`applyThemeMode` は集めた全ボタンに `aria-pressed` を書くので、
+    // `data-theme-mode` を持たない言語ボタンは必ず `false` にされ、スクリーンリーダー
+    // 利用者には「どの言語が選ばれているか」が分からなくなっていた。
+    //
+    // `:not(.lang-toggle-btn)` でも直せるが、**属性で絞るほうが意図がそのまま出る** ——
+    // このリストは「テーマモードを持つボタン」であって「言語ボタン以外」ではない。
+    // 将来また別の用途で `.theme-toggle-btn` のスタイルを再利用しても壊れない。
+    themeButtons: Array.from(document.querySelectorAll(".theme-toggle-btn[data-theme-mode]")),
     // UI 言語トグル (Issue #48)
     langButtons: Array.from(document.querySelectorAll(".lang-toggle-btn")),
     overflowLangBtns: Array.from(document.querySelectorAll(".overflow-lang-btn")),
