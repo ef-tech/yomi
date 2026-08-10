@@ -106,8 +106,9 @@ yomi up [options]
                   (exposed without authentication; trusted networks only)
                   Cannot be combined with --host
   --depth <n>, -L <n>
-                  Limit the scan depth (equivalent to tree -L; default: unlimited)
-                  1 = root level only. Deeper md files are neither loaded nor watched
+                  Limit the scan/watch depth (equivalent to tree -L; default: unlimited)
+                  1 = root level only. Deeper md files are neither listed nor watched,
+                  but can still be opened by following a link (use .yomiignore to hide)
   --help, -h      Help
 
 yomi down [options]
@@ -116,7 +117,9 @@ yomi down [options]
   --port <n>      Stop the yomi on the given port
 ```
 
-For large directory trees, `--depth` (short form `-L`) narrows the levels scanned/watched at startup. Just like `tree -L <level>`, the root level counts as depth 1. Markdown beyond the depth is not loaded and is also excluded from file watching (live reload), so startup is faster and the number of inotify watches is lower. To view deeper levels, restart with a higher depth.
+For large directory trees, `--depth` (short form `-L`) narrows the levels scanned/watched at startup. Just like `tree -L <level>`, the root level counts as depth 1. Markdown beyond the depth is left out of the startup scan (its contents do not appear in the tree) and is also excluded from file watching (live reload), so startup is faster and the number of inotify watches is lower. To browse deeper levels from the tree, restart with a higher depth.
+
+**`--depth` is not a way to hide things.** Directories beyond the depth still appear in the tree (they are simply not opened), and the Markdown inside them can still be opened by following a link. To hide something, use [`.yomiignore`](#customizing-exclude-patterns-yomiignore).
 
 ### Running in the background (Issue #68, #69)
 
@@ -268,7 +271,17 @@ backup
 .archive
 ```
 
-Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not.
+Currently only exact directory/file name matches are supported. Globs (`*`, `**`) are not. The syntax has three limitations. Since exclusions now also deny reads and writes, each of them can silently leave something unprotected:
+
+- **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually — and no warning is emitted. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
+- **Matching happens against the resolved real path.** If the thing you want to exclude is a symlink, also list the **target directory name**, not just the link name (the link name alone is caught by the literal check on the requested path, but requests made through the real path are not).
+- **Matching is case-sensitive.** `private` does not match `Private/`. Behavior may differ on case-insensitive filesystems such as macOS (see #98).
+
+There is currently **no way to undo the default exclude patterns** (`node_modules`, `dist`, `build`, `vendor`, …). `.yomiignore` only adds to the default set; negation patterns (`!name`) are not supported (see #97).
+
+**Exclusions apply to reads and saves, not just to the tree view (Issue #65).** An excluded path cannot be fetched from `/api/file` (Markdown source) or `/api/asset` (images and attachments), and cannot be saved to either; requesting the URL directly is rejected with a 400. Excluded paths return the same response whether or not the file exists, so their existence is not revealed either. If a Markdown file references an image stored under an excluded directory, that image will no longer render (changed in v0.20.0; it used to be both readable and writable).
+
+Note that `--depth` is a different thing and **does not restrict reads**. Like `tree -L`, it caps how deep the startup scan goes, and directories beyond the depth still appear in the tree (they are simply not opened). Internal links from a shallow Markdown file to a deeper one still work as before. To hide something, use `.yomiignore` rather than `--depth`. Note, however, that files beyond the depth are **not watched**, so even when you can open one, changes made elsewhere are not reflected automatically (reload manually).
 
 ### Editing
 
