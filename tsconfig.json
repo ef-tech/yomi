@@ -18,6 +18,13 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["bin/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+  "include": [
+    "bin/**/*.ts",
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts"
+  ],
   "exclude": ["node_modules", "dist", "build", "public"]
 }
