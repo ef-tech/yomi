@@ -73,42 +73,65 @@ describe("parseYomiignore", () => {
       expect(r.negations).toEqual(new Set());
     });
 
+    // `\!foo` で足した除外を否定で打ち消せること（エスケープを両側に掛けた効果）
+    test("`\\!name` で足した除外を `!\\!name` でも `!!name` でも打ち消せる", () => {
+      for (const line of ["\\!important\n!\\!important", "\\!important\n!!important"]) {
+        const r = parseYomiignore(line);
+        expect(r.excludes).toEqual(new Set(["!important"]));
+        expect(r.negations).toEqual(new Set(["!important"]));
+        expect(resolveExcludes(r, new Set()).has("!important")).toBe(false);
+      }
+    });
+
     test("`!` だけの行は無効として拾う", () => {
       const r = parseYomiignore("!\n!   ");
       expect(r.negations).toEqual(new Set());
       expect(r.invalid.map((v) => v.reason)).toEqual(["empty-negation", "empty-negation"]);
+      expect(r.invalid.every((v) => v.dropped)).toBe(true);
     });
   });
 
-  // **黙って無効にしない (Issue #97)。** `isExcludedPath` はセグメント完全一致なので
-  // `/` や `*` を含む行はどれにも当たらない。除外が読み書きの可否を決める今、
-  // 「書いたのに効いていない」は「除外したつもりのファイルが読める」を意味する
-  describe("照合できない行を検出する", () => {
-    test("`/` を含む行", () => {
+  // **黙って無効にしない (Issue #97)。** ただし扱いは 2 つに分かれる ——
+  // 照合が成立しない行は捨て、グロブ文字を含む名前は**除外として残す**
+  describe("意図どおり効かない行を検出する", () => {
+    test("`/` を含む行は捨てる（どのセグメントにも当たらない）", () => {
       const r = parseYomiignore("docs/private");
       expect(r.excludes).toEqual(new Set());
-      expect(r.invalid).toEqual([{ line: 1, text: "docs/private", reason: "path-separator" }]);
+      expect(r.invalid).toEqual([
+        { line: 1, text: "docs/private", reason: "path-separator", dropped: true },
+      ]);
     });
 
-    test("グロブを含む行", () => {
-      const r = parseYomiignore("*.log\ntmp?\n[abc]");
-      expect(r.excludes).toEqual(new Set());
+    // **捨ててはいけない。** `foo[1].md` は実在しうる名前で、これまで完全一致で
+    // 除外できていた。捨てると除外が消えてファイルが読めるようになる（fail-open）
+    test("グロブ文字を含む名前は除外として残し、警告だけ出す", () => {
+      const r = parseYomiignore("*.log\ntmp?\nfoo[1].md");
+      expect(r.excludes).toEqual(new Set(["*.log", "tmp?", "foo[1].md"]));
       expect(r.invalid.map((v) => v.reason)).toEqual(["glob", "glob", "glob"]);
+      expect(r.invalid.every((v) => v.dropped)).toBe(false);
     });
 
-    test("否定側でも検出する", () => {
+    test("グロブ文字を含む否定も残る（解除できなくならない）", () => {
+      const r = parseYomiignore("![build]");
+      expect(r.negations).toEqual(new Set(["[build]"]));
+      expect(r.invalid[0]?.dropped).toBe(false);
+    });
+
+    test("否定側の `/` は捨てる", () => {
       const r = parseYomiignore("!docs/build");
       expect(r.negations).toEqual(new Set());
-      expect(r.invalid[0]?.reason).toBe("path-separator");
+      expect(r.invalid[0]).toMatchObject({ reason: "path-separator", dropped: true });
     });
 
     test("行番号は 1 始まりで、元テキストを保つ（直す場所が分かるように）", () => {
-      const r = parseYomiignore("ok\n\n# c\n*.log");
-      expect(r.invalid).toEqual([{ line: 4, text: "*.log", reason: "glob" }]);
+      const r = parseYomiignore("ok\n\n# c\ndocs/x");
+      expect(r.invalid).toEqual([
+        { line: 4, text: "docs/x", reason: "path-separator", dropped: true },
+      ]);
     });
 
-    test("無効な行があっても有効な行は生きる", () => {
-      const r = parseYomiignore("private\n*.log\n!build");
+    test("捨てた行があっても他の行は生きる", () => {
+      const r = parseYomiignore("private\ndocs/x\n!build");
       expect(r.excludes).toEqual(new Set(["private"]));
       expect(r.negations).toEqual(new Set(["build"]));
       expect(r.invalid).toHaveLength(1);
@@ -117,12 +140,27 @@ describe("parseYomiignore", () => {
 });
 
 describe("describeInvalidLines", () => {
-  test("行番号・元テキスト・理由を含む", () => {
-    const msg = describeInvalidLines(parseYomiignore("docs/x\n*.log\n!").invalid);
-    expect(msg).toContain(".yomiignore:1: docs/x");
-    expect(msg).toContain(".yomiignore:2: *.log");
-    expect(msg).toContain(".yomiignore:3: !");
-    expect(msg).toContain("3 件");
+  const msg = () => describeInvalidLines(parseYomiignore("docs/x\n*.log\n!").invalid);
+
+  test("行番号と元テキストを含む（直す場所が分かる）", () => {
+    expect(msg()).toContain(".yomiignore:1: docs/x");
+    expect(msg()).toContain(".yomiignore:2: *.log");
+    expect(msg()).toContain(".yomiignore:3: !");
+  });
+
+  // 理由ごとに文面が違うことを見る（マッピングを取り違えても通らないように）
+  test("理由ごとの説明を出し分ける", () => {
+    const m = msg();
+    expect(m).toMatch(/docs\/x — `\/` を含む行は照合できません/);
+    expect(m).toMatch(/\*\.log — グロブ .* は展開されません/);
+    expect(m).toMatch(/! — `!` の後ろに名前がありません/);
+  });
+
+  // 「無視した」と「そのまま使う」を混ぜない
+  test("捨てた件数と、残して注意した件数を書き分ける", () => {
+    const m = msg();
+    expect(m).toContain("無視 2 件");
+    expect(m).toContain("注意 1 件");
   });
 });
 
@@ -152,8 +190,8 @@ describe("loadYomiignore", () => {
     expect(r.negations).toEqual(new Set(["build"]));
   });
 
-  test("読み取り失敗時 (パーミッション等) は空でフォールバック", async () => {
-    // 実際の権限テストは難しいので、存在しないディレクトリで代用
+  test("存在しないディレクトリでも空でフォールバック", async () => {
+    // 実 EACCES は root で走る CI では作れないので、ENOENT で代表させる
     const r = await loadYomiignore(join(root, "nonexistent-subdir"));
     expect(r).toEqual({ excludes: new Set(), negations: new Set(), invalid: [] });
   });
