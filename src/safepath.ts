@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { toPosix } from "./util/path-util.ts";
 
 export { isMarkdownExtension as isMarkdownPath } from "./util/markdown-ext.ts";
@@ -39,7 +39,9 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
 
   const rootAbs = await safeRealpath(rootDir);
   const requestedAbs = resolve(rootAbs, requested);
-  const candidateAbs = await safeRealpath(requestedAbs);
+  const candidate = await safeRealpathWithFlag(requestedAbs);
+  const candidateAbs = candidate.path;
+  const resolved = candidate.resolved;
   const rel = relative(rootAbs, candidateAbs);
 
   if (rel.startsWith("..") || isAbsolute(rel)) {
@@ -63,13 +65,39 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
-  return { rel: toPosix(rel), abs: candidateAbs };
+  // **leaf が無いときは、実在する親の realpath から rel を組み立て直す** (Issue #98)。
+  //
+  // 上の `rel` は leaf 非存在時に lexical fallback した `candidateAbs` 由来なので、
+  // **要求の綴りをそのまま持つ**。大小を区別しないファイルシステムではこれが穴になる:
+  //
+  // - `Private/secret.md` (実在) → realpath が `private/secret.md` へ正規化 → 除外されて 400
+  // - `Private/nope.md` (非実在) → 正規化されず `Private/nope.md` のまま → 除外を通り抜けて 404
+  //
+  // **400 と 404 が分かれるので、綴りを変えるだけで除外配下のファイルの実在が分かる**
+  // (Issue #65 が塞いだ存在オラクルが復活する。macOS の CI で実測して確認した)。
+  // 親は実在するので realpath が綴りを正規化し、両者が同じ 400 に揃う。
+  //
+  // 大小を区別する環境では親も実在しないので `safeRealpath` が lexical fallback し、
+  // 従来どおり 404 になる (そのパスは本当に存在しないので正しい)。
+  const relFromParent = resolved ? rel : toPosix(join(parentRel, basename(requestedAbs)));
+
+  return { rel: toPosix(relFromParent), abs: candidateAbs };
+}
+
+/**
+ * realpath を試し、失敗したら lexical に解決する。
+ *
+ * `resolved` は**正規化できたか**。呼び出し側はこれで「leaf が実在するか」を判断する
+ * (存在しないパスの rel を親から組み立て直すため。Issue #98)。
+ */
+async function safeRealpathWithFlag(p: string): Promise<{ path: string; resolved: boolean }> {
+  try {
+    return { path: await realpath(p), resolved: true };
+  } catch {
+    return { path: resolve(p), resolved: false };
+  }
 }
 
 async function safeRealpath(p: string): Promise<string> {
-  try {
-    return await realpath(p);
-  } catch {
-    return resolve(p);
-  }
+  return (await safeRealpathWithFlag(p)).path;
 }
