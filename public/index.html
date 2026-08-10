@@ -237,6 +237,9 @@
           hidden
         >
           <span class="conflict-message" data-i18n="conflict.message">他の場所でファイルが更新されています。</span>
+          <button type="button" id="conflict-show-diff" class="conflict-action is-primary" data-i18n="conflict.showDiff">
+            差分を見る
+          </button>
           <button type="button" id="conflict-take-server" class="conflict-action" data-i18n="conflict.takeServer">
             サーバ内容を取り込む
           </button>
@@ -246,6 +249,74 @@
           <button type="button" id="conflict-dismiss" class="conflict-action" data-i18n="common.close">
             閉じる
           </button>
+        </div>
+        <!--
+          競合の差分ダイアログ (Issue #57)。
+          バナーだけだと「どちらを残すか」を中身を見ずに決めることになるので、
+          両方の内容と行差分を見てから選べるようにする。
+          `aria-modal` を宣言する以上、実際にフォーカスもここへ閉じ込める (app.js 側)。
+        -->
+        <div
+          id="conflict-diff"
+          class="conflict-diff"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="conflict-diff-title"
+          aria-describedby="conflict-diff-summary"
+          hidden
+        >
+          <div class="conflict-diff-panel">
+            <div class="conflict-diff-head">
+              <h2 id="conflict-diff-title" class="conflict-diff-title" data-i18n="conflict.diff.title">
+                保存の競合
+              </h2>
+              <p id="conflict-diff-summary" class="conflict-diff-summary" role="status"></p>
+            </div>
+
+            <div id="conflict-diff-legend" class="conflict-diff-legend">
+              <span class="conflict-diff-legend-item">
+                <span class="conflict-diff-sign" aria-hidden="true">-</span>
+                <span data-i18n="conflict.diff.legendLocal">ローカル（編集中）</span>
+              </span>
+              <span class="conflict-diff-legend-item">
+                <span class="conflict-diff-sign" aria-hidden="true">+</span>
+                <span data-i18n="conflict.diff.legendServer">サーバ（最新）</span>
+              </span>
+            </div>
+
+            <div id="conflict-diff-body" class="conflict-diff-body" tabindex="0" role="group"
+                 data-i18n-aria-label="conflict.diff.bodyAria"
+                 aria-label="ローカル版とサーバ版の行差分"></div>
+
+            <p id="conflict-diff-truncated" class="conflict-diff-truncated" data-i18n="conflict.diff.truncated" hidden>
+              文書が大きいため差分の表示を省略しました。内容を確認してから選んでください。
+            </p>
+
+            <!--
+              コピーの成否はここに出す。`#status` は topbar の中にあり、
+              このダイアログのスクリム (z-index 70) の下に隠れて見えない。
+            -->
+            <p id="conflict-diff-notice" class="conflict-diff-notice" role="status" hidden></p>
+
+            <div class="conflict-diff-actions">
+              <button type="button" id="conflict-diff-copy-local" class="conflict-action" data-i18n="conflict.diff.copyLocal">
+                ローカル版をコピー
+              </button>
+              <button type="button" id="conflict-diff-copy-server" class="conflict-action" data-i18n="conflict.diff.copyServer">
+                サーバ版をコピー
+              </button>
+              <span class="conflict-diff-spacer"></span>
+              <button type="button" id="conflict-diff-take-server" class="conflict-action" data-i18n="conflict.takeServer">
+                サーバ内容を取り込む
+              </button>
+              <button type="button" id="conflict-diff-overwrite" class="conflict-action is-danger" data-i18n="conflict.overwrite">
+                強制上書き
+              </button>
+              <button type="button" id="conflict-diff-close" class="conflict-action" data-i18n="common.close">
+                閉じる
+              </button>
+            </div>
+          </div>
         </div>
         <div
           id="external-link-banner"

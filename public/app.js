@@ -30,7 +30,7 @@ import { prefs } from "./prefs.js";
  * | `app-context.js` | els / state / 定数 / 共有ユーティリティ (fetchJson・sanitize・status) |
  * | `app-tree.js` | 左ツリー、ディレクトリ開閉、新規 md 作成 |
  * | `app-document.js` | ファイル読込、遷移 (`navigateTo`)、履歴、リンク、パスコピー |
- * | `app-editor.js` | 編集モード、保存、競合バナー |
+ * | `app-editor.js` | 編集モード、保存、競合バナーと差分ダイアログ |
  * | `app-preview.js` | Mermaid、表示モード、テーマ、スクロール同期、TOC、タスクリスト |
  * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
  * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
@@ -90,6 +90,7 @@ ctx.mobile.wireSidebarSwipe();
 ctx.preview.wireTocActions();
 ctx.document.wireLinkNavigation();
 ctx.quickOpen.wire();
+ctx.editor.wireConflictDiff();
 wireKeyboard();
 ctx.editor.wireBeforeUnload();
 ctx.document.wireHistoryNavigation();
@@ -183,6 +184,9 @@ function reapplyDynamicI18n() {
   // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
   ctx.preview.updateExpandToggleUi();
   if (state.tocVisible) ctx.preview.refreshToc();
+  // 競合の差分は件数と「N 行省略」を組み立てているので、開いていれば作り直す
+  // (data-i18n では戻せない = applyI18n の対象外)
+  if (ctx.editor.isConflictDiffOpen()) ctx.editor.renderConflictDiff();
   // ステータスは key を保持しない一過性メッセージのため、言語切替時はクリアする
   // (旧言語の文言が残らないように。次の操作で新言語で再表示される。
   //  競合バナー等の操作可能な UI は別要素なので消えない)。

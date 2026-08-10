@@ -336,3 +336,421 @@ describe("保存競合 (409)", () => {
     expect(savePosts(h)).toHaveLength(1);
   });
 });
+
+// **競合の差分ダイアログ (Issue #57)。**
+//
+// バナーだけだと「どちらを残すか」を中身を見ずに決めることになる。差分を見てから
+// 選べること、そして**選ぶまでローカル編集が失われないこと**を固定する。
+describe("保存競合の差分ダイアログ (Issue #57)", () => {
+  /** 外部でファイルが書き換わった状態を作り、編集内容を保存しようとする */
+  async function provokeConflict(harness: AppHarness, local: string, server: string) {
+    await enterEdit(harness);
+    type(harness, local);
+    const file = harness.files["README.md"];
+    if (file) {
+      file.raw = server;
+      file.html = `<p>${server}</p>`;
+      file.sha = "sha-readme-2";
+    }
+    harness.click(harness.el("edit-btn"));
+    await harness.flush(6);
+  }
+
+  const dialog = () => h.el("conflict-diff");
+  const rows = () => h.qa("#conflict-diff-body .conflict-diff-row");
+  /** 差分行を `+foo` / `-foo` / ` foo` にして読みやすくする */
+  const sketch = () =>
+    rows().map((el) => {
+      const sign = el.querySelector(".conflict-diff-sign")?.textContent ?? "";
+      const text = el.querySelector(".conflict-diff-text")?.textContent ?? "";
+      return `${sign}${text}`;
+    });
+
+  async function openDiff(local: string, server: string) {
+    h = await bootApp();
+    await provokeConflict(h, local, server);
+    h.click(h.el("conflict-show-diff"));
+    await h.flush();
+  }
+
+  test("バナーの「差分を見る」でダイアログが開く", async () => {
+    h = await bootApp();
+    await provokeConflict(h, "ローカル版\n", "サーバ版\n");
+    expect(dialog().hidden).toBe(true);
+
+    h.click(h.el("conflict-show-diff"));
+    await h.flush();
+
+    expect(dialog().hidden).toBe(false);
+  });
+
+  // **DoD 1: 両方の内容と差分を確認してから選択できる**
+  test("ローカルにしかない行とサーバにしかない行が両方出る", async () => {
+    await openDiff("共通\nローカルだけ\n", "共通\nサーバだけ\n");
+
+    expect(sketch()).toEqual([" 共通", "-ローカルだけ", "+サーバだけ", " "]);
+  });
+
+  test("差分の記号が色に依存せず読める（- がローカル、+ がサーバ）", async () => {
+    await openDiff("a\n", "b\n");
+
+    const del = h.q(".conflict-diff-row.is-del");
+    const add = h.q(".conflict-diff-row.is-add");
+    expect(del.querySelector(".conflict-diff-sign")?.textContent).toBe("-");
+    expect(add.querySelector(".conflict-diff-sign")?.textContent).toBe("+");
+  });
+
+  test("行番号を出す（片側にしか無い行はその側の番号）", async () => {
+    await openDiff("a\nb\n", "a\nX\n");
+
+    const numbers = rows().map((el) => el.querySelector(".conflict-diff-no")?.textContent);
+    expect(numbers).toEqual(["1", "2", "2", "3"]);
+  });
+
+  test("内容が同じなら「同じです」と伝える", async () => {
+    // sha だけずれて中身が同じケース（保存タイミングの行き違い）
+    await openDiff("同じ内容\n", "同じ内容\n");
+
+    expect(h.el("conflict-diff-summary").textContent).toContain("同じ");
+    expect(rows().every((el) => el.classList.contains("is-equal"))).toBe(true);
+  });
+
+  test("差分の件数を左右で言い切って伝える", async () => {
+    await openDiff("共通\nローカルだけ\n", "共通\nサーバだけ\n");
+
+    const summary = h.el("conflict-diff-summary").textContent ?? "";
+    expect(summary).toContain("ローカル版にしかない行 1 行");
+    expect(summary).toContain("サーバ版にしかない行 1 行");
+  });
+
+  // **DoD 2: 選択前にローカル内容が失われない**
+  test("差分を見てもエディタの内容は変わらない", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+
+    expect(h.el<HTMLTextAreaElement>("editor").value).toBe("ローカル版\n");
+    expect(h.el("content-body").classList.contains("is-editing")).toBe(true);
+    // まだ何も保存していない（競合した 1 回だけ）
+    expect(savePosts(h)).toHaveLength(1);
+  });
+
+  test("閉じるだけならローカルもサーバも変わらない", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+
+    h.click(h.el("conflict-diff-close"));
+    await h.flush();
+
+    expect(dialog().hidden).toBe(true);
+    // バナーは残る（まだ競合は解決していない）
+    expect(h.el("conflict-banner").hidden).toBe(false);
+    expect(h.el<HTMLTextAreaElement>("editor").value).toBe("ローカル版\n");
+    expect(h.files["README.md"]?.raw).toBe("サーバ版\n");
+    expect(savePosts(h)).toHaveLength(1);
+  });
+
+  // **DoD 4: 各選択肢の状態遷移**
+  test("ダイアログから「サーバ内容を取り込む」が選べる", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+
+    h.click(h.el("conflict-diff-take-server"));
+    await h.flush();
+
+    expect(h.el<HTMLTextAreaElement>("editor").value).toBe("サーバ版\n");
+    expect(h.el("dirty-indicator").hidden).toBe(true);
+    expect(dialog().hidden).toBe(true);
+    expect(h.el("conflict-banner").hidden).toBe(true);
+    // 採用は再保存しない
+    expect(savePosts(h)).toHaveLength(1);
+  });
+
+  test("ダイアログから「強制上書き」が選べる", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+
+    h.click(h.el("conflict-diff-overwrite"));
+    await h.flush(6);
+
+    const posts = savePosts(h);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.body).not.toHaveProperty("baseSha");
+    expect(h.files["README.md"]?.raw).toBe("ローカル版\n");
+    expect(dialog().hidden).toBe(true);
+    expect(h.el("conflict-banner").hidden).toBe(true);
+  });
+
+  test("ローカル版・サーバ版をそれぞれコピーできる", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+
+    h.click(h.el("conflict-diff-copy-local"));
+    await h.flush();
+    expect(h.clipboard.at(-1)).toBe("ローカル版\n");
+
+    h.click(h.el("conflict-diff-copy-server"));
+    await h.flush();
+    expect(h.clipboard.at(-1)).toBe("サーバ版\n");
+  });
+
+  // **DoD 3: キーボードとスクリーンリーダーで操作できる**
+  describe("キーボードと支援技術", () => {
+    test("開くとフォーカスが差分本体に入る（いきなり破壊的な選択肢に当てない）", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+
+      expect(h.document.activeElement).toBe(h.el("conflict-diff-body"));
+    });
+
+    test("Esc で閉じ、開く前にフォーカスがあった場所へ戻る", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+      // 競合は編集中に起きるので、開く直前のフォーカスはエディタにある
+      expect(dialog().hidden).toBe(false);
+
+      h.keydown(h.el("conflict-diff-body"), { key: "Escape" });
+      await h.flush();
+
+      expect(dialog().hidden).toBe(true);
+      expect(h.document.activeElement).toBe(h.el("editor"));
+    });
+
+    // **フォールバック（戻り先が消えていたとき）は jsdom では確認できない。**
+    // 採用・上書きを選ぶとバナーごと閉じるので、実ブラウザなら戻り先が非表示になって
+    // `focus()` が空振りする。だが **jsdom は `hidden` を無視して `focus()` を通す**ので
+    // （実測: `el.hidden = true` の後でも `activeElement` がその要素になる）、
+    // ここに書いても実装を消して通る空テストにしかならない。実装側にはフォールバックが
+    // あり、実ブラウザで「取り込み後にフォーカスが editor へ返る」ことを確認している。
+
+    // 最前面 (z-index 70) なので、1 回の Esc で背後まで閉じてはいけない
+    test("Esc は差分ダイアログだけを閉じ、背後の sidebar は開いたまま", async () => {
+      h = await bootApp({ mobile: true });
+      h.click(h.el("menu-btn"));
+      expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
+      await provokeConflict(h, "ローカル版\n", "サーバ版\n");
+      h.click(h.el("conflict-show-diff"));
+      await h.flush();
+
+      h.keydown(h.el("conflict-diff-body"), { key: "Escape" });
+      await h.flush();
+
+      expect(dialog().hidden).toBe(true);
+      expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
+    });
+
+    // フォーカスがパネル外に落ちてもキー処理が届く（capture で拾っている）
+    test("フォーカスが body にあっても Esc が効く", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+      h.el("conflict-diff-body").blur();
+
+      h.keydown(h.document.body, { key: "Escape" });
+      await h.flush();
+
+      expect(dialog().hidden).toBe(true);
+    });
+
+    // `aria-modal="true"` を宣言している以上、背後へ抜けられてはいけない
+    test("Tab がダイアログ内で循環する", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+
+      const focusables = h.qa<HTMLElement>(
+        "#conflict-diff button:not([disabled]), #conflict-diff [tabindex='0']",
+      );
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!first || !last) throw new Error("フォーカスできる要素が無い");
+
+      last.focus();
+      h.keydown(last, { key: "Tab" });
+      expect(h.document.activeElement).toBe(first);
+
+      h.keydown(first, { key: "Tab", shiftKey: true });
+      expect(h.document.activeElement).toBe(last);
+    });
+
+    test("IME 変換中の Esc では閉じない", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+
+      const ev = new h.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      h.el("conflict-diff-body").dispatchEvent(ev);
+      await h.flush();
+
+      expect(dialog().hidden).toBe(false);
+    });
+
+    test("ダイアログとして名前が付き、状態が読み上げられる", async () => {
+      await openDiff("ローカル版\n", "サーバ版\n");
+
+      expect(dialog().getAttribute("role")).toBe("dialog");
+      expect(dialog().getAttribute("aria-modal")).toBe("true");
+      expect(dialog().getAttribute("aria-labelledby")).toBe("conflict-diff-title");
+      expect(h.el("conflict-diff-title").textContent?.trim()).not.toBe("");
+      // 件数は live region で伝える
+      expect(h.el("conflict-diff-summary").getAttribute("role")).toBe("status");
+      // 差分本体はキーボードでスクロールできる
+      expect(h.el<HTMLElement>("conflict-diff-body").tabIndex).toBe(0);
+      expect(h.el("conflict-diff-body").getAttribute("aria-label")).toBeTruthy();
+    });
+  });
+
+  describe("大きな文書", () => {
+    test("上限を超えたら差分を出さず、選択肢だけ残す", async () => {
+      const local = Array.from({ length: 4000 }, (_, i) => `L${i}`).join("\n");
+      const server = Array.from({ length: 4000 }, (_, i) => `S${i}`).join("\n");
+      await openDiff(local, server);
+
+      expect(rows()).toHaveLength(0);
+      expect(h.el("conflict-diff-truncated").hidden).toBe(false);
+      // 空の枠と凡例は出さない（差分を出そうとして失敗したように見えるため）
+      expect(h.el("conflict-diff-body").hidden).toBe(true);
+      expect(h.el("conflict-diff-legend").hidden).toBe(true);
+      // 中身を見て選ぶ手段は残っている
+      expect(h.el<HTMLButtonElement>("conflict-diff-take-server").disabled).toBe(false);
+      expect(h.el<HTMLButtonElement>("conflict-diff-overwrite").disabled).toBe(false);
+      expect(h.el<HTMLButtonElement>("conflict-diff-copy-local").disabled).toBe(false);
+      // 差分本体が消えているので、フォーカスは次の要素（コピー）へ回る
+      expect(h.document.activeElement).toBe(h.el("conflict-diff-copy-local"));
+    });
+
+    test("差分が小さければ長い文書でも表示する", async () => {
+      const common = Array.from({ length: 3000 }, (_, i) => `line ${i}`);
+      const local = common.join("\n");
+      const server = [...common.slice(0, 1500), "サーバが直した行", ...common.slice(1501)].join(
+        "\n",
+      );
+      await openDiff(local, server);
+
+      expect(h.el("conflict-diff-truncated").hidden).toBe(true);
+      expect(h.el("conflict-diff-body").hidden).toBe(false);
+      expect(rows().length).toBeGreaterThan(0);
+      // 離れた同一行は畳まれているので、3000 行がそのまま出たりしない
+      expect(rows().length).toBeLessThan(20);
+      expect(h.qa("#conflict-diff-body .conflict-diff-skip").length).toBeGreaterThan(0);
+    });
+  });
+
+  // **エディタ以外からも競合は起きる。** プレビューのチェックボックスを切り替えた保存は
+  // 編集モードでないので、エディタは空。それをローカル版として出すと「自分の変更が全部
+  // 消えている」という嘘になる（レビューで発覚）。
+  describe("エディタ以外の経路（プレビューのチェックボックス）", () => {
+    async function provokeCheckboxConflict(harness: AppHarness) {
+      const file = harness.files["README.md"];
+      if (!file) throw new Error("fixture が無い");
+      file.raw = "- [ ] やること\n";
+      file.html = '<ul><li><input type="checkbox" data-task-index="0"> やること</li></ul>';
+      file.sha = "sha-task-1";
+      harness.click(harness.treeItem("README.md"));
+      await harness.flush(4);
+
+      const box = harness.q<HTMLInputElement>('#preview input[type="checkbox"]');
+      // サーバ側だけ先に進める
+      file.raw = "- [ ] やること\n- [ ] 増えた行\n";
+      file.sha = "sha-task-2";
+
+      box.checked = true;
+      box.dispatchEvent(new harness.window.Event("change", { bubbles: true }));
+      await harness.flush(6);
+      return box;
+    }
+
+    test("チェックを反映した本文をローカル版として差分に出す（エディタの空文字ではない）", async () => {
+      h = await bootApp();
+      await provokeCheckboxConflict(h);
+      expect(h.el("conflict-banner").hidden).toBe(false);
+      expect(h.el<HTMLTextAreaElement>("editor").value).toBe(""); // エディタは空のまま
+
+      h.click(h.el("conflict-show-diff"));
+      await h.flush();
+
+      // ローカル版は「チェックを付けた本文」であって空文字ではない
+      const shown = sketch();
+      expect(shown).toContain("-- [x] やること");
+      expect(shown).toContain("+- [ ] やること");
+      expect(shown).toContain("+- [ ] 増えた行");
+    });
+
+    test("編集モードでなくても「強制上書き」が効く（無言で終わらない）", async () => {
+      h = await bootApp();
+      await provokeCheckboxConflict(h);
+      h.click(h.el("conflict-show-diff"));
+      await h.flush();
+
+      h.click(h.el("conflict-diff-overwrite"));
+      await h.flush(6);
+
+      const posts = savePosts(h);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]?.body).not.toHaveProperty("baseSha");
+      expect(h.files["README.md"]?.raw).toBe("- [x] やること\n");
+      expect(h.el("conflict-banner").hidden).toBe(true);
+    });
+  });
+
+  // 差分を読んでいる最中に watcher の通知が重なると、画面は古いままスナップショットだけが
+  // 新しくなる。そのまま「取り込む」を押すと**見ていない内容**が入る（レビューで発覚）
+  test("開いている間にサーバ内容が差し替わったら差分を描き直す", async () => {
+    await openDiff("ローカル版\n", "サーバ版1\n");
+    expect(sketch()).toContain("+サーバ版1");
+
+    // watcher の 2 発目相当
+    const file = h.files["README.md"];
+    if (file) {
+      file.raw = "サーバ版2\n";
+      file.html = "<p>サーバ版2</p>";
+      file.sha = "sha-readme-3";
+    }
+    h.ws.emit({ type: "changed", path: "README.md" });
+    await h.flush(6);
+
+    expect(sketch()).toContain("+サーバ版2");
+    expect(sketch()).not.toContain("+サーバ版1");
+  });
+
+  test("コピーの結果をパネル内にも出す（スクリムの下に隠れないように）", async () => {
+    await openDiff("ローカル版\n", "サーバ版\n");
+    expect(h.el("conflict-diff-notice").hidden).toBe(true);
+
+    h.click(h.el("conflict-diff-copy-local"));
+    await h.flush();
+
+    expect(h.el("conflict-diff-notice").hidden).toBe(false);
+    expect(h.el("conflict-diff-notice").textContent).toContain("コピー");
+    expect(h.el("conflict-diff-notice").getAttribute("role")).toBe("status");
+  });
+
+  // ファイル名も中身も利用者のものなので、HTML として解釈してはいけない (#21 / #59 の方針)
+  test("差分の中身を HTML として解釈しない", async () => {
+    await openDiff("<img src=x onerror=alert(1)>\n", "サーバ版\n");
+
+    expect(h.q("#conflict-diff-body").querySelector("img")).toBeNull();
+    expect(h.el("conflict-diff-body").textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  // サーバ側でファイルが消えていると raw が null で返る
+  test("サーバ側のファイルが消えていても壊れない", async () => {
+    h = await bootApp();
+    await enterEdit(h);
+    type(h, "ローカル版\n");
+    h.intercept = (url, method) => {
+      if (url !== "/api/file" || method !== "POST") return undefined;
+      return {
+        status: 409,
+        body: {
+          error: "ファイルが他で更新されています",
+          path: "README.md",
+          raw: null,
+          html: "",
+          sha: null,
+        },
+      };
+    };
+    h.click(h.el("edit-btn"));
+    await h.flush(6);
+
+    h.click(h.el("conflict-show-diff"));
+    await h.flush();
+
+    expect(dialog().hidden).toBe(false);
+    // サーバ側が空なので、ローカルの中身がまるごと「ローカルにしかない行」になる
+    // (末尾の空行は両側に共通なので equal)
+    expect(sketch()).toEqual(["-ローカル版", " "]);
+  });
+});

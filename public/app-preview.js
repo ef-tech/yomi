@@ -289,7 +289,9 @@ export function createPreview(ctx) {
       target.checked = !target.checked; // revert UI
       target.disabled = state.editing;
       if (err.status === 409 && err.payload) {
-        ctx.editor.showConflict(err.payload);
+        // **エディタの中身ではなく、チェックを反映した本文を渡す。**
+        // この経路は編集モードでないのでエディタは空
+        ctx.editor.showConflict(err.payload, body);
         ctx.setStatus("error", t("status.conflict"));
       } else {
         ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));

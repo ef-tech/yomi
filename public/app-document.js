@@ -370,5 +370,6 @@ export function createDocument(ctx) {
     wireLinkNavigation,
     hideExternalLinkBanner,
     wireCopyPath,
+    copyTextToClipboard,
   };
 }

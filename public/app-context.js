@@ -115,6 +115,19 @@ export function createElements() {
     conflictTakeServer: document.getElementById("conflict-take-server"),
     conflictOverwrite: document.getElementById("conflict-overwrite"),
     conflictDismiss: document.getElementById("conflict-dismiss"),
+    conflictShowDiff: document.getElementById("conflict-show-diff"),
+    // 競合の差分ダイアログ (Issue #57)
+    conflictDiff: document.getElementById("conflict-diff"),
+    conflictDiffSummary: document.getElementById("conflict-diff-summary"),
+    conflictDiffBody: document.getElementById("conflict-diff-body"),
+    conflictDiffLegend: document.getElementById("conflict-diff-legend"),
+    conflictDiffTruncated: document.getElementById("conflict-diff-truncated"),
+    conflictDiffNotice: document.getElementById("conflict-diff-notice"),
+    conflictDiffCopyLocal: document.getElementById("conflict-diff-copy-local"),
+    conflictDiffCopyServer: document.getElementById("conflict-diff-copy-server"),
+    conflictDiffTakeServer: document.getElementById("conflict-diff-take-server"),
+    conflictDiffOverwrite: document.getElementById("conflict-diff-overwrite"),
+    conflictDiffClose: document.getElementById("conflict-diff-close"),
     toggleButtons: Array.from(document.querySelectorAll(".view-toggle-btn")),
     // **`[data-theme-mode]` で絞る (Issue #85)。** 言語トグルは見た目を揃えるために
     // `class="theme-toggle-btn lang-toggle-btn"` を持っており、素の class セレクタだと

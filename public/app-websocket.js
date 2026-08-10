@@ -27,7 +27,7 @@ export function createWebSocketClient(ctx) {
         // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
         try {
           const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
-          ctx.editor.showConflict(latest);
+          ctx.editor.showConflict(latest, ctx.els.editor.value);
           ctx.setStatus("error", t("status.fileUpdatedElsewhere"));
         } catch (err) {
           ctx.setStatus("error", errorText(err));
