@@ -10,6 +10,16 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #80)
+
+- **ブラウザ E2E テスト基盤を追加した**: Playwright で実 Chromium を動かす E2E を `e2e/` に置き、`bun run test:e2e` で実行できる。`e2e/fixtures/` の固定ドキュメントに対して yomi を自動起動し、疎通確認用の最小 1 フロー（ファイル選択 → プレビュー表示 → URL 反映）を CI で通す
+- **失敗時に screenshot と trace を残す**: `test-results/` に出力され、CI では artifact として取得できる。trace は `playwright show-trace` で操作を再生できる
+- **CI は test ジョブと分けた**: ブラウザ導入だけで 100MB 超・数十秒かかるため、ユニットテストのフィードバックを遅らせない。E2E が落ちても test の結果は独立して読める。ブラウザバイナリは版ごとにキャッシュする
+- **chromium のみ・ubuntu のみで走らせる**: E2E が守るのは「実ブラウザでしか出ない結合」であって OS 差ではない（OS 差はユニット側の matrix が見ている）。macOS でも回すと CI 時間が倍になり、Issue #45 で踏んだ macOS 固有の flaky を E2E でも抱え込む
+- **flaky を持ち込まない方針を明文化した**: 固定 sleep を使わない / `retries` は CI でも 0 / `workers: 1`。責務分担（jsdom で書けるものは E2E に書かない）とあわせて README に記載
+- **E2E は `*.e2e.ts` という命名にした**: bun のランナーは `.test` / `_test_` / `.spec` / `_spec_` を拾うため、`.spec.ts` だと素の `bun test` が Playwright のテストを実行しようとして落ちる。命名で排他にすれば探索範囲を狭める設定が要らず、「`tests/` 外に置いたテストが黙ってスキップされる」罠も避けられる
+- **fixture は毎回 tmp へコピーする**: yomi は書き込み API を持つので、追跡下の `e2e/fixtures/` を直接見せると編集・新規作成のフロー（#82）が git のワークツリーを書き換える。失敗して途中終了すると fixture が壊れたまま残り、次の実行が flaky に見える
+- **UI 言語とタイムゾーンを固定した**: Chromium はホストの locale を継承するため、指定しないとローカル（ja）と CI（en）で yomi の表示言語が変わり、ラベル依存のロケータが環境で分岐する
 ### Added (Issue #91)
 
 - **応答しなくなったら自力で復旧するようになった**: メインスレッドが 60 秒間 event loop に戻らなくなったら、監視スレッド（watchdog）が理由とスレッドの状態を出力してプロセスを強制終了する。Issue #89 で観測した「接続はできるが応答が返らず、Ctrl+C も `kill` も効かない」状態から、再起動だけで抜けられる

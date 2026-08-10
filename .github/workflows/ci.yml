@@ -65,3 +65,81 @@ jobs:
 
       - name: Run tests
         run: bun test
+
+  # ブラウザ E2E (Issue #80)。
+  #
+  # **test ジョブとは分ける。** Playwright のブラウザ導入だけで 100MB 超・数十秒かかるので、
+  # ユニットテストのフィードバックを遅らせない。E2E が落ちても test の結果は独立して読める。
+  #
+  # **ubuntu のみで走らせる。** E2E が守るのは「実ブラウザでしか出ない結合」であって
+  # OS 差ではない。macOS でも回すと CI 時間が倍になるうえ、#45 で踏んだ macOS 固有の
+  # flaky を E2E でも抱え込むことになる。OS 差はユニット側の matrix が見ている。
+  e2e:
+    name: E2E (chromium)
+    runs-on: ubuntu-latest
+    # ブラウザバイナリの download や bun install が詰まったときに 6 時間走らせない
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # test ジョブと同じ版に揃える (ずれると bun.lock の検証が食い違う)
+          bun-version: "1.3.12"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # vendor bundle は配布物に同梱されているが、リポジトリには生成物がコミット済みなので
+      # E2E ではビルドし直さない (test ジョブが鮮度を検証している)。
+
+      # ブラウザバイナリは版ごとにキャッシュする。@playwright/test を bump したら
+      # キーが変わって取り直される。
+      #
+      # **版取得は失敗したら落とす。** 既定シェルは `bash -e` で pipefail が付かないので、
+      # 出力形式が変わって grep が空振りしても step は成功し、`playwright-Linux-` という
+      # 空版キーが保存される。restore-keys が無いため以後 bump してもそのキーに当たり続け、
+      # ブラウザが入らないまま E2E が落ち続ける (原因に辿り着きにくい)。
+      - name: Get Playwright version
+        id: pw
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(bunx playwright --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')"
+          [ -n "$version" ] || { echo "::error::Playwright の版を取得できませんでした"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # arch とイメージ版もキーに入れる。runner.os は "Linux" としか出ないので、
+      # ubuntu-latest が次の LTS へ切り替わったとき古いイメージ用のキャッシュを引き継いでしまう。
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ steps.pw.outputs.version }}
+
+      # **cache-hit で分岐しない。** `--with-deps` はブラウザが既にあれば download を
+      # スキップして apt の依存だけ入れるので 1 step で足りる。分岐させると、install が
+      # 途中で失敗した run のキャッシュが保存されたときに以後ずっと install がスキップされ、
+      # 壊れたキャッシュから自力で回復できなくなる。
+      #
+      # chromium だけ入れる。firefox / webkit は「実ブラウザでしか出ない結合」を見るのに
+      # 必須ではなく、導入時間と flaky を増やすだけ (必要になったら別 Issue)。
+      - name: Install Chromium (+ system deps)
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run E2E
+        run: bun run test:e2e
+
+      # 失敗時の screenshot / trace を持ち帰る (DoD)。trace は
+      # `npx playwright show-trace <zip>` で操作を再生できる。
+      - name: Upload E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

@@ -344,11 +344,48 @@ Run all tests with `bun test`.
 bun test
 ```
 
-They live under `tests/` as `*.test.ts`. In addition to server-side pure functions, security-related code, the parser, and the file scanner, they cover DOM-independent client pure functions (`public/new-file.js`, etc.) — the DOM-coupled `app.js` itself is out of scope.
+They live under `tests/` as `*.test.ts`. In addition to server-side pure functions, security-related code, the parser, and the file scanner, they cover client-side pure functions (`public/new-file.js`, etc.) and characterization tests that pin down `public/app.js` state transitions under jsdom (Issue #77).
 
 ```bash
 bun test tests/util/        # just the util directory
 bun test tests/safepath     # filter by file name
+```
+
+### Browser E2E tests (Issue #80)
+
+End-to-end tests that drive a real browser (Chromium) are written with Playwright and live under `e2e/` as **`*.e2e.ts`** (naming them `*.spec.ts` would make a bare `bun test` pick them up, so the two runners are kept disjoint by file name).
+
+```bash
+bunx playwright install chromium   # first time only (fetch the browser binary)
+bun run test:e2e                   # run the E2E suite
+bunx playwright test --ui          # interactive UI mode
+```
+
+The fixed documents in `e2e/fixtures/` are copied to a temporary directory first, and yomi is started against that copy (Playwright launches it for you). yomi has write APIs, so pointing it at the tracked fixtures would let editing tests dirty the git working tree. The port can be changed with `YOMI_E2E_PORT` (default 3950).
+
+#### How this splits with the unit tests
+
+| | What it guards | When |
+|---|---|---|
+| `bun test` (`tests/`) | Server APIs, pure functions, and **`app.js` state transitions under jsdom** | Always. Fast |
+| `bun run test:e2e` (`e2e/`) | **Integration that only shows up in a real browser** — real CSS layout, real DOM events, real WebSockets, actual Mermaid rendering, the History API | CI and on demand. Slow |
+
+**Anything expressible in jsdom does not belong in E2E.** jsdom has no layout (`scrollTop` is always 0) and no `IntersectionObserver` or `TouchEvent`, so the characterization tests stub those out. E2E exists to check that what was stubbed also holds for real; covering logic exhaustively is the unit tests' job. Too many E2E tests make CI slow and flaky.
+
+#### Keeping flakiness out
+
+We already got burned by an intermittently failing watcher test on macOS CI (Issue #45), so the E2E suite sticks to these rules:
+
+- **No fixed sleeps.** Synchronize with Playwright's auto-waiting and `expect(locator)` retries
+- **`retries` is 0, even on CI.** Tolerating "fails sometimes, passes on re-run" is how flakiness accumulates. Fix it, or move the check to the unit tests
+- **`workers: 1`.** yomi is one process serving one directory, so running in parallel would let tests clobber the same fixture
+- **Chromium only, Ubuntu only on CI.** E2E guards browser-specific integration, not OS differences (the unit test matrix covers those)
+- **`locale` and timezone are pinned.** Chromium inherits the host locale, so without pinning the UI language differs between local (ja) and CI (en). **If you write label-based locators, this `locale` is the assumption they rest on**
+
+On failure a screenshot and a trace are written to `test-results/` (available as CI artifacts). The trace replays the run.
+
+```bash
+bunx playwright show-trace test-results/<test name>/trace.zip
 ```
 
 ### Type check
