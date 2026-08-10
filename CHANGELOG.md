@@ -10,6 +10,13 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #83)
+
+- **ツリー走査・描画のベンチマークを追加した**: `bun run bench` でスキャン時間・`/api/tree` 応答と response size・DOM 更新時間の 3 指標を 1,000 / 5,000 / 10,000 ファイル規模で計測できる。fixture は `scripts/bench-fixture.ts` が生成する（追跡しない）
+- **現行実装のベースラインを記録した**: `docs/bench/tree-baseline.md`。10,000 ファイルでスキャン 21ms（うち `readdir` は 7ms）、`/api/tree` 19ms・724 KiB、jsdom 上の DOM 構築 177ms。**「`readdir` 律速」ではなく、サーバ側で効くのは「再スキャンしない」ほう**という読み取りを申し送りとして残した
+- **各値は warmup 3 回を捨てたあと 11 回計測した中央値（最小–最大）**: warmup 1 回では JIT が温まりきらず、中央値が定常状態より 3 割ほど高く出る。幅を記録しないと #84 が「改善なのか誤差なのか」を判定できない
+- **DOM 構築の値は jsdom 上のもの**でレイアウト・ペイントを含まない。実物は既定で全ディレクトリが閉じており（501 個中 500 個が `display:none`）、実ブラウザのコスト構造とは一致しない。実機値が要るなら E2E（#80）側で測る
+- **計測はプロダクトコードを変えていない**: 既存の `scanMarkdownTree` / `createServer` を呼ぶだけで、注入点の追加もしていない。DOM 構築だけは app.js の写しになるため、`tests/bench-dom-parity.test.ts` が実物と骨格を突き合わせて固定している
 ### Added (Issue #80)
 
 - **ブラウザ E2E テスト基盤を追加した**: Playwright で実 Chromium を動かす E2E を `e2e/` に置き、`bun run test:e2e` で実行できる。`e2e/fixtures/` の固定ドキュメントに対して yomi を自動起動し、疎通確認用の最小 1 フロー（ファイル選択 → プレビュー表示 → URL 反映）を CI で通す

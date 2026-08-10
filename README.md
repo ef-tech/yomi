@@ -349,6 +349,21 @@ bun test tests/util/        # util ディレクトリだけ
 bun test tests/safepath     # ファイル名で絞り込み
 ```
 
+### ベンチマーク (Issue #83)
+
+ツリー走査・`/api/tree` 応答・クライアント描画の 3 指標を計測できます。差分更新 (#84) の前後比較に使います。
+
+```bash
+bun run bench                  # 1,000 / 5,000 / 10,000 ファイルで計測
+bun run bench 1000 5000        # 規模を指定
+rm -rf .bench                  # 生成した fixture を消す
+```
+
+fixture は `scripts/bench-fixture.ts` が生成します (`.bench/` は追跡しません)。1 ディレクトリあたり 20 ファイル、10 ディレクトリごとに 1 段深くなる形で、実プロジェクトの構造に寄せてあります。
+
+各値は **5 回の中央値**（warmup 1 回を捨てたあと）です。平均だと 1 回の GC やページキャッシュミスに引きずられ、最小値だと理想状態しか見えません。
+
+**現行実装のベースラインは [`docs/bench/tree-baseline.md`](docs/bench/tree-baseline.md)** に記録しています。
 ### ブラウザ E2E テスト (Issue #80)
 
 実ブラウザ (Chromium) で動かす E2E は Playwright で書き、`e2e/` 配下に **`*.e2e.ts`** として置きます（`*.spec.ts` にすると素の `bun test` が拾ってしまうため、命名で排他にしています）。
