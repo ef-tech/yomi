@@ -31,9 +31,13 @@ import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
-import { DEFAULT_EXCLUDES } from "../src/util/excludes.ts";
 import { startWatchdog, type WatchdogHandle } from "../src/watchdog.ts";
-import { loadYomiignore } from "../src/yomiignore.ts";
+import {
+  describeInvalidLines,
+  loadYomiignore,
+  resolveExcludes,
+  type YomiignoreParseResult,
+} from "../src/yomiignore.ts";
 
 async function main() {
   const parsed = parseCommandOrExit();
@@ -85,9 +89,24 @@ async function runUp(options: CliOptions) {
   await runForeground(options, rootDir, port);
 }
 
+/** `.yomiignore` の適用結果を 1 行で報告する（追加・解除の両方を出す）。 */
+function describeYomiignore(parsed: YomiignoreParseResult): string | null {
+  const parts: string[] = [];
+  if (parsed.excludes.size > 0) {
+    parts.push(`${parsed.excludes.size} 件追加 (${[...parsed.excludes].join(", ")})`);
+  }
+  if (parsed.negations.size > 0) {
+    parts.push(`${parsed.negations.size} 件解除 (${[...parsed.negations].join(", ")})`);
+  }
+  return parts.length > 0 ? `.yomiignore: ${parts.join(" / ")}` : null;
+}
+
 async function runForeground(options: CliOptions, rootDir: string, port: number) {
-  const userExcludes = await loadYomiignore(rootDir);
-  const excludes = new Set([...DEFAULT_EXCLUDES, ...userExcludes]);
+  const yomiignore = await loadYomiignore(rootDir);
+  const excludes = resolveExcludes(yomiignore);
+  // **照合できない行は黙って捨てない。** 除外が読み書きの可否を決める今、
+  // 「書いたのに効いていない」は「除外したつもりのファイルが読める」を意味する
+  if (yomiignore.invalid.length > 0) console.warn(describeInvalidLines(yomiignore.invalid));
 
   const handle = createServer({
     rootDir,
@@ -142,9 +161,8 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
     depth: options.depth,
     detached: detachedChild ? { pid: process.pid } : null,
   });
-  if (userExcludes.size > 0) {
-    console.log(`.yomiignore: ${userExcludes.size} 件追加 (${[...userExcludes].join(", ")})`);
-  }
+  const yomiignoreSummary = describeYomiignore(yomiignore);
+  if (yomiignoreSummary) console.log(yomiignoreSummary);
 
   if (shouldOpenBrowser(options)) {
     openBrowser(pickBrowserUrl(options.host, port));
@@ -160,6 +178,12 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
+  // **親でも `.yomiignore` を読んで警告する。** 実際に除外を適用するのは子 (runForeground) だが、
+  // 子の stderr はログファイルへ流れるので、そこに出しても**利用者の端末には届かない**。
+  // 「書いたのに効いていない」を知らせるのが目的なので、見える側にも出す。
+  const yomiignore = await loadYomiignore(rootDir);
+  if (yomiignore.invalid.length > 0) console.warn(describeInvalidLines(yomiignore.invalid));
+
   let record: InstanceRecord;
   try {
     record = await startDetached({ rootDir, host: options.host, port, depth: options.depth });
@@ -175,6 +199,10 @@ async function runDetached(options: CliOptions, rootDir: string, port: number) {
     depth: options.depth,
     detached: { pid: record.pid, logPath: record.logPath },
   });
+  // 警告と同じ理由で親にも出す。**`!build` が効いたかを確かめたいのは -d の利用者**で、
+  // その確認先がログファイルだけなのは不便（子は同じものをログへ出す）
+  const yomiignoreSummary = describeYomiignore(yomiignore);
+  if (yomiignoreSummary) console.log(yomiignoreSummary);
 
   if (shouldOpenBrowser(options)) {
     openBrowser(pickBrowserUrl(options.host, record.port));
