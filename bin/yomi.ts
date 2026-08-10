@@ -30,6 +30,7 @@ import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
 import { DEFAULT_EXCLUDES } from "../src/util/excludes.ts";
+import { startWatchdog, type WatchdogHandle } from "../src/watchdog.ts";
 import { loadYomiignore } from "../src/yomiignore.ts";
 
 async function main() {
@@ -121,8 +122,13 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
     openBrowser(pickBrowserUrl(options.host, port));
   }
 
+  // event loop が停止したら自力でプロセスを終わらせる (Issue #91)。
+  // **installShutdownHandlers より前に置く。** シグナルハンドラを入れた瞬間から
+  // 「ブロックすると SIGINT も SIGTERM も効かない」状態が成立するので、逃げ道を先に用意する。
+  const watchdog = startWatchdog();
+
   // 記録した本人だけが後始末する (切り離された子の記録は親のもの = stopInstance が消す)
-  installShutdownHandlers(handle, registered ? port : null);
+  installShutdownHandlers(handle, registered ? port : null, watchdog);
 }
 
 async function runDetached(options: CliOptions, rootDir: string, port: number) {
@@ -191,9 +197,15 @@ function parseCommandOrExit(): ParsedCommand {
  * 削除は**同期版**を使う —— ここで await すると exit が遅れ、await しないと
  * 消える前にプロセスが落ちる (`removeInstanceSync` のコメント)。
  */
-function installShutdownHandlers(handle: ServerHandle, registeredPort: number | null): void {
+function installShutdownHandlers(
+  handle: ServerHandle,
+  registeredPort: number | null,
+  watchdog?: WatchdogHandle,
+): void {
   const shutdown = (message?: string) => {
     if (message !== undefined) console.log(message);
+    // 先に止める。以降は正常な終了経路なので、監視が誤って割り込む余地を残さない
+    watchdog?.close();
     handle.close();
     if (registeredPort !== null) removeInstanceSync(registeredPort);
     process.exit(0);

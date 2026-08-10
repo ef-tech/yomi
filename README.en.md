@@ -430,6 +430,41 @@ sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 
 If you cannot raise the limit (e.g., no `sudo`), you can also narrow the watched levels with [`--depth`](#options). For example, `yomi --depth 2` watches only two levels, keeping the watch count low.
 
+### Automatic recovery when yomi stops responding (Issue #91)
+
+A long-running yomi can end up in a state where **connections are accepted but no response comes back, and neither Ctrl+C nor `kill` (SIGTERM) stops it** (observed after more than 7 days of uptime; `kill -9` still works). The main thread stalls on an internal lock and never returns to the event loop; because signal handlers are dispatched from that same event loop, Ctrl+C never arrives either.
+
+**The root cause has not been identified yet.** yomi therefore runs a watchdog thread: if the main thread stops responding for 60 seconds, it prints a message like the following and force-terminates the process. Restarting recovers it.
+
+```
+yomi: メインスレッドが 63 秒間応答していません。
+  event loop が停止しており、Ctrl+C も kill も効かない状態です (Issue #91)。
+  復旧のためプロセスを強制終了します。再起動してください。
+  稼働時間: 682341 秒
+  この状態を踏んだことを https://github.com/ef-tech/yomi/issues/91 に報告してもらえると助かります。
+  スレッドの状態 (この情報が原因究明の手がかりになります):
+    tid=3300359 comm=bun wchan=futex_do_wait
+    ...
+```
+
+**If you see this message, please paste it into [#91](https://github.com/ef-tech/yomi/issues/91).** The reproduction conditions are still unknown, and the thread states are the only lead we have (the line marked `<<< メインスレッド` is the key one). When running in the background (`yomi up -d`), the message goes to the log in the state directory.
+
+Because this is not a graceful shutdown, it has two side effects:
+
+- **The exit code is 137**, which supervisors such as systemd treat as a crash.
+- A registry entry is left behind under `~/.local/state/yomi/instances/<port>.json`, but it is pruned automatically on the next `yomi list` or `yomi down`.
+
+The watchdog does **not** affect normal operation. If the whole process is frozen (for example when a laptop sleeps), it tells that apart from a real stall by looking at its own scheduling delay, so it does not fire spuriously.
+
+**If it ever fires spuriously, or you simply do not want the watchdog, you can turn it off:**
+
+```bash
+YOMI_NO_WATCHDOG=1 yomi              # disable the watchdog
+YOMI_WATCHDOG_TIMEOUT_MS=180000 yomi # raise the threshold to 3 minutes
+```
+
+Since the root cause is still unidentified, there is no guarantee this heuristic behaves correctly in every environment. **If you hit a false positive, please report that to [#91](https://github.com/ef-tech/yomi/issues/91) as well.**
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE) for details.
