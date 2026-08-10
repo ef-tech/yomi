@@ -18,6 +18,7 @@ import {
   MAX_WRITE_BYTES,
   type ServerHandle,
 } from "../src/server.ts";
+import { parseYomiignore, resolveExcludes } from "../src/yomiignore.ts";
 
 interface ServerCtx {
   url: string;
@@ -1076,6 +1077,71 @@ describe("server - DEFAULT_EXCLUDES も読み書きを拒否する (Issue #65)",
 
   test("除外されていないファイルは読める", async () => {
     expect((await fetch(`${url}/api/file?path=ok.md`)).status).toBe(200);
+  });
+});
+
+// **この PR の存在意義そのもの (Issue #97)。** #65 で除外が読み書きのゲートになった結果、
+// DEFAULT_EXCLUDES 配下に置いた md・画像へ到達する手段が無くなった。否定パターンがその退避弁で、
+// 「Set から名前が消える」ではなく**実際に 200 が返る**ところまで固定する。
+describe("server - .yomiignore の否定で既定除外を解除できる (Issue #97)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-excl-negate-"));
+    await mkdir(join(root, "build"), { recursive: true });
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await writeFile(join(root, "build", "generated.md"), "# generated\n");
+    await writeFile(join(root, "build", "chart.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>");
+    await writeFile(join(root, "node_modules", "readme.md"), "# dep\n");
+    // `!build` だけを解除する（他の既定除外はそのまま効く）
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      excludes: resolveExcludes(parseYomiignore("!build")),
+    });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("解除した build 配下の md が読める", async () => {
+    const res = await fetch(`${url}/api/file?path=build/generated.md`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { raw: string }).raw).toContain("generated");
+  });
+
+  test("解除した build 配下の asset も取得できる", async () => {
+    expect((await fetch(`${url}/api/asset?path=build/chart.svg`)).status).toBe(200);
+  });
+
+  test("解除した build 配下へ保存できる", async () => {
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "build/generated.md", body: "# rewritten\n" }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("解除した build はツリーにも出る", async () => {
+    const tree = (await (await fetch(`${url}/api/tree`)).json()) as {
+      children?: { name: string }[];
+    };
+    expect((tree.children ?? []).map((c) => c.name)).toContain("build");
+  });
+
+  // 解除は書いた 1 件だけに効く（全部開いてしまわない）
+  test("解除していない node_modules は拒否されたまま", async () => {
+    const res = await fetch(`${url}/api/file?path=node_modules/readme.md`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code?: string }).code).toBe("excluded_path");
   });
 });
 
