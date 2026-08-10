@@ -32,13 +32,18 @@ import { isExcludedPath } from "../src/util/excludes.ts";
 
 /** 実際にファイルを作って、綴り違いで開けるか試す（プラットフォーム名で決め打ちしない） */
 async function detectCaseInsensitive(dir: string): Promise<boolean> {
-  await mkdir(join(dir, "probe-dir"), { recursive: true });
-  await writeFile(join(dir, "probe-dir", "f.txt"), "x");
+  // **判定用の probe は配信対象に残さない。** 同じ root を createServer が配信するので、
+  // 残すと将来ツリー件数を assert するテストを足したときに壊れる
+  const probe = join(dir, ".probe-case");
+  await mkdir(probe, { recursive: true });
+  await writeFile(join(probe, "f.txt"), "x");
   try {
-    await Bun.file(join(dir, "Probe-Dir", "f.txt")).text();
-    return true;
-  } catch {
-    return false;
+    return await Bun.file(join(dir, ".Probe-Case", "f.txt"))
+      .text()
+      .then(() => true)
+      .catch(() => false);
+  } finally {
+    await rm(probe, { recursive: true, force: true });
   }
 }
 
@@ -93,8 +98,10 @@ describe("除外判定と大小の区別 (Issue #98)", () => {
       ].join(" "),
     );
 
-    // 観測が成立していること自体は固定する（この行が落ちたら計測が壊れている）
-    expect(typeof caseInsensitive).toBe("boolean");
+    // **計測が成立したことを見る。** `typeof caseInsensitive` は宣言時の既定値があるので
+    // 絶対に落ちず、観測の成否を何も語らない
+    expect(rel).not.toBe("");
+    expect(rel.startsWith("throw:")).toBe(false);
   });
 
   /**
@@ -103,22 +110,20 @@ describe("除外判定と大小の区別 (Issue #98)", () => {
    * 大小を区別する環境では後者が成立しない (ENOENT) ので、判定を通り抜けても実害は無い。
    * 区別しない環境では両方が成立し、**ツリーに出ないのに読める**状態になる。
    */
-  test("綴り違いで実ファイルへ到達できないこと", async () => {
-    const excludedByRequested = isExcludedPath("Private/creds.csv", excludes);
-    const rel = await resolveSafe(root, "Private/creds.csv")
-      .then((s) => s.rel)
-      .catch(() => null);
-    const excludedByRel = rel === null ? true : isExcludedPath(rel, excludes);
-    const blocked = excludedByRequested || excludedByRel;
+  test("綴り違いでも除外が効く（大小を区別しない環境でのみ意味がある）", async () => {
+    if (!caseInsensitive) {
+      // 大小を区別する環境では `Private/` が存在しないので、この経路自体が成立しない。
+      // **素通りで pass させず、成立しないことを明示する**
+      const reachable = await Bun.file(join(root, "Private", "creds.csv"))
+        .text()
+        .then(() => true)
+        .catch(() => false);
+      expect(reachable).toBe(false);
+      return;
+    }
 
-    if (blocked) return; // 除外が効いている = すり抜けていない
-
-    // 除外は通り抜けた。実ファイルに届くなら、それがすり抜け
-    const reachable = await Bun.file(join(root, "Private", "creds.csv"))
-      .text()
-      .then(() => true)
-      .catch(() => false);
-    expect(reachable).toBe(false);
+    const safe = await resolveSafe(root, "Private/creds.csv");
+    expect(isExcludedPath(safe.rel, excludes)).toBe(true);
   });
 });
 
@@ -163,19 +168,31 @@ describe("存在オラクル（大小を区別しない環境で綴りを変え�
     expect(missing.status).toBe(400);
   });
 
-  test("綴りを変えても実在・非実在で応答が分かれないこと", async () => {
-    const exists = await fetch(`${url}/api/file?path=Private/secret.md`);
-    const missing = await fetch(`${url}/api/file?path=Private/nope.md`);
-    const codes = {
-      exists: exists.status,
-      missing: missing.status,
-      existsCode: ((await exists.json()) as { code?: string }).code,
-      missingCode: ((await missing.json()) as { code?: string }).code,
-    };
-    console.log(`[Issue #98 oracle] caseInsensitive=${caseInsensitive} ${JSON.stringify(codes)}`);
+  /** status だけでなく `code` まで見る（両方 400 で code だけ分かれるケースがある） */
+  const probe = async (path: string) => {
+    const res = await fetch(`${url}${path}`);
+    return { status: res.status, code: ((await res.json()) as { code?: string }).code };
+  };
 
-    // **実在の有無で応答が変わってはいけない。** 変わると、綴りを変えるだけで
-    // 除外配下のファイルの実在を問い合わせられる
-    expect(codes.exists).toBe(codes.missing);
+  test("綴りを変えても実在・非実在で応答が分かれないこと", async () => {
+    const exists = await probe("/api/file?path=Private/secret.md");
+    const missing = await probe("/api/file?path=Private/nope.md");
+    console.log(
+      `[Issue #98 oracle] caseInsensitive=${caseInsensitive} ${JSON.stringify({ exists, missing })}`,
+    );
+    expect(exists).toEqual(missing);
+  });
+
+  // **DoD 1 をそのまま**: `GET /api/asset?path=Private/creds.csv` が取得できないこと。
+  // `/api/asset` は `/api/file` と別のハンドラで 400/404 の分岐も独立しているので、
+  // 合成テストでは endpoint 固有の回帰を捉えられない
+  test("DoD 1: /api/asset でも綴り違いで取得できず、実在も漏れない", async () => {
+    const exists = await probe("/api/asset?path=Private/creds.csv");
+    const missing = await probe("/api/asset?path=Private/nope.csv");
+    console.log(
+      `[Issue #98 asset] caseInsensitive=${caseInsensitive} ${JSON.stringify({ exists, missing })}`,
+    );
+    expect(exists.status).not.toBe(200);
+    expect(exists).toEqual(missing);
   });
 });

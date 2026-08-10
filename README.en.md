@@ -297,7 +297,9 @@ Currently only exact directory/file name matches are supported. Globs (`*`, `**`
 
 - **Patterns containing `/` have no effect.** Writing `private/creds.csv` matches nothing, because patterns are compared against each path segment individually — and no warning is emitted. Write a single segment instead, such as `private` (directory name) or `creds.csv` (file name).
 - **Matching happens against the resolved real path.** If the thing you want to exclude is a symlink, also list the **target directory name**, not just the link name (the link name alone is caught by the literal check on the requested path, but requests made through the real path are not).
-- **Matching is case-sensitive.** `private` does not match `Private/`. Behavior may differ on case-insensitive filesystems such as macOS (see #98).
+- **Matching follows the filesystem's own rules.** Pattern comparison itself is case-sensitive, but **whether it takes effect depends on the filesystem** (verified on real macOS CI runners in Issue #98):
+  - **Case-sensitive filesystems (Linux, …)**: `private` does not match `Private/`. They are **different directories**, so this is the correct behavior.
+  - **Case-insensitive filesystems (macOS APFS / HFS+, …)**: `Private/` is the same entity as `private/`, so writing `private` also excludes requests like `Private/creds.csv` (path resolution normalizes the spelling to the on-disk name). Requesting a non-existent file with a different spelling returns the same 400, so **nothing is revealed about what lives under an excluded directory** (Issue #98 also confirmed that the existence of intermediate directories does not leak).
 
 There is currently **no way to undo the default exclude patterns** (`node_modules`, `dist`, `build`, `vendor`, …). `.yomiignore` only adds to the default set; negation patterns (`!name`) are not supported (see #97).
 

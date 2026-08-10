@@ -15,9 +15,20 @@ export class UnsafePathError extends Error {
 }
 
 export interface ResolvedPath {
-  /** rootDir からの正規化された相対パス (POSIX 区切り) */
+  /**
+   * rootDir からの**正規化された**相対パス (POSIX 区切り)。
+   *
+   * 除外判定・自己保存マーク (`saveMark`)・クライアントへ返す `path` はこれを使う。
+   * **`abs` の文字列表現ではない** —— leaf が存在しないときの `abs` は要求の綴りを
+   * 保つが、`rel` は**実在する祖先の realpath 由来**になる (Issue #98)。
+   * 両者は同じエントリを指すが綴りが違いうる。
+   *
+   * 例: `link -> inner` があるとき `link/new.md` (未作成) は
+   * `rel = "inner/new.md"` / `abs = ".../link/new.md"`。
+   * `rel` が実体側に揃うことで、watcher が emit する名前や saveMark と一致する。
+   */
   rel: string;
-  /** 実際にファイル読み取りに使う絶対パス */
+  /** 実際にファイル読み取り・作成に使う絶対パス（要求の綴りを保つ） */
   abs: string;
 }
 
@@ -65,30 +76,70 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
-  // **leaf が無いときは、実在する親の realpath から rel を組み立て直す** (Issue #98)。
+  // **解決できなかったときは、実在する最深の祖先から rel を組み立て直す** (Issue #98)。
   //
-  // 上の `rel` は leaf 非存在時に lexical fallback した `candidateAbs` 由来なので、
-  // **要求の綴りをそのまま持つ**。大小を区別しないファイルシステムではこれが穴になる:
+  // 上の `rel` は realpath が失敗すると lexical fallback した `candidateAbs` 由来になり、
+  // **要求の綴りをそのまま持つ**。これが存在オラクルになる:
   //
-  // - `Private/secret.md` (実在) → realpath が `private/secret.md` へ正規化 → 除外されて 400
-  // - `Private/nope.md` (非実在) → 正規化されず `Private/nope.md` のまま → 除外を通り抜けて 404
+  // - `Private/secret.md` (実在)   → realpath が `private/secret.md` へ正規化 → 除外され 400
+  // - `Private/nope.md`   (非実在) → 正規化されず `Private/nope.md` のまま → 通り抜けて 404
   //
-  // **400 と 404 が分かれるので、綴りを変えるだけで除外配下のファイルの実在が分かる**
-  // (Issue #65 が塞いだ存在オラクルが復活する。macOS の CI で実測して確認した)。
-  // 親は実在するので realpath が綴りを正規化し、両者が同じ 400 に揃う。
+  // **400 と 404 が分かれるので、綴りを変えるだけで除外配下の実在が分かる**
+  // (Issue #65 が塞いだオラクルの復活。macOS の CI で実測した)。
   //
-  // 大小を区別する環境では親も実在しないので `safeRealpath` が lexical fallback し、
-  // 従来どおり 404 になる (そのパスは本当に存在しないので正しい)。
-  const relFromParent = resolved ? rel : toPosix(join(parentRel, basename(requestedAbs)));
+  // **大小の区別だけの話ではない。** 同じ形は symlink でも踏める ——
+  // `alias -> private` があるとき `alias/sub/nope.md` は「`private/sub` が実在するか」で
+  // 400 と 404 に分かれ、**除外配下のディレクトリ構成を列挙できる** (Linux で実証済み)。
+  //
+  // したがって **1 段だけでは足りない**。実在する祖先まで遡り、そこから先は要求の
+  // セグメントを繋ぐ。`rootAbs` は必ず解決できるので走査は必ず止まる。
+  const relResolved = resolved ? rel : await relFromDeepestReal(rootAbs, requestedAbs, requested);
 
-  return { rel: toPosix(relFromParent), abs: candidateAbs };
+  return { rel: toPosix(relResolved), abs: candidateAbs };
+}
+
+/**
+ * 実在する最深の祖先の realpath に、残りの要求セグメントを繋いで rel を作る。
+ *
+ * `resolveSafe` が leaf を解決できなかったときだけ呼ぶ。**祖先の綴りが正規化される**ので、
+ * 大小の違いや symlink があっても、実在・非実在で rel の形が変わらなくなる
+ * (存在オラクルを塞ぐ。Issue #98)。
+ *
+ * 追加の `realpath` は解決に失敗した深さのぶんだけで、通常は 1〜2 回で止まる。
+ */
+async function relFromDeepestReal(
+  rootAbs: string,
+  requestedAbs: string,
+  requested: string,
+): Promise<string> {
+  const tail: string[] = [];
+  let cur = requestedAbs;
+
+  for (;;) {
+    const probe = await safeRealpathWithFlag(cur);
+    if (probe.resolved) {
+      const base = relative(rootAbs, probe.path);
+      // **祖先が root 外を指していたら弾く。** 上の `parentRel` チェックと同じ判定を
+      // 遡った先にも掛ける (深い階層の symlink エスケープを見逃さない)
+      if (base === ".." || base.startsWith(`..${sep}`) || isAbsolute(base)) {
+        throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
+      }
+      tail.reverse();
+      return join(base, ...tail);
+    }
+    // root まで遡っても解決できないことは無い (root は resolveSafe の冒頭で解決済み)
+    if (cur === dirname(cur)) return relative(rootAbs, requestedAbs);
+    tail.push(basename(cur));
+    cur = dirname(cur);
+  }
 }
 
 /**
  * realpath を試し、失敗したら lexical に解決する。
  *
- * `resolved` は**正規化できたか**。呼び出し側はこれで「leaf が実在するか」を判断する
- * (存在しないパスの rel を親から組み立て直すため。Issue #98)。
+ * `resolved` は **realpath が成功したか**（＝返り値が正規化済みか）。**失敗理由は問わない** ——
+ * ENOENT だけでなく EACCES / ELOOP / ENOTDIR でも `false` になる。呼び出し側はこれを
+ * 「rel が正規形か」の判断にだけ使い、実在の有無の判定には使わない (Issue #98)。
  */
 async function safeRealpathWithFlag(p: string): Promise<{ path: string; resolved: boolean }> {
   try {

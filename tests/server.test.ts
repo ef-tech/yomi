@@ -1079,6 +1079,92 @@ describe("server - DEFAULT_EXCLUDES も読み書きを拒否する (Issue #65)",
   });
 });
 
+// **存在オラクル: 除外配下の実在を応答の差から読み取れないこと (Issue #98)。**
+//
+// Issue #65 は「除外配下は実在しても存在しなくても同じ 400」を保証したが、
+// **パス解決が綴りを正規化できない経路**でそれが崩れていた:
+//
+// - 大小を区別しない FS で `Private/nope.md` → 正規化されず除外を通り抜けて 404
+// - **symlink 経由なら全 OS で踏める** —— `alias -> private` のとき `alias/<推測>/x.md` の
+//   400 と 404 の差で、除外配下のディレクトリ構成を列挙できた
+//
+// 後者は macOS を待たずに再現できるので、**全 OS で走る回帰テスト**として固定する。
+describe("server - 除外配下の実在をオラクルで漏らさない (Issue #98)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  const read = async (p: string) => {
+    const res = await fetch(`${url}/api/file?path=${encodeURIComponent(p)}`);
+    return { status: res.status, code: ((await res.json()) as { code?: string }).code };
+  };
+  const create = async (p: string) => {
+    const res = await fetch(`${url}/api/file/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: p }),
+    });
+    return { status: res.status, code: ((await res.json()) as { code?: string }).code };
+  };
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-oracle-"));
+    await mkdir(join(root, "private", "sub"), { recursive: true });
+    await writeFile(join(root, "private", "sub", "deep.md"), "# deep\n");
+    // 除外名ではないリンクから除外ディレクトリへ入る経路を作る
+    await symlink(join(root, "private"), join(root, "alias"));
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      excludes: new Set(["private"]),
+    });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("リンク経由でも読めない（対照）", async () => {
+    expect(await read("alias/sub/deep.md")).toEqual({ status: 400, code: "excluded_path" });
+  });
+
+  // 親が実在するケース。leaf だけ解決できない
+  test("実在するファイルと非実在のファイルで応答が同じ", async () => {
+    expect(await read("alias/sub/nope.md")).toEqual(await read("alias/sub/deep.md"));
+  });
+
+  // **本題**: 中間ディレクトリの実在で差が出ないこと。
+  // ここが分かれると `alias/<推測>/x.md` を叩いて構成を列挙できる
+  test("中間ディレクトリが実在するかで応答が変わらない", async () => {
+    const parentExists = await read("alias/sub/zz-nonexistent.md");
+    const parentMissing = await read("alias/nodir/zz-nonexistent.md");
+    expect(parentExists).toEqual(parentMissing);
+    expect(parentExists.status).toBe(400);
+  });
+
+  // status だけ見ると気づけない（両方 400 で code が excluded_dir / parent_missing に分かれる）
+  test("作成でも中間ディレクトリの実在が漏れない（code まで一致する）", async () => {
+    const parentExists = await create("alias/sub/zz-new.md");
+    const parentMissing = await create("alias/nodir/zz-new.md");
+    expect(parentExists).toEqual(parentMissing);
+    expect(parentExists.code).toBe("excluded_dir");
+  });
+
+  test("除外と無関係なリンクは従来どおり通る（過剰に塞いでいない）", async () => {
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(root, "docs", "ok.md"), "# ok\n");
+    await symlink(join(root, "docs"), join(root, "docs-link"));
+    const res = await fetch(`${url}/api/file?path=docs-link/ok.md`);
+    expect(res.status).toBe(200);
+    // rel は実体側に正規化される（saveMark / watcher と揃う）
+    expect(((await res.json()) as { path: string }).path).toBe("docs/ok.md");
+  });
+});
+
 describe("server - --depth 超過は読み取りを塞がない (Issue #65)", () => {
   let root: string;
   let handle: ServerHandle;
