@@ -56,12 +56,24 @@ describe("createZip", () => {
     expect(Array.from(zip.slice(0, 4))).toEqual([0x50, 0x4b, 0x05, 0x06]);
   });
 
-  // **zip slip を作らない。** 展開先の外へ書き出せる名前は受け取らない
+  /**
+   * **zip slip を作らない。** 展開先の外へ書き出せる名前は受け取らない。
+   *
+   * **バックスラッシュとドライブレターも落とす** —— `split("/")` だけを見ていると
+   * `..\..\evil.exe` は 1 セグメント扱いで通り、**Windows で展開したときに外へ
+   * 書き出せる**。APPNOTE 4.4.17.1 も「ドライブ / デバイス名を含まず、区切りは
+   * forward slash」と定めている。yomi は POSIX でしか動かないが、
+   * **エントリ名は利用者の Markdown 由来**で `C:\evil.png` は POSIX では合法な名前。
+   */
   test.each([
     ["../escape.png"],
     ["docs/../../escape.png"],
     ["/abs.png"],
     [""],
+    ["..\\..\\evil.exe"],
+    ["a\\..\\..\\b.png"],
+    ["C:\\evil.exe"],
+    ["c:evil.png"],
   ])("`%s` のようなエントリ名は拒否する", (name) => {
     expect(() => createZip([{ name, data: bytes("x") }])).toThrow(RangeError);
   });

@@ -32,19 +32,18 @@ export function createImageDownload(ctx) {
    */
   function saveBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
-    try {
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.rel = "noopener";
-      // Firefox は DOM に無い要素の click を無視するので、付けてから押して外す
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } finally {
-      // click は同期なので、この時点で読み終わっている
-      URL.revokeObjectURL(url);
-    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    // Firefox は DOM に無い要素の click を無視するので、付けてから押して外す
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // **同期的に revoke しない。** `click()` から戻った時点で保存が始まっているとは
+    // 限らず、ブラウザによってはダウンロードが中断される。次のタスクまで待ってから解放する
+    // （解放を忘れると、タブを閉じるまで zip がメモリに残る）
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   /**
@@ -73,6 +72,11 @@ export function createImageDownload(ctx) {
     if (running || !state.currentPath) return;
     running = true;
     const path = state.currentPath;
+    // **押している間の手応えを出す。** 画像の多い記事では数秒かかるのに、
+    // 無言だと「押せていない」ようにしか見えない（`#status` は aria-live なので
+    // 支援技術にも伝わる）
+    setBusy(true);
+    ctx.setStatus(null, t("images.download.running"));
     try {
       const res = await fetch(`/api/images.zip?path=${encodeURIComponent(path)}`);
       if (!res.ok) {
@@ -82,6 +86,9 @@ export function createImageDownload(ctx) {
       }
 
       const skipped = Number(res.headers.get("X-Yomi-Skipped") ?? "0");
+      // **zip を解析しない。** EOCD を読むとサーバの zip 実装に結合し、
+      // 形式を変えたときに無言で「画像がありません」に化ける
+      const count = Number(res.headers.get("X-Yomi-Images") ?? "0");
       const blob = await res.blob();
       const stem =
         path
@@ -90,50 +97,41 @@ export function createImageDownload(ctx) {
           ?.replace(/\.[^.]*$/, "") ?? "images";
       const filename = filenameFrom(res.headers.get("Content-Disposition"), `${stem}-images.zip`);
 
-      // **画像が 1 枚も無いなら保存しない。** 中身が `SKIPPED.txt` だけ、あるいは空の zip が
-      // 落ちてくるのは「動いていない」ようにしか見えない
-      const count = await countImageEntries(blob, skipped);
-      if (count === 0) {
+      // **「参照が無い」と「参照はあったが 1 枚も入らなかった」を分ける。**
+      // 後者こそ理由が書いてある `SKIPPED.txt` を渡すべき場面で、
+      // 「画像を参照していません」と言って捨てると利用者は原因に辿り着けない
+      if (count === 0 && skipped === 0) {
         ctx.setStatus("ok", t("images.download.none"));
         return;
       }
 
       saveBlob(blob, filename);
-      ctx.setStatus(
-        "ok",
-        skipped > 0
-          ? t("images.download.partial", { count: String(count), skipped: String(skipped) })
-          : t("images.download.done", { count: String(count) }),
-      );
+      if (count === 0) {
+        ctx.setStatus("error", t("images.download.allSkipped", { skipped: String(skipped) }));
+      } else {
+        ctx.setStatus(
+          "ok",
+          skipped > 0
+            ? t("images.download.partial", { count: String(count), skipped: String(skipped) })
+            : t("images.download.done", { count: String(count) }),
+        );
+      }
     } catch (err) {
       ctx.setStatus("error", t("images.download.failed", { msg: errorText(err) }));
     } finally {
       running = false;
+      setBusy(false);
     }
   }
 
   /**
-   * zip に入っている**画像の枚数**を数える。
+   * 実行中はボタンを押せなくする（`enableEditActions` の状態を壊さないよう戻す）。
    *
-   * `SKIPPED.txt` は数えない —— 利用者が知りたいのは「何枚入ったか」で、
-   * 一覧ファイルは中身ではなく注記だから。**サーバは skipped が 1 件以上のときだけ
-   * その 1 件を足す**ので、`skipped` から引く枚数が決まる。
-   *
-   * セントラルディレクトリのエントリ数（EOCD の該当フィールド）を読む。全体を展開せずに
-   * 末尾だけ見れば足りる。**コメント長は常に 0 で書いている**ので、EOCD は末尾 22 バイト。
-   *
-   * @param {Blob} blob zip の中身
-   * @param {number} skipped 応答の `X-Yomi-Skipped`
-   * @returns {Promise<number>}
+   * @param {boolean} busy
    */
-  async function countImageEntries(blob, skipped) {
-    const EOCD_SIZE = 22;
-    if (blob.size < EOCD_SIZE) return 0;
-    const tail = await blob.slice(blob.size - EOCD_SIZE).arrayBuffer();
-    const view = new DataView(tail);
-    if (view.getUint32(0, true) !== 0x0605_4b50) return 0; // EOCD が末尾に無い（想定外）
-    const total = view.getUint16(10, true);
-    return Math.max(0, total - (skipped > 0 ? 1 : 0));
+  function setBusy(busy) {
+    els.downloadImagesBtn.disabled = busy || !state.currentPath;
+    els.overflowDownloadImages.disabled = busy || !state.currentPath;
   }
 
   function wire() {

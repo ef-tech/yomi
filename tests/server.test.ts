@@ -1892,6 +1892,25 @@ describe("server - 記事の画像を zip で返す (Issue #140)", () => {
     // 「realpath 済みのパス」を使うかが、ここでだけ観測できる
     await symlink(join(root, "shared", "b.png"), join(root, "docs", "alias.png"));
 
+    // **除外の関門は 2 段あり、それぞれ別の symlink 形を捕まえる。**
+    // どちらか一方でも欠けると、以下のどちらかが漏れる（レビューで実証された）
+    //
+    // 1. 除外名そのものが symlink → 解決前の字句判定でしか捕まらない
+    await mkdir(join(root, "realcache"), { recursive: true });
+    await writeFile(join(root, "realcache", "s1.png"), PNG);
+    await symlink(join(root, "realcache"), join(root, ".git"));
+    // 2. 除外の外から中への別名 → 解決後の判定でしか捕まらない
+    await mkdir(join(root, ".svn"), { recursive: true });
+    await writeFile(join(root, ".svn", "s2.png"), PNG);
+    await symlink(join(root, ".svn", "s2.png"), join(root, "docs", "innocent.png"));
+
+    // 秘密ファイル。`/api/asset` は拡張子で拒否する
+    await writeFile(join(root, ".env"), "AWS_SECRET_ACCESS_KEY=hunter2\n");
+    // 画像名のディレクトリ。`readFile` に直行すると EISDIR で「読み取りに失敗」になる
+    await mkdir(join(root, "docs", "dir.png"), { recursive: true });
+    // POSIX では合法だが zip のエントリ名にできない（Windows で展開すると外へ出る）
+    await writeFile(join(root, "docs", "C:evil.png"), PNG);
+
     await writeFile(
       join(root, "docs", "guide.md"),
       [
@@ -2027,6 +2046,111 @@ describe("server - 記事の画像を zip で返す (Issue #140)", () => {
       off += 30 + nameLen + view.getUint16(off + 28, true) + size;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  /**
+   * **🚨 `/api/asset` の拡張子 allowlist を迂回できてはいけない。**
+   *
+   * `rewriteImageHref` は**生の href**で拡張子を見るが、`resolveRelativePath` は
+   * **デコードしてから `#` で切る**。`.env%23a.png` は「`.png` で終わる」と判定されて
+   * `.env` に解決される。**実測で `.env` と `id_rsa` の吸い出しを再現した。**
+   */
+  test("`%23` で拡張子判定を迂回して非画像を吸い出せない", async () => {
+    await writeFile(join(root, "docs", "evil.md"), "# 普通に見える記事\n\n![x](../.env%23a.png)\n");
+    const res = await zipOf("docs/evil.md");
+    expect(res.status).toBe(200);
+    const names = await entryNames(res.clone());
+    expect(names).not.toContain(".env");
+    expect(names.filter((n) => n !== "SKIPPED.txt")).toEqual([]);
+    expect(await skippedText(res)).toContain(".env\t画像ではない");
+  });
+
+  /**
+   * **除外の関門は 2 段あり、片方ずつでは足りない。**
+   *
+   * どちらか一方を外すと下のどちらかが漏れる（レビューで実証）。
+   * とくに 2 は**無害な名前で秘密が入る**ので、利用者が気づけない。
+   */
+  test.each([
+    ["除外名そのものが symlink", "![s](../.git/s1.png)", ".git/s1.png"],
+    ["除外の外から中への別名", "![s](innocent.png)", "docs/innocent.png"],
+  ])("%s は zip に入らない", async (_label, ref, expectedSkip) => {
+    await writeFile(join(root, "docs", "sym.md"), `# x\n\n${ref}\n`);
+    const res = await zipOf("docs/sym.md");
+    const names = await entryNames(res.clone());
+    expect(names.filter((n) => n !== "SKIPPED.txt")).toEqual([]);
+    expect(await skippedText(res)).toContain(`${expectedSkip}\t除外設定の配下`);
+  });
+
+  test("上限を超えたぶんは入れずに一覧へ回す", async () => {
+    // 1 枚も入らない上限を入れて分岐を踏む（200MB の fixture は置けない）
+    const small = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: false,
+      maxZipBytes: 10,
+    });
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${small.server.port}/api/images.zip?path=docs%2Fguide.md`,
+      );
+      expect(res.headers.get("X-Yomi-Images")).toBe("0");
+      expect(await skippedText(res)).toContain("上限 10 バイトを超えるため");
+    } finally {
+      small.close();
+    }
+  });
+
+  // パスは Markdown 由来で改行を含みうる（POSIX では合法な文字）。
+  // そのまま TSV に連結すると「yomi が /etc/passwd.png を見に行った」偽の行を作れる
+  test("一覧に改行を注入して行を偽造できない", async () => {
+    await writeFile(join(root, "docs", "inject.md"), "# x\n\n![x](nope%0A%2Fetc%2Fpasswd.png)\n");
+    const text = await skippedText(await zipOf("docs/inject.md"));
+    expect(text).not.toContain("\n/etc/passwd.png");
+    expect(text).toContain("\ufffd");
+  });
+
+  test("ディレクトリを指す参照は「ファイルではない」として飛ばす", async () => {
+    await writeFile(join(root, "docs", "dir.md"), "# x\n\n![d](dir.png)\n");
+    const res = await zipOf("docs/dir.md");
+    expect(res.status).toBe(200);
+    expect(await entryNames(res.clone())).toEqual(["SKIPPED.txt"]);
+    expect(await skippedText(res)).toContain("docs/dir.png\tファイルではない");
+  });
+
+  // `createZip` は投げるので、通すと 1 枚のせいで zip 全体が 500 になる
+  test("zip のエントリ名にできない参照は、500 にせず飛ばす", async () => {
+    await writeFile(join(root, "docs", "drive.md"), "# x\n\n![d](/C%3Aevil.png)\n");
+    const res = await zipOf("docs/drive.md");
+    expect(res.status).toBe(200);
+    expect(await skippedText(res)).toContain("zip のエントリ名にできない");
+  });
+
+  /**
+   * **HEAD で zip を組み立てない。**
+   *
+   * 組み立てると全画像を読んで捨てるだけになり、**帯域ゼロでサーバ側の全コストを
+   * 引ける**（`handleAssetRead` も HEAD を短絡している）。
+   *
+   * 「組み立てていない」ことは**枚数のヘッダが無い**ことで見る（時間で見ると flaky）。
+   */
+  test("HEAD は zip を組み立てずにヘッダだけ返す", async () => {
+    const res = await fetch(`${url}/api/images.zip?path=docs%2Fguide.md`, { method: "HEAD" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/zip");
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+    // 集計した結果のヘッダは付かない = 集計そのものをしていない
+    expect(res.headers.get("X-Yomi-Images")).toBeNull();
+    expect(res.headers.get("X-Yomi-Skipped")).toBeNull();
+  });
+
+  test("入った枚数をヘッダで返す（クライアントが zip を解析しなくて済む）", async () => {
+    const res = await zipOf("docs/guide.md");
+    const names = await entryNames(res.clone());
+    expect(res.headers.get("X-Yomi-Images")).toBe(
+      String(names.filter((n) => n !== "SKIPPED.txt").length),
+    );
   });
 
   test("画像を参照していなければ空の zip を返す", async () => {

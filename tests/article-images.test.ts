@@ -59,7 +59,7 @@ describe("collectArticleImages", () => {
     ["file:///etc/passwd"],
   ])("危険なスキーム (`%s`) はどちらにも入れない", (href) => {
     const got = collectArticleImages(`![x](${href})\n`, CURRENT);
-    expect(got).toEqual({ local: [], external: [] });
+    expect(got).toEqual({ local: [], external: [], notImage: [] });
   });
 
   /**
@@ -74,9 +74,34 @@ describe("collectArticleImages", () => {
     expect(collectArticleImages(md, CURRENT).local).toEqual(["docs/img/a.png"]);
   });
 
-  test("画像拡張子でないものは local に入らない", () => {
-    // `rewriteImageHref` が書き換えないので `/api/asset` にならず、配信もされない
-    expect(collectArticleImages("![x](notes.txt)\n", CURRENT).local).toEqual([]);
+  test("画像拡張子でないものは local ではなく notImage へ入る", () => {
+    // `rewriteImageHref` が書き換えないので `/api/asset` にならず、配信もされない。
+    // **`external` に混ぜない** —— `SKIPPED.txt` に書く理由が違う
+    const got = collectArticleImages("![x](notes.txt)\n", CURRENT);
+    expect(got.local).toEqual([]);
+    expect(got.external).toEqual([]);
+    expect(got.notImage).toEqual(["notes.txt"]);
+  });
+
+  /**
+   * **🚨 `/api/asset` の拡張子 allowlist を迂回できてはいけない。**
+   *
+   * `rewriteImageHref` が拡張子を見るのは**生の href**、`resolveRelativePath` は
+   * **デコードしてから `#` / `?` で切る**。この 2 つは同じ文字列を見ていないので、
+   * `.env%23a.png` は「`.png` で終わる」と判定されたうえで `.env` に解決される。
+   *
+   * これを塞がないと、`/api/asset` が 400 で拒否する `.env` や `id_rsa` が
+   * zip に入る（実測で再現した）。
+   */
+  test.each([
+    [".env%23a.png", "docs/.env"],
+    ["id_rsa%23a.png", "docs/id_rsa"],
+    ["secret.txt%3Fx.png", "docs/secret.txt"],
+    ["../.env%23a.png", ".env"],
+  ])("`%s` は画像として扱わない（解決後は `%s`）", (href, resolved) => {
+    const got = collectArticleImages(`![x](${href})\n`, CURRENT);
+    expect(got.local).toEqual([]);
+    expect(got.notImage).toEqual([resolved]);
   });
 
   test("URL エンコードされた名前を元に戻す", () => {
@@ -88,6 +113,7 @@ describe("collectArticleImages", () => {
     expect(collectArticleImages("# 見出し\n\n本文\n", CURRENT)).toEqual({
       local: [],
       external: [],
+      notImage: [],
     });
   });
 
@@ -109,14 +135,18 @@ describe("collectArticleImages", () => {
     const rewritten = rewriteImageHref(href, CURRENT);
 
     if (!rewritten) {
-      expect(got).toEqual({ local: [], external: [] });
+      expect(got).toEqual({ local: [], external: [], notImage: [] });
     } else if (rewritten.startsWith("/api/asset?path=")) {
-      // プレビューが `/api/asset` にするものは、必ず zip の対象になる
-      expect(got.local).toHaveLength(1);
+      // **プレビューが `/api/asset` にしても、画像拡張子でなければ zip には入れない。**
+      // `/api/asset` 側も同じものを 400 で拒否する
+      expect(got.local.length + got.notImage.length).toBe(1);
       expect(got.external).toEqual([]);
-    } else {
+    } else if (rewritten.startsWith("http") || rewritten.startsWith("data:")) {
       expect(got.local).toEqual([]);
       expect(got.external).toEqual([rewritten]);
+    } else {
+      expect(got.local).toEqual([]);
+      expect(got.notImage).toEqual([rewritten]);
     }
   });
 });

@@ -31,6 +31,7 @@ export const ERROR_CODES = [
   "read_failed",
   "asset_failed",
   "zip_failed",
+  "zip_busy",
   "tree_failed",
   "internal_error",
   "body_too_large",

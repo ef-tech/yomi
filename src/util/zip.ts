@@ -67,6 +67,28 @@ export function crc32(data: Uint8Array): number {
   return (c ^ 0xffff_ffff) >>> 0;
 }
 
+/**
+ * zip のエントリ名として安全か。
+ *
+ * APPNOTE 4.4.17.1 は「path はドライブレターやデバイス名を含んではならず、先頭の
+ * スラッシュも不可。区切りは必ず forward slash」と定めている。**それをそのまま検査する。**
+ *
+ * `/` だけを見ていると **Windows で展開したときに外へ書き出せる**:
+ *
+ * - `..\..\evil.exe` —— `split("/")` では 1 セグメントなので `..` 判定に当たらない
+ * - `C:\evil.exe` —— ドライブ直下へ書き出される
+ *
+ * yomi は POSIX でしか動かないが、**エントリ名は利用者の Markdown 由来**で、
+ * `C:\evil.png` というファイル名は POSIX では合法。作った zip が Windows で
+ * 展開される可能性がある以上、ここで落とす。
+ */
+function isSafeEntryName(name: string): boolean {
+  if (!name || name.startsWith("/")) return false;
+  if (name.includes("\\")) return false; // 区切りは forward slash だけ
+  if (/^[A-Za-z]:/.test(name)) return false; // ドライブレター
+  return !name.split("/").includes("..");
+}
+
 /** zip に入れる 1 件。`name` は zip 内のパス（`/` 区切り、`..` を含まないこと）。 */
 export interface ZipEntry {
   name: string;
@@ -118,7 +140,7 @@ export function createZip(entries: readonly ZipEntry[]): Uint8Array {
     // **エントリ名を検証する。** `..` を含む名前は展開時に外へ書き出せてしまう（zip slip）。
     // 呼び出し側が root 相対パスを渡す約束だが、**ここでも弾く**（この関数だけを見て安全と
     // 言えるようにする。将来ほかの用途で使われたときに約束が伝わらない）
-    if (!e.name || e.name.startsWith("/") || e.name.split("/").includes("..")) {
+    if (!isSafeEntryName(e.name)) {
       throw new RangeError(`zip のエントリ名が不正です: ${JSON.stringify(e.name)}`);
     }
     if (seen.has(e.name)) {
@@ -179,7 +201,10 @@ export function createZip(entries: readonly ZipEntry[]): Uint8Array {
   const centralStart = w.offset;
   for (const [i, e] of prepared.entries()) {
     w.u32(0x0201_4b50); // セントラルディレクトリ signature
-    w.u16(20); // version made by
+    // **上位バイトはホストシステム。** 3 = UNIX。下の external attributes を
+    // パーミッションとして読ませるにはここを UNIX にする必要がある
+    // （0 = FAT のままだと、仕様上は下位バイトの DOS 属性として読まれる）
+    w.u16((3 << 8) | 20); // version made by: UNIX / 2.0
     w.u16(20); // version needed to extract
     w.u16(FLAG_UTF8);
     w.u16(METHOD_STORE);
@@ -194,7 +219,7 @@ export function createZip(entries: readonly ZipEntry[]): Uint8Array {
     w.u16(0); // disk number start
     w.u16(0); // internal file attributes
     // 外部属性: 0644 を上位 16bit に置く（Unix の展開ツールがパーミッションとして読む）
-    w.u32(0o100644 << 16);
+    w.u32((0o100644 << 16) >>> 0);
     // biome-ignore lint/style/noNonNullAssertion: offsets は同じループで同数積んである
     w.u32(offsets[i]!);
     w.raw(e.name);
