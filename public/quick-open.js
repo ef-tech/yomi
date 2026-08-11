@@ -19,8 +19,8 @@
  */
 
 /**
- * @typedef {{ type: "file" | "dir", path: string, children?: QuickOpenTreeNode[] }} QuickOpenTreeNode
- *   `/api/tree` が返すノード
+ * @typedef {import("./api-types.js").TreeNodeLike} QuickOpenTreeNode
+ *   走査に要る最小の形（型の正本は `api-types.js`）。`name` は読まないので要求しない
  * @typedef {{ path: string, positions: number[] }} QuickOpenHit
  *   `path` はルートからの相対パス、`positions` はクエリ文字が一致したコードポイント位置
  *   （クエリが空なら空配列）
@@ -41,10 +41,10 @@ export function collectFilePaths(node) {
   const walk = (n) => {
     if (!n) return;
     if (n.type === "file") {
-      if (n.path) out.push(n.path);
+      out.push(n.path);
       return;
     }
-    for (const child of n.children ?? []) walk(/** @type {typeof n} */ (child));
+    for (const child of n.children ?? []) walk(child);
   };
   walk(node);
   return out;

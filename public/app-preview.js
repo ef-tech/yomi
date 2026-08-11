@@ -13,7 +13,7 @@
  * Mermaid を初期化し直して再描画する必要があるため (描画と不可分)。
  */
 
-import { errorText, fetchJson, THEME_MODES, VIEW_MODES } from "./app-context.js";
+import { errorText, fetchJson, messageOf, THEME_MODES, VIEW_MODES } from "./app-context.js";
 import { t } from "./i18n.js";
 import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
 import { prefs } from "./prefs.js";
@@ -73,7 +73,7 @@ export function createPreview(ctx) {
       await mermaid.run({ nodes });
     } catch (err) {
       console.error("Mermaid render error:", err);
-      ctx.setStatus("error", t("status.mermaidError", { msg: errorText(err) }));
+      ctx.setStatus("error", t("status.mermaidError", { msg: messageOf(err) }));
     }
   }
 
@@ -306,6 +306,7 @@ export function createPreview(ctx) {
     target.disabled = true;
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

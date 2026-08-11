@@ -20,7 +20,10 @@ export function createEditor(ctx) {
   const { els, state } = ctx;
 
   /**
-   * @typedef {{ path: string, raw: string, html: string, sha?: string | null }} FilePayload
+   * 409 の応答。**`raw` は null になりうる**（保存中にサーバ側でファイルが消えた場合）。
+   * 下の `serverGone` 判定がこれを見ている。
+   *
+   * @typedef {import("./api-types.js").ConflictPayload} FilePayload
    */
 
   /** @type {FilePayload | null} 409 で受け取ったサーバ側スナップショット (取り込み時に使う)。 */
@@ -142,6 +145,7 @@ export function createEditor(ctx) {
     if (!force && state.currentSha) payload.baseSha = state.currentSha;
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,7 +173,7 @@ export function createEditor(ctx) {
     } catch (err) {
       const e = /** @type {import("./app-context.js").ApiError} */ (err);
       if (e.status === 409 && e.payload) {
-        showConflict(/** @type {FilePayload} */ (/** @type {unknown} */ (e.payload)), body);
+        showConflict(/** @type {FilePayload} */ (e.payload), body);
         ctx.setStatus("error", t("status.conflict"));
       } else {
         ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
@@ -383,7 +387,7 @@ export function createEditor(ctx) {
     if (!conflictServerSnapshot) return;
     // 再入すると戻り先がダイアログ内の要素で上書きされ、閉じたときの復帰が壊れる
     if (!els.conflictDiff.hidden) return;
-    // 戻す先は要素。`instanceof` は実行時チェックを足すので使わない (i18n.js 参照)
+    // 戻す先は要素。`instanceof` は実行時チェックを足すので使わない (理由は i18n.js)
     conflictDiffReturnFocus = /** @type {HTMLElement | null} */ (document.activeElement);
     els.conflictDiffNotice.hidden = true;
     els.conflictDiffNotice.textContent = "";

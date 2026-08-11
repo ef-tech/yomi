@@ -151,7 +151,7 @@ export function createQuickOpen(ctx) {
     if (!els.quickOpen.hidden) return;
     // 閉じたときにフォーカスを戻す先を覚えておく (キーボード利用者が位置を失わないように)
     // `activeElement` は `Element | null`。戻す先は要素なので型だけで絞る
-    // (`instanceof` は実行時チェックを足してしまう。i18n.js の applyI18n 参照)
+    // (`instanceof` は実行時チェックを足してしまう。理由は i18n.js の applyI18n)
     state.quickOpenReturnFocus = /** @type {HTMLElement | null} */ (document.activeElement);
     els.quickOpen.hidden = false;
     els.quickOpenInput.value = "";

@@ -14,7 +14,7 @@
  * `ctx.preview`、ツリーの選択表示は `ctx.tree`** に委ねる。
  */
 
-import { errorText, fetchJson, sanitize } from "./app-context.js";
+import { errorText, fetchJson, messageOf, sanitize } from "./app-context.js";
 import { t } from "./i18n.js";
 import {
   isAnchor,
@@ -51,7 +51,7 @@ export function createDocument(ctx) {
   /* ===== 読み込みと反映 ===== */
 
   /**
-   * @typedef {{ type: "file" | "dir", name?: string, path: string, children?: TreeNode[] }} TreeNode
+   * @typedef {import("./api-types.js").TreeNode} TreeNode
    * @param {TreeNode} node
    * @returns {string | null}
    */
@@ -80,10 +80,12 @@ export function createDocument(ctx) {
 
   /**
    * @param {string} path
-   * @returns {Promise<any>}
+   * @returns {Promise<import("./api-types.js").FileResponse>}
    */
   async function loadFile(path) {
-    return await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+    /** @type {import("./api-types.js").FileResponse} */
+    const data = await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+    return data;
   }
 
   /**
@@ -298,7 +300,7 @@ export function createDocument(ctx) {
   function wireLinkNavigation() {
     els.preview.addEventListener("click", (ev) => {
       // `EventTarget` は `Element` とは限らないが、preview 内の click は常に要素。
-      // **`instanceof` で絞らない** (実行時チェックを足すと挙動が変わる。i18n.js 参照)
+      // **`instanceof` で絞らない** (実行時チェックを足すと挙動が変わる。理由は i18n.js)
       const a = /** @type {Element} */ (ev.target).closest("a");
       if (!a || !els.preview.contains(a)) return;
       const href = a.getAttribute("href");
@@ -399,7 +401,7 @@ export function createDocument(ctx) {
         flashCopied();
         ctx.setStatus("ok", t("status.pathCopied", { path: state.currentPath }));
       } catch (err) {
-        ctx.setStatus("error", t("status.copyFailed", { msg: errorText(err) }));
+        ctx.setStatus("error", t("status.copyFailed", { msg: messageOf(err) }));
       }
     });
   }

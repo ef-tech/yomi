@@ -32,6 +32,7 @@ export function createWebSocketClient(ctx) {
         // 編集中にライブリロードが来た = 外部で書き換えられた可能性。
         // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
         try {
+          /** @type {import("./api-types.js").ConflictPayload} */
           const latest = await fetchJson(`/api/file?path=${encodeURIComponent(changedPath)}`);
           ctx.editor.showConflict(latest, ctx.els.editor.value);
           ctx.setStatus("error", t("status.fileUpdatedElsewhere"));
@@ -52,6 +53,7 @@ export function createWebSocketClient(ctx) {
 
     if (msg.type === "tree" || msg.type === "changed") {
       try {
+        /** @type {import("./api-types.js").TreeNode} */
         const tree = await fetchJson("/api/tree");
         ctx.tree.renderTree(tree);
         if (state.currentPath) {

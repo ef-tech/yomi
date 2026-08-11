@@ -80,8 +80,8 @@ export function createMobileUi(ctx) {
     document.addEventListener("click", (ev) => {
       if (els.overflowMenu.hidden) return;
       // `EventTarget` は `Node` とは限らないが、click の実物は常に要素。
-      // **`instanceof` で絞らない** —— 実行時チェックを足すと挙動が変わり、
-      // 特性テストのハーネスには `Node` グローバルも無い (i18n.js の applyI18n 参照)
+      // **`instanceof` で絞らない** —— 実行時チェックを足すと挙動が変わる
+      // (理由の詳細は i18n.js の applyI18n)
       const target = /** @type {Node | null} */ (ev.target);
       if (els.overflowMenu.contains(target)) return;
       if (els.overflowBtn.contains(target)) return;
@@ -167,8 +167,7 @@ export function createMobileUi(ctx) {
         startY = t.clientY;
         const open = els.sidebar.classList.contains("is-open");
         startedFromEdge = !open && t.clientX <= SWIPE_EDGE_PX;
-        startedInDrawer =
-          open && els.sidebar.contains(ev.target instanceof Node ? ev.target : null);
+        startedInDrawer = open && els.sidebar.contains(/** @type {Node | null} */ (ev.target));
       },
       { passive: true },
     );

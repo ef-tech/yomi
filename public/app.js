@@ -111,6 +111,7 @@ async function init() {
   seedNavCounter(window.history.state?.navIndex);
 
   try {
+    /** @type {import("./api-types.js").TreeNode} */
     const tree = await fetchJson("/api/tree");
     ctx.tree.renderTree(tree);
     setStatus("ok", t("status.fileCount", { count: state.fileButtons.size }));

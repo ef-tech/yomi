@@ -420,10 +420,14 @@ export function t(key, params) {
  *
  * **型アサーションで絞る。`instanceof` は使わない。** `querySelectorAll` は `Element` を返すが
  * `dataset` / `title` は `HTMLElement`、`placeholder` は input / textarea にしかない。
- * ただし `instanceof HTMLElement` は**実行時チェックを足すことになり挙動が変わる** ——
- * 特性テストのハーネスは jsdom の `window` / `document` だけをグローバルに置いており、
- * `HTMLElement` などのコンストラクタは定義されていないので `ReferenceError` になる
- * （実際に踏んで 179 テストが落ちた）。セレクタが保証している型を型だけで示す。
+ * ただし `instanceof` は**実行時チェックを足すことになり、この Issue の前提（外部挙動を
+ * 変えない）を破る**。元のコードは無条件に参照しており、絞り込みに漏れた要素は
+ * 従来「例外になる」ではなく「そのまま処理される」。
+ *
+ * 加えて**特性テストのハーネスに無いコンストラクタがある**。`tests/helpers/app-harness.ts` は
+ * `Node` と `HTMLElement` はグローバルに置くが、**`HTMLInputElement` /
+ * `HTMLTextAreaElement` は置いていない** —— ここを `instanceof HTMLInputElement` で
+ * 書いて `ReferenceError` になり、179 テストが落ちた。
  *
  * @param {Document | HTMLElement} [root]
  * @returns {void}

@@ -52,10 +52,10 @@ export function findHeadingLines(sourceText) {
  */
 export function mapScrollTop(scrollTop, pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return scrollTop;
-  const first = pairs[0];
-  const last = pairs[pairs.length - 1];
-  // 長さを見た後なので実在するが、`noUncheckedIndexedAccess` の型に合わせて明示する
-  if (!first || !last) return scrollTop;
+  // **公開の純関数なので、穴あき配列を渡されたら従来どおり落ちる。**
+  // 早期 return にすると、壊れた入力が「同期不能」に化けて気づけない
+  const first = /** @type {{ from: number, to: number }} */ (pairs[0]);
+  const last = /** @type {{ from: number, to: number }} */ (pairs[pairs.length - 1]);
 
   if (scrollTop <= first.from) {
     if (first.from <= 0) return first.to;
@@ -66,9 +66,8 @@ export function mapScrollTop(scrollTop, pairs) {
     return last.to;
   }
   for (let i = 0; i < pairs.length - 1; i++) {
-    const a = pairs[i];
-    const b = pairs[i + 1];
-    if (!a || !b) continue;
+    const a = /** @type {{ from: number, to: number }} */ (pairs[i]);
+    const b = /** @type {{ from: number, to: number }} */ (pairs[i + 1]);
     if (scrollTop >= a.from && scrollTop < b.from) {
       const span = b.from - a.from;
       if (span === 0) return a.to;

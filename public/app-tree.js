@@ -52,7 +52,7 @@ export function createTree(ctx) {
   }
 
   /**
-   * @typedef {{ type: "file" | "dir", name: string, path: string, children?: TreeNode[] }} TreeNode
+   * @typedef {import("./api-types.js").TreeNode} TreeNode
    * @param {TreeNode} node
    * @returns {HTMLLIElement}
    */
@@ -259,12 +259,14 @@ export function createTree(ctx) {
     closeNewFileInput();
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const created = await fetchJson("/api/file/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
       // 自己保存マークで watcher は発火しないため、自分でツリーを更新する
+      /** @type {import("./api-types.js").TreeNode} */
       const tree = await fetchJson("/api/tree");
       renderTree(tree);
       const moved = await ctx.document.navigateTo(created.path, { history: "push" });

@@ -32,11 +32,14 @@ const banner = [
   " */",
 ].join("\n");
 
-// **生成物 (`*.js`) だけを消す。** ディレクトリごと消すと、手で置いた型定義 (`*.d.ts`) まで
+// **手書きの型定義 (`*.d.ts`) を残して、それ以外を消す。** ディレクトリごと消すと型定義まで
 // 巻き添えになる —— それらは bundle の型を `tsc` へ渡すために必要で (Issue #79)、
 // `bun run build` のたびに消えると CI の `git diff --exit-code -- public/vendor` が落ちる。
 for (const name of await readdir(OUT_DIR).catch(() => [] as string[])) {
-  if (name.endsWith(".js")) await rm(join(OUT_DIR, name), { force: true });
+  // **「`.d.ts` 以外」で判定する。** 「`.js` だけ消す」にすると、Bun.build が想定外の
+  // 拡張子 (`.map` 等) を吐いたときに削除も検出もされず、下の「想定外のファイル」検査を
+  // すり抜ける (新規ファイルは untracked なので CI の `git diff --exit-code` にも出ない)。
+  if (!name.endsWith(".d.ts")) await rm(join(OUT_DIR, name), { force: true });
 }
 
 const result = await Bun.build({
@@ -60,9 +63,9 @@ if (!result.success) {
 // 含まれるが、それらは fetch ではない。ここでは「URL からのモジュール読み込み」と
 // 「既知 JS CDN ホスト」だけを検出する (これが Issue #52 の狙い = jsDelivr 依存の排除)。
 // 実行時は CSP `script-src 'self'` が最終防壁として外部 script を遮断する。
-// **生成物 (`*.js`) だけを検査対象にする。** 同じディレクトリに手書きの型定義 (`*.d.ts`) が
-// 同居しているが (Issue #79)、それは bundle ではないので鮮度検証にも想定外判定にも掛けない。
-const files = (await readdir(OUT_DIR)).filter((f) => f.endsWith(".js"));
+// **手書きの型定義 (`*.d.ts`) だけを検査対象から外す** (Issue #79)。それ以外は
+// すべて生成物とみなして検査に掛ける —— 想定外の拡張子が出たら気づきたい。
+const files = (await readdir(OUT_DIR)).filter((f) => !f.endsWith(".d.ts"));
 const CDN_HOSTS = /\b(jsdelivr\.net|unpkg\.com|esm\.sh|esm\.run|cdnjs\.cloudflare|skypack\.dev)/;
 const URL_MODULE_LOAD = /(?:\bimport\s*\(\s*|\bfrom\s*)["'`]https?:\/\//;
 const offenders: string[] = [];

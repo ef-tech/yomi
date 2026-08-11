@@ -57,19 +57,25 @@ export function sanitize(html) {
 /**
  * サーバの応答を載せた fetch エラー。`errorText` が `code` を翻訳キーに対応づける。
  *
- * @typedef {Error & { status?: number, code?: string, payload?: Record<string, unknown> }} ApiError
+ * @typedef {Error & { status?: number, code?: string, payload?: any }} ApiError
  */
 
 /**
  * fetch して JSON を返す。非 2xx はサーバの error / code を載せた Error を投げる。
  *
+ * **戻り値の形は呼び出し側が指定する。** サーバの応答は URL ごとに違うので、ここで
+ * 1 つに決められない。型は `public/api-types.js` に集めてあるので
+ * `fetchJson(/** @type {...} *\/ ...)` ではなく `await fetchJson<FileResponse>(...)`
+ * 相当を JSDoc の型引数で書く（呼び出し側の `@type` で受ける）。
+ *
+ * @template [T=unknown]
  * @param {string} url
  * @param {RequestInit} [options]
- * @returns {Promise<any>}
+ * @returns {Promise<T>}
  */
 export async function fetchJson(url, options) {
   const res = await fetch(url, options);
-  /** @type {Record<string, any>} */
+  /** @type {any} */
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = /** @type {ApiError} */ (new Error(data.error ?? `HTTP ${res.status}`));
@@ -79,6 +85,21 @@ export async function fetchJson(url, options) {
     throw err;
   }
   return data;
+}
+
+/**
+ * 例外から表示用の文字列を取り出す。
+ *
+ * **`errorText` と使い分ける。** あちらは**サーバ API の `code` を翻訳キーへ引き当てる**
+ * もので、クリップボードの `DOMException` や Mermaid のパースエラーには対応表が無い。
+ * 非 fetch 経路をあちらへ流すと「fetch のエラー整形器」の守備範囲がぼやける。
+ *
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function messageOf(err) {
+  const message = /** @type {{ message?: unknown } | null | undefined} */ (err)?.message;
+  return typeof message === "string" ? message : String(err);
 }
 
 /**
@@ -110,19 +131,18 @@ export function errorText(err) {
  *
  * 要素が実際に無ければ従来どおり最初の参照で TypeError になる。
  *
- * @template {HTMLElement} [T=HTMLElement]
  * @param {string} id
- * @returns {T}
+ * @returns {HTMLElement}
  */
-const byId = (id) => /** @type {T} */ (document.getElementById(id));
+const byId = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 
 /**
  * `querySelectorAll` の結果を配列で返す。
- * @template {Element} [T=HTMLElement]
  * @param {string} selector
- * @returns {T[]}
+ * @returns {HTMLElement[]}
  */
-const allOf = (selector) => /** @type {T[]} */ (Array.from(document.querySelectorAll(selector)));
+const allOf = (selector) =>
+  /** @type {HTMLElement[]} */ (Array.from(document.querySelectorAll(selector)));
 
 /** DOM 要素の参照をまとめて引く。**boot ごとに 1 度だけ呼ぶこと** (上記のとおり)。 */
 export function createElements() {
@@ -146,6 +166,9 @@ export function createElements() {
     // ⋮ overflow menu (Issue #30, スマホ専用)
     overflowBtn: byId("overflow-btn"),
     overflowMenu: byId("overflow-menu"),
+    // **非 null。** `index.html` に常にあり、`app-mobile.js` は無条件に
+    // `addEventListener` している。`app-editor.js` に残る `if (els.overflowEdit)` は
+    // その事実より古い防御で、いまは常真（消すのは挙動変更なのでこの Issue では触らない）
     overflowEdit: /** @type {HTMLButtonElement} */ (byId("overflow-edit")),
     overflowQuickOpen: byId("overflow-quick-open"),
     // クイックオープン (Issue #54)

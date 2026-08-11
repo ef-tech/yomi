@@ -82,9 +82,9 @@ function lcsDiff(a, b) {
   /** @type {Int32Array[]} */
   const table = [];
   for (let i = 0; i <= n; i++) table.push(new Int32Array(m + 1));
-  // **添字は範囲内なので必ず実在する。** `noUncheckedIndexedAccess` の型を満たすために
-  // 非 null アサーションの代わりにローカルへ受けて絞り込む（DP の内側なので回数が多く、
-  // ここでの `??` はホットループのコストになる）。
+  // **添字は範囲内なので必ず実在する。** `noUncheckedIndexedAccess` は**型キャストで満たす** ——
+  // 内側は最大 MAX_DIFF_LINES^2 = 400 万回まわるので、`??` や `Number()` のような
+  // 実行時の操作を足さない（キャストは型だけで、生成されるコードは元と同じ）。
   const at = (/** @type {number} */ i) => /** @type {Int32Array} */ (table[i]);
   const lineA = (/** @type {number} */ i) => /** @type {string} */ (a[i]);
   const lineB = (/** @type {number} */ j) => /** @type {string} */ (b[j]);
@@ -93,9 +93,9 @@ function lcsDiff(a, b) {
     const next = at(i + 1);
     for (let j = m - 1; j >= 0; j--) {
       row[j] =
-        lineA(i) === lineB(j)
-          ? Number(next[j + 1]) + 1
-          : Math.max(Number(next[j]), Number(row[j + 1]));
+        a[i] === b[j]
+          ? /** @type {number} */ (next[j + 1]) + 1
+          : Math.max(/** @type {number} */ (next[j]), /** @type {number} */ (row[j + 1]));
     }
   }
 
@@ -108,7 +108,7 @@ function lcsDiff(a, b) {
       out.push({ type: "equal", text: lineA(i) });
       i++;
       j++;
-    } else if (Number(at(i + 1)[j]) >= Number(at(i)[j + 1])) {
+    } else if (/** @type {number} */ (at(i + 1)[j]) >= /** @type {number} */ (at(i)[j + 1])) {
       out.push({ type: "del", text: lineA(i) });
       i++;
     } else {
@@ -234,7 +234,9 @@ export function collapseUnchanged(rows, context = 3) {
   /** @type {boolean[]} */
   const keep = new Array(rows.length).fill(false);
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i]?.type === "equal") continue;
+    // **公開の純関数なので、穴あき配列を渡されたら従来どおり落ちる。**
+    // `?.` で無言スキップにすると、壊れた入力が「差分なし」に化けて気づけない
+    if (/** @type {DiffRow} */ (rows[i]).type === "equal") continue;
     keep[i] = true;
     for (let j = Math.max(0, i - span); j <= Math.min(rows.length - 1, i + span); j++) {
       keep[j] = true;
@@ -251,10 +253,9 @@ export function collapseUnchanged(rows, context = 3) {
     }
   };
   for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (keep[i] && row) {
+    if (keep[i]) {
       flushSkip();
-      out.push(row);
+      out.push(/** @type {DiffRow} */ (rows[i]));
     } else {
       skipped++;
     }
