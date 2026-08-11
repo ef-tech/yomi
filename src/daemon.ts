@@ -141,8 +141,20 @@ export async function assertPortIsFree(
  *
  * **例外ではなく値で返す形にしてある。** 以前は `describeServeFailure` が
  * `assertPortIsFree` を呼び直して**「throw されること」に依存**していた。判定に
- * 非 throw の分岐が 1 本増えるだけで（#108 が触る予定の場所がまさにここ）、
- * 黙って「確保できませんでした」に落ちる —— 例外も出ずテストも落ちない壊れ方をする。
+ * 非 throw の分岐が 1 本増えるだけで、黙って「確保できませんでした」に落ちる
+ * —— 例外も出ずテストも落ちない壊れ方をする。
+ *
+ * ## 残る誤り (Issue #108)
+ *
+ * `isThisInstance` は pid の生存とポートの listen を**独立に**見るので、
+ * 「残骸記録の pid が再利用されて生きている」＋「**無関係な第三者**がそのポートを
+ * 掴んでいる」が同時に成り立つと、`pid <無関係な pid>` で「yomi が起動しています」と
+ * 誤って名指しする。とくに `describeServeFailure` の経路は**ポートが必ず誰かに
+ * 掴まれている状態**で呼ばれるので、この誤認が起きやすい。
+ *
+ * `isAlive` 単独だった頃も同じ誤答なので**悪化はしていない**。案内どおり
+ * `yomi down --port <n>` を打てば、`stopInstance` が `isThisInstance` false で
+ * **記録だけ消して無関係なプロセスは巻き添えにしない**ので復旧できる。
  */
 export async function describePortInUse(
   host: string,
@@ -150,7 +162,14 @@ export async function describePortInUse(
   paths: RegistryPaths,
 ): Promise<string | null> {
   const existing = (await readInstances(paths)).find((r) => r.port === port);
-  if (existing && isAlive(existing.pid)) {
+  // **判定は list / down と同じ基準（pid 生存 + 記録したポートで listen）(Issue #108)。**
+  // pid の生存だけを見ていたので、**残骸記録の pid が別プロセスに再利用されている**と、
+  // ポートが空いていても拒否していた。残骸は SIGHUP や SIGKILL で普通に発生する
+  // （`installShutdownHandlers` は SIGINT / SIGTERM しか捕まえない）。
+  //
+  // その状態は「`yomi list` には出ないのに起動できない」という食い違いになる。
+  // #94 が事前検査をフォアグラウンドからも呼ぶようにしたことで露出した。
+  if (existing && (await isThisInstance(existing))) {
     return (
       `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
       `停止するには yomi down --port ${port}`
