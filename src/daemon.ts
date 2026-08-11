@@ -129,16 +129,112 @@ export async function assertPortIsFree(
   port: number,
   paths: RegistryPaths,
 ): Promise<void> {
+  const reason = await describePortInUse(host, port, paths);
+  if (reason !== null) throw new Error(reason);
+}
+
+/**
+ * **そのポートが使えない理由を 1 行で返す。使えるなら `null`** (Issue #107)。
+ *
+ * 文面の正本。{@link assertPortIsFree} は「非 null なら throw」するだけの薄い皮で、
+ * {@link describeServeFailure} はこれをそのまま返す。
+ *
+ * **例外ではなく値で返す形にしてある。** 以前は `describeServeFailure` が
+ * `assertPortIsFree` を呼び直して**「throw されること」に依存**していた。判定に
+ * 非 throw の分岐が 1 本増えるだけで、黙って「確保できませんでした」に落ちる
+ * —— 例外も出ずテストも落ちない壊れ方をする。
+ *
+ * ## 残る誤り (Issue #108)
+ *
+ * `isThisInstance` は pid の生存とポートの listen を**独立に**見るので、
+ * 「残骸記録の pid が再利用されて生きている」＋「**無関係な第三者**がそのポートを
+ * 掴んでいる」が同時に成り立つと、`pid <無関係な pid>` で「yomi が起動しています」と
+ * 誤って名指しする。とくに `describeServeFailure` の経路は**ポートが必ず誰かに
+ * 掴まれている状態**で呼ばれるので、この誤認が起きやすい。
+ *
+ * `isAlive` 単独だった頃も同じ誤答なので**悪化はしていない**。**が、案内どおり
+ * `yomi down --port <n>` を打つと、`stopInstance` からも `isThisInstance` が true に
+ * 見えるので、無関係なプロセスへ SIGTERM が飛ぶ**（実測。`yomi list` にも同じ理由で並ぶ）。
+ * つまり list / 起動検査 / down が**揃って同じ間違いをする**。→ **#132**
+ *
+ * ここを直すには「そのポートで listen している = yomi 本人」という同定そのものを
+ * 変える必要があり、`stopInstance` も巻き込むので #108 のスコープを超える。
+ */
+export async function describePortInUse(
+  host: string,
+  port: number,
+  paths: RegistryPaths,
+): Promise<string | null> {
   const existing = (await readInstances(paths)).find((r) => r.port === port);
-  if (existing && isAlive(existing.pid)) {
-    throw new Error(
+  // **判定は list / down と同じ基準（pid 生存 + 記録したポートで listen）(Issue #108)。**
+  // pid の生存だけを見ていたので、**残骸記録の pid が別プロセスに再利用されている**と、
+  // ポートが空いていても拒否していた。残骸は SIGHUP や SIGKILL で普通に発生する
+  // （`installShutdownHandlers` は SIGINT / SIGTERM しか捕まえない）。
+  //
+  // その状態は「`yomi list` には出ないのに起動できない」という食い違いになる。
+  // #94 が事前検査をフォアグラウンドからも呼ぶようにしたことで露出した。
+  if (existing && (await isThisInstance(existing))) {
+    return (
       `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
-        `停止するには yomi down --port ${port}`,
+      `停止するには yomi down --port ${port}`
     );
   }
   if (!(await isPortAvailable(host, port))) {
-    throw new Error(`ポート ${port} は既に使用されています。別のポートを指定してください`);
+    return `ポート ${port} は既に使用されています。別のポートを指定してください`;
   }
+  return null;
+}
+
+/**
+ * `Bun.serve` の失敗を、{@link describePortInUse} と同じ文面へ変換する (Issue #107)。
+ *
+ * ## なぜ要るか
+ *
+ * #94 が事前検査を入れたが、**検査と `Bun.serve` の間には隙間がある**。その窓で
+ * 別プロセスがポートを掴むと、throw が `main().catch` へ流れて**ソースの抜粋つき
+ * スタックトレース**が出る（#94 以前の出力に戻る）。事前検査を通らない経路
+ * （切り離された子＝`YOMI_DETACHED=1`）でも同じことが起きる。
+ *
+ * 事前検査は「レジストリ由来の案内を先出しする」役割に純化し、**最後の砦はここ**にする。
+ *
+ * **レジストリ読み込みと bind 試行を行う**（名前から想像するより重い）。
+ *
+ * @returns 利用者向けの 1 行。**ポート衝突でなければ `null`**（呼び出し元はそのまま
+ *   投げ直すこと —— 別の原因を「ポートが使われています」に化けさせない）
+ */
+export async function describeServeFailure(
+  err: unknown,
+  host: string,
+  port: number,
+  paths: RegistryPaths,
+): Promise<string | null> {
+  if (!isAddrInUse(err)) return null;
+  const reason = await describePortInUse(host, port, paths);
+  if (reason !== null) return reason;
+  // **調べたら空いていた** = EADDRINUSE を受けてから相手が消えた。
+  // もう「使用中」とは言えないので、そう書かずに再試行を促す
+  return `ポート ${port} を確保できませんでした。もう一度お試しください`;
+}
+
+/**
+ * bind に失敗したことを示すエラーか。
+ *
+ * **「ポートが埋まっている」とまでは言えない。** Bun は EADDRNOTAVAIL
+ * （その `--host` が自分のアドレスでない）も `EADDRINUSE` に寄せてくるので、
+ * ここが true でも原因がポートとは限らない。文面の精度は
+ * {@link describePortInUse} 側の判定に依存する。
+ *
+ * `code` を第一の根拠にしつつ、**メッセージも見る** —— ランタイムが `code` を
+ * 載せない形に変わると、黙ってスタックトレースに戻る（この Issue が直したかったもの）。
+ * **Bun の現行メッセージに `EADDRINUSE` の文字列は入っていない**（実測:
+ * `Failed to start server. Is port 39777 in use?`）ので、その言い回しも拾う。
+ */
+function isAddrInUse(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  if ((err as { code?: unknown }).code === "EADDRINUSE") return true;
+  const message = (err as { message?: unknown }).message;
+  if (typeof message !== "string") return false;
+  return message.includes("EADDRINUSE") || /is port \d+ in use/i.test(message);
 }
 
 function childArgs(opts: StartDetachedOptions): string[] {
