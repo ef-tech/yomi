@@ -58,7 +58,11 @@ export function toChokidarDepth(treeDepth: number | undefined): number | undefin
  * 走査・監視の前段で弾くため、Linux で `fs.inotify.max_user_watches` を枯渇させて
  * ENOSPC を招くことがない (再帰監視が node_modules 全体に watch を張る問題の回避)。
  * ディレクトリの作成・リネーム・削除、エディタのアトミック保存 (swap+rename) も
- * chokidar 側が一貫して扱う。
+ * chokidar 側が扱う（外部エディタの保存は未測定）。
+ *
+ * **別の話として、書き込みと rename が近すぎると chokidar が取りこぼす。**
+ * `writeFileAtomic` (Issue #101) の上書きは 5 回に 4 回ほど届かない (Issue #119)。
+ * 計測は `scripts/probe-watcher-atomic.ts`。
  *
  * onChange の kind:
  * - "rename": ファイルの追加/削除 (ツリー構造が変化) → クライアントはツリーを再取得
