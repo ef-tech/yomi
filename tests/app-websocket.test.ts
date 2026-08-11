@@ -76,7 +76,13 @@ describe("changed 通知", () => {
     expect(h.historyCalls).toHaveLength(1);
   });
 
-  test("表示していないファイルの変更ではツリーだけ取り直す", async () => {
+  // **`changed` はツリーを取り直さない (Issue #84)。**
+  //
+  // 以前は取り直していたが、**内容が変わっただけで構造は変わっていない**ので無駄だった。
+  // 10,000 ファイルでは 1 イベントあたり 216ms + 724 KiB 掛かっていた
+  // （実測は `docs/bench/tree-baseline.md`）。構造が変わるのは `rename` 由来の
+  // `tree` イベントだけで、サーバはそれを型で区別して送っている。
+  test("表示していないファイルの変更では何も取り直さない", async () => {
     h = await bootApp();
     const fileBefore = fileGets(h).length;
     const treeBefore = treeGets(h).length;
@@ -85,6 +91,47 @@ describe("changed 通知", () => {
     await h.flush(6);
 
     expect(fileGets(h)).toHaveLength(fileBefore);
+    expect(treeGets(h)).toHaveLength(treeBefore);
+  });
+
+  // **再接続したらツリーを取り直す (Issue #84)。**
+  //
+  // `changed` で毎回取り直すのをやめたぶん、取りこぼしの自動復旧が無くなった。
+  // 切れている間の追加・削除は誰も拾わないし、chokidar 自体も取りこぼす (#119)。
+  test("再接続したらツリーを取り直す", async () => {
+    h = await bootApp();
+    // **初回の `open` を先に起こす。** 実ブラウザでは接続が確立した時点で必ず発火するが、
+    // ハーネスは socket を作るだけで発火させない。ここを省くと、再接続時の `open` が
+    // 「1 回目」と見なされて取り直しが走らない
+    h.ws.dispatch("open", {});
+    await h.flush();
+    const before = treeGets(h).length;
+
+    // 切断すると `close` ハンドラが再接続をスケジュールする。
+    // **実タイマー 500ms（`WS_RETRY_INITIAL`）なので、新しい socket ができるまで待つ。**
+    // 固定 sleep にすると、遅いマシンで足りずに flaky になる
+    const socketsBefore = h.sockets.length;
+    h.ws.close();
+    const deadline = Date.now() + 3000;
+    while (h.sockets.length === socketsBefore && Date.now() < deadline) {
+      await h.flush(1);
+    }
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+
+    // 接続が確立したことをサーバ側から知らせる
+    h.ws.dispatch("open", {});
+    await h.flush(6);
+
+    expect(treeGets(h)).toHaveLength(before + 1);
+  });
+
+  test("ファイルの追加・削除 (tree) ではツリーを取り直す", async () => {
+    h = await bootApp();
+    const treeBefore = treeGets(h).length;
+
+    h.ws.emit({ type: "tree", path: "docs/new.md" });
+    await h.flush(6);
+
     expect(treeGets(h)).toHaveLength(treeBefore + 1);
   });
 

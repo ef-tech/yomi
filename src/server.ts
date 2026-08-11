@@ -52,6 +52,24 @@ export interface ServerHandle {
 
 export function createServer(config: ServerConfig): ServerHandle {
   const excludes = config.excludes ?? DEFAULT_EXCLUDES;
+
+  /**
+   * `/api/tree` の直列化済み応答 (Issue #84)。
+   *
+   * **毎回フルスキャンしていた。** 10,000 ファイルの環境では応答 34.7ms のうち
+   * **30.8ms が `scanMarkdownTree`** で、`JSON.stringify` は 0.8ms しかない
+   * （実測は `docs/bench/tree-diff-update.md`）。ツリーが変わるのは watcher が
+   * `rename` を拾ったときだけなので、そこまでは使い回せる。
+   *
+   * **直列化まで含めて持つ。** オブジェクトを持って毎回 `Response.json` すると
+   * `stringify` のぶんが残る。構造は変わらないので文字列で構わない。
+   *
+   * 常駐メモリは応答サイズぶん（10,000 ファイルで 724 KiB）。
+   */
+  let treeCache: string | null = null;
+  const invalidateTree = () => {
+    treeCache = null;
+  };
   const saveMark = new SaveMark();
 
   const server = Bun.serve({
@@ -66,13 +84,27 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/tree") {
-        return handleTree(config.rootDir, excludes, config.maxDepth);
+        if (treeCache === null) {
+          try {
+            // **成功したときだけ載せる。** 失敗を載せると、次に構造が変わるまで
+            // エラーを返し続ける（自力で復帰できない）
+            treeCache = await serializeTree(config.rootDir, excludes, config.maxDepth);
+          } catch (err) {
+            return Response.json({ error: (err as Error).message }, { status: 500 });
+          }
+        }
+        return new Response(treeCache, { headers: JSON_HEADERS });
       }
 
       if (url.pathname === "/api/file") {
         if (req.method === "GET") {
           return handleFileRead(config.rootDir, url.searchParams.get("path"), excludes);
         }
+        // **書き込みは watcher を待たずに捨てる (Issue #84)。** 保存で新しいパスができると
+        // ツリーが変わるが (`writeFileAtomic` は存在しないパスにも書ける)、watcher の
+        // 通知は debounce のぶん遅れる。その間に `/api/tree` を引かれると
+        // **できたはずのファイルが無いツリー**を返してしまう
+        invalidateTree();
         if (req.method === "POST") {
           if (!checkOrigin(req))
             return forbidden("Origin が許可されていません", "origin_forbidden");
@@ -85,6 +117,9 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/file/create") {
+        // 作成直後にクライアントが `/api/tree` を引く (`app-tree.js` の `submitNewFile`)。
+        // watcher の到着を待つと、作ったファイルが出ないツリーを返す
+        invalidateTree();
         if (req.method === "POST") {
           if (!checkOrigin(req))
             return forbidden("Origin が許可されていません", "origin_forbidden");
@@ -139,6 +174,9 @@ export function createServer(config: ServerConfig): ServerHandle {
     watcher = createWatcher(
       config.rootDir,
       (path, kind) => {
+        // **構造が変わったときだけ捨てる (Issue #84)。** 内容の変更 (`change`) は
+        // ツリーの形に影響しないので、キャッシュはそのまま使える
+        if (kind === "rename") invalidateTree();
         server.publish(
           WS_TOPIC,
           JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
@@ -229,18 +267,22 @@ async function serveAsset(name: string): Promise<Response> {
   return new Response(file, { headers: { "Content-Type": type } });
 }
 
-async function handleTree(
+/**
+ * ツリーを直列化して返す。**キャッシュに載せるため文字列で返す** (Issue #84)。
+ *
+ * `Response` を返して呼び出し側で `clone().text()` すると、body を 2 度読むぶんの
+ * コピーが要る。ここは構造が変わらないので文字列のまま持ち回るほうが素直。
+ */
+async function serializeTree(
   rootDir: string,
   excludes: ReadonlySet<string>,
   maxDepth?: number,
-): Promise<Response> {
-  try {
-    const tree = await scanMarkdownTree(rootDir, { excludes, maxDepth });
-    return Response.json(tree);
-  } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 500 });
-  }
+): Promise<string> {
+  const tree = await scanMarkdownTree(rootDir, { excludes, maxDepth });
+  return JSON.stringify(tree);
 }
+
+const JSON_HEADERS = { "Content-Type": "application/json;charset=utf-8" } as const;
 
 /**
  * 除外配下へのアクセスを拒否するレスポンス (Issue #65)。
