@@ -1547,3 +1547,198 @@ describe("server - watcher が /api/tree のキャッシュを捨てる (Issue #
     expect(seen).toContain("b.md");
   });
 });
+
+// **500 応答が内部状態を漏らさない (Issue #99)。**
+//
+// FS のエラーメッセージは `EACCES: permission denied, open '/home/<user>/…/x.md'` の形で
+// **絶対パスを含む**。既定バインドは 127.0.0.1 なので外部到達は `--share` 明示時に限られるが、
+// `handleFileCreate` は同じ理由で既に汎用化しており、非対称だった。
+describe("server - 500 応答が生の FS エラーを返さない (Issue #99)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-500-"));
+    await writeFile(join(root, "ok.md"), "# ok\n");
+    // **uid に依存しない起こし方を使う。** `chmod 000` は root で効かないので、
+    // CI の実行ユーザ次第で「テストは通ったが何も検証していない」状態になる。
+    // EISDIR と ELOOP なら誰が走らせても同じ 500 に落ちる
+    await mkdir(join(root, "dir.md"));
+    await symlink(join(root, "loop-b.png"), join(root, "loop-a.png"));
+    await symlink(join(root, "loop-a.png"), join(root, "loop-b.png"));
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** 応答に絶対パスや errno が混ざっていないこと。 */
+  const assertNoLeak = (body: { error?: string; code?: string }) => {
+    expect(body.error).toBeTruthy();
+    expect(body.error).not.toContain(root);
+    expect(body.error).not.toContain(tmpdir());
+    expect(body.error).not.toMatch(/E[A-Z]{3,}/);
+  };
+
+  test("読み取りの 500 が汎用メッセージと code を返す", async () => {
+    // `dir.md` はディレクトリなので `readFile` が EISDIR で落ちる
+    const res = await fetch(`${url}/api/file?path=dir.md`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("アセット配信の 500 が汎用メッセージと code を返す", async () => {
+    // symlink の循環 → ELOOP。EISDIR はアセット側では 400 に振り分けられるので使えない
+    const res = await fetch(`${url}/api/asset?path=loop-a.png`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("asset_failed");
+    assertNoLeak(body);
+  });
+
+  test("競合判定の読み取りが失敗しても汎用メッセージを返す", async () => {
+    // `baseSha` を渡すと現在の内容を読んで比較する。その読み取りが EISDIR で落ちる
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "dir.md", body: "x", baseSha: "dummy" }),
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("ハンドラを抜けた例外でも HTML のエラーページを返さない", async () => {
+    // **`fetch` の外へ throw が抜けると Bun の開発用エラーページ（HTML 約 70KB）が返る。**
+    // ソース断片・スタック・絶対パスが載るので、個別の catch を丁寧に書いても
+    // 1 箇所漏れれば台無しになる。実際 20KB の Markdown で `marked` が
+    // `RangeError: Maximum call stack size exceeded` を投げてここへ抜けていた。
+    //
+    // ここでは**応答の形**を固定する（ソースの綴りではなく）。
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "deep.md", body: ">".repeat(20_000) }),
+    });
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const text = await res.text();
+    expect(text).not.toContain("node_modules");
+    expect(text).not.toContain(root);
+    // 保存自体は成功しているので 200。描画に失敗しても「書けたのに 500」にはしない
+    expect(res.status).toBe(200);
+  });
+});
+
+// **並行保存でマークを壊さない (Issue #120)。**
+//
+// `saveMark` は「自分が書いた直後の sha」を覚えて、watcher のイベントを自己保存として
+// 抑止するためのもの。失敗時にパス単位で無条件に消していたので、同じファイルを
+// 2 つのリクエストが保存すると**後から来たほうのマークを先のリクエストの失敗が消して**いた。
+describe("server - 保存の失敗がマークを壊さない (Issue #120)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-savemark-"));
+    await writeFile(join(root, "a.md"), "# a\n");
+    // **保存を確実に失敗させる的。** 対象がディレクトリだと `writeFileAtomic` の
+    // 最後の `rename` が落ちる（一時ファイルの作成までは成功する）。
+    // `chmod` と違って**実行ユーザに依存しない**
+    await mkdir(join(root, "wall.md"));
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const save = (path: string, body: string) =>
+    fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, body }),
+    });
+
+  /**
+   * **並行の「窓」そのものはここでは再現しない。**
+   *
+   * 壊れる順序は「失敗する側が `set` → 別リクエストが上書き → 失敗側が `clear`」で、
+   * HTTP 越しにその間へ割り込むのはタイミング勝負になり flaky を持ち込む
+   * （`rename` が落ちるまでが速すぎる）。
+   *
+   * **#120 の本命は `tests/watcher.test.ts` の
+   * 「先に始まったリクエストの失敗が、後続の保存に余計なリロードを起こさない」**で、
+   * fake-watch を使って実消費者（`isOwnSave` → `onChange`）まで決定的に通している。
+   * `tests/save-mark.test.ts` は `SaveMark` 単体の契約を固定する。
+   *
+   * **ここで見るのは、サーバがその契約を実際に使っているか**（失敗時に自分の sha を
+   * 渡しているか）だけ。ここだけでは #120 の退行は捕まらない。
+   */
+  test("失敗した保存は、自分が立てたマークを残さない", async () => {
+    const { saveMark } = handle;
+    saveMark.clearAll();
+
+    const body = "# 失敗する保存\n";
+    const res = await save("wall.md", body);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { code?: string }).code).toBe("write_failed");
+
+    // **自分のマークは片付ける。** 残すと、後で偶然同じ内容が書かれたときに
+    // 自己保存と誤認して通知を落とす
+    expect(saveMark.has("wall.md", sha256(Buffer.from(body, "utf-8")))).toBe(false);
+    expect(saveMark.size).toBe(0);
+  });
+
+  test("失敗した保存が、別パスのマークを巻き添えにしない", async () => {
+    const { saveMark } = handle;
+    saveMark.clearAll();
+
+    const other = "# 別ファイルの保存\n";
+    expect((await save("a.md", other)).status).toBe(200);
+    const otherSha = sha256(Buffer.from(other, "utf-8"));
+    expect(saveMark.has("a.md", otherSha)).toBe(true);
+
+    expect((await save("wall.md", "# 失敗する保存\n")).status).toBe(500);
+
+    expect(saveMark.has("a.md", otherSha)).toBe(true);
+  });
+
+  test("成功した保存はマークを立てる（自己保存の抑止に回帰がない）", async () => {
+    const { saveMark } = handle;
+    saveMark.clearAll();
+
+    const body = "# 自分の保存\n";
+    const res = await save("a.md", body);
+    expect(res.status).toBe(200);
+    expect(saveMark.has("a.md", sha256(Buffer.from(body, "utf-8")))).toBe(true);
+  });
+
+  // マークは「いま保存中のリクエスト」を指すので、サーバを閉じたら意味を失う
+  test("close() でマークを捨てる", async () => {
+    const h = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    const body = "# 閉じる前の保存\n";
+    try {
+      const res = await fetch(`http://127.0.0.1:${h.server.port}/api/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "a.md", body }),
+      });
+      expect(res.status).toBe(200);
+      expect(h.saveMark.size).toBe(1);
+    } finally {
+      // assert が落ちてもポートを掴んだままにしない（このファイルの他テストと揃える）
+      h.close();
+    }
+    expect(h.saveMark.size).toBe(0);
+  });
+});

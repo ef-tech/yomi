@@ -44,21 +44,44 @@ describe("SaveMark", () => {
     expect(m.size).toBe(1);
   });
 
-  test("clear(path) で個別削除できる", () => {
+  test("clear(path, sha) で個別削除できる", () => {
     const m = new SaveMark();
     m.set("a.md", "x");
     m.set("b.md", "y");
-    m.clear("a.md");
+    expect(m.clear("a.md", "x")).toBe(true);
     expect(m.has("a.md", "x")).toBe(false);
     expect(m.has("b.md", "y")).toBe(true);
     expect(m.size).toBe(1);
   });
 
-  test("clear() で全削除", () => {
+  // **並行保存で別リクエストのマークを壊さない (Issue #120)。**
+  //
+  // 以前はパス単位の無条件削除だったので、後から来たリクエストのマークを
+  // 先のリクエストの失敗が消していた。結果、後のリクエストの正常な保存が
+  // watcher から「他人の変更」に見えて余計なリロードが飛んでいた。
+  test("値が食い違うときは消さない", () => {
+    const m = new SaveMark();
+    m.set("a.md", "後から来たリクエストの sha");
+
+    // 先に始まったリクエストが失敗して、自分の sha で消そうとする
+    expect(m.clear("a.md", "先に始まったリクエストの sha")).toBe(false);
+
+    // 後から来たリクエストのマークは生きている
+    expect(m.has("a.md", "後から来たリクエストの sha")).toBe(true);
+    expect(m.size).toBe(1);
+  });
+
+  test("そもそもマークが無ければ何もしない", () => {
+    const m = new SaveMark();
+    expect(m.clear("none.md", "x")).toBe(false);
+    expect(m.size).toBe(0);
+  });
+
+  test("clearAll() で全削除", () => {
     const m = new SaveMark();
     m.set("a.md", "x");
     m.set("b.md", "y");
-    m.clear();
+    m.clearAll();
     expect(m.size).toBe(0);
   });
 
