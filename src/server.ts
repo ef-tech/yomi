@@ -212,8 +212,13 @@ export function createServer(config: ServerConfig): ServerHandle {
     server,
     saveMark,
     close() {
+      // **順序が効いている。** watcher を先に閉じること —— 先にマークを消すと、
+      // debounce 待ちの `isOwnSave` がマークを見失って「他人の変更」と判定し、
+      // まさに消したかった余計なリロードを自分で作る (Issue #120)
       watcher?.close();
       server.stop();
+      // マークは「いま保存中のリクエスト」を指すので、サーバを閉じたら意味を失う
+      saveMark.clearAll();
     },
   };
 }
@@ -570,10 +575,21 @@ async function handleFileWrite(
   try {
     await writeFileAtomic(safe.abs, buf);
   } catch (err) {
-    saveMark.clear(safe.rel);
+    // **自分が立てたマークだけを消す (Issue #120)。** 同じファイルを別のリクエストが
+    // 保存中なら、そちらのマークが入っている。無条件に消すと、そのリクエストの
+    // 正常な保存が watcher から「他人の変更」に見えて余計なリロードが飛ぶ
+    const cleared = saveMark.clear(safe.rel, newSha);
     // **生のメッセージを返さない。** 一時ファイルの絶対パスと pid が載るので、
-    // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）
-    console.error(`保存に失敗しました (${safe.rel}):`, err);
+    // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）。
+    // **パスも連結しない** —— ファイル名に改行や ANSI を入れられると偽のログ行を
+    // 差し込めるので、オブジェクトで渡す（#99 が同じ理由で立てた作法）
+    console.error("保存に失敗しました:", {
+      path: safe.rel,
+      // `false` = 別リクエストのマークが載っていた。**並行保存が実際に起きた観測点**で、
+      // 余計なリロードの報告を切り分けるときの唯一の手掛かりになる (Issue #120)
+      mark: cleared ? "cleared" : "別リクエストのものを保持",
+      error: err instanceof Error ? err.message : String(err),
+    });
     return Response.json(
       { error: `ファイルの保存に失敗しました: ${path}`, code: "write_failed" },
       { status: 500 },
