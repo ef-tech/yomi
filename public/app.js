@@ -10,6 +10,7 @@ import {
 } from "./app-context.js";
 import { createDocument } from "./app-document.js";
 import { createEditor } from "./app-editor.js";
+import { createImageDownload } from "./app-images.js";
 import { createMobileUi } from "./app-mobile.js";
 import { isTopOverlay, shortcutsBlocked } from "./app-overlays.js";
 import { createPreview } from "./app-preview.js";
@@ -35,6 +36,7 @@ import { prefs } from "./prefs.js";
  * | `app-preview.js` | Mermaid、表示モード、テーマ、スクロール同期、TOC、タスクリスト |
  * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
  * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
+ * | `app-images.js` | 記事の参照画像を zip でダウンロード |
  * | `app-overlays.js` | 重なったオーバーレイの優先順位 (`Esc` とショートカットの門番) |
  * | `app-websocket.js` | ライブリロード |
  *
@@ -70,6 +72,7 @@ ctx.editor = createEditor(ctx);
 ctx.mobile = createMobileUi(ctx);
 ctx.ws = createWebSocketClient(ctx);
 ctx.quickOpen = createQuickOpen(ctx);
+ctx.images = createImageDownload(ctx);
 
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
@@ -99,6 +102,7 @@ ctx.mobile.wireSidebarSwipe();
 ctx.preview.wireTocActions();
 ctx.document.wireLinkNavigation();
 ctx.quickOpen.wire();
+ctx.images.wire();
 ctx.editor.wireConflictDiff();
 wireKeyboard();
 ctx.editor.wireBeforeUnload();

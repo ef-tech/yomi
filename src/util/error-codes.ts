@@ -30,6 +30,7 @@ export const ERROR_CODES = [
   "write_failed",
   "read_failed",
   "asset_failed",
+  "zip_failed",
   "tree_failed",
   "internal_error",
   "body_too_large",

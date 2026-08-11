@@ -188,6 +188,9 @@ export function createElements() {
     conflictDismiss: byId("conflict-dismiss"),
     conflictShowDiff: byId("conflict-show-diff"),
     // 競合の差分ダイアログ (Issue #57)
+    // 画像 zip のダウンロード (Issue #140)。PC は編集ボタンの隣、スマホは ⋮ メニュー
+    downloadImagesBtn: /** @type {HTMLButtonElement} */ (byId("download-images-btn")),
+    overflowDownloadImages: /** @type {HTMLButtonElement} */ (byId("overflow-download-images")),
     conflictDiff: byId("conflict-diff"),
     conflictDiffSummary: byId("conflict-diff-summary"),
     conflictDiffBody: byId("conflict-diff-body"),
@@ -386,5 +389,6 @@ export function createStatus(ctx) {
  *   mobile: ReturnType<typeof import("./app-mobile.js").createMobileUi>,
  *   ws: ReturnType<typeof import("./app-websocket.js").createWebSocketClient>,
  *   quickOpen: ReturnType<typeof import("./app-quick-open.js").createQuickOpen>,
+ *   images: ReturnType<typeof import("./app-images.js").createImageDownload>,
  * }} Ctx
  */

@@ -125,6 +125,7 @@
       <div class="overflow-section">
         <button type="button" id="overflow-quick-open" class="overflow-action" data-i18n="quickOpen.open">🔍 ファイルを検索</button>
         <button type="button" id="overflow-edit" class="overflow-action" data-i18n="overflow.editMode">✏️ 編集モード</button>
+        <button type="button" id="overflow-download-images" class="overflow-action" data-i18n="overflow.downloadImages">🗜️ 画像を zip で保存</button>
       </div>
     </div>
     <main class="layout">
@@ -187,6 +188,15 @@
               title="ブラウザ内で編集する"
               data-i18n="edit.button"
             >編集</button>
+            <button
+              type="button"
+              id="download-images-btn"
+              class="download-images-btn"
+              data-i18n-title="images.download.title"
+              title="この記事が参照している画像を zip でまとめてダウンロードする"
+              data-i18n="images.download"
+              disabled
+            >画像 zip</button>
             <button
               type="button"
               id="discard-btn"

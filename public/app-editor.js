@@ -62,6 +62,9 @@ export function createEditor(ctx) {
     els.tocFab.disabled = !enabled;
     els.currentPath.disabled = !enabled;
     if (els.overflowEdit) els.overflowEdit.disabled = !enabled;
+    // 画像 zip も「ファイルを開いている」ことが前提 (Issue #140)
+    els.downloadImagesBtn.disabled = !enabled;
+    els.overflowDownloadImages.disabled = !enabled;
   }
 
   function enterEditMode() {

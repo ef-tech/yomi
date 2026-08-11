@@ -1854,3 +1854,214 @@ describe("server - `..` で始まるだけの名前 (Issue #118)", () => {
     expect(((await res.json()) as { code: string }).code).toBe("unsafe_path");
   });
 });
+
+/**
+ * 記事の参照画像を zip で返す (Issue #140)。
+ *
+ * **本体は「入らないものが入らないこと」。** zip は複数のファイルをまとめて外へ出す経路なので、
+ * ここが緩いと `/api/asset` に掛けている関門（除外設定・root 外）をまとめて迂回できる
+ * （Issue #65 が塞いだ穴を開け直す）。
+ */
+describe("server - 記事の画像を zip で返す (Issue #140)", () => {
+  let root: string;
+  let outside: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  /** 1x1 の PNG。中身は問わないが、拡張子と実体が揃っている必要がある */
+  const PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-imgzip-"));
+    outside = await mkdtemp(join(tmpdir(), "yomi-imgzip-out-"));
+    await writeFile(join(outside, "outside.png"), PNG);
+
+    await mkdir(join(root, "docs", "img"), { recursive: true });
+    await mkdir(join(root, "shared"), { recursive: true });
+    await mkdir(join(root, ".cache"), { recursive: true });
+    await writeFile(join(root, "docs", "img", "a.png"), PNG);
+    await writeFile(join(root, "docs", "img", "日本語.png"), PNG);
+    await writeFile(join(root, "shared", "b.png"), PNG);
+    await writeFile(join(root, ".cache", "secret.png"), PNG);
+    // root の外を指す symlink。これを辿って zip に入れてはいけない
+    await symlink(join(outside, "outside.png"), join(root, "docs", "escape.png"));
+    // **root 内で別名を張る symlink。** エントリ名に「参照どおりのパス」を使うか
+    // 「realpath 済みのパス」を使うかが、ここでだけ観測できる
+    await symlink(join(root, "shared", "b.png"), join(root, "docs", "alias.png"));
+
+    await writeFile(
+      join(root, "docs", "guide.md"),
+      [
+        "# ガイド",
+        "",
+        "![相対](img/a.png)",
+        "![親](../shared/b.png)",
+        "![日本語](img/日本語.png)",
+        "![重複](img/a.png)",
+        "![除外配下](../.cache/secret.png)",
+        "![root 外](escape.png)",
+        "![無い](img/missing.png)",
+        "![別名](alias.png)",
+        "![外部](https://example.com/x.png)",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(join(root, "docs", "plain.md"), "# 画像なし\n\n本文だけ。\n");
+
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const zipOf = (path: string) => fetch(`${url}/api/images.zip?path=${encodeURIComponent(path)}`);
+
+  /** zip のエントリ名を、実物の `unzip -l` を通さず中央ディレクトリから読む */
+  async function entryNames(res: Response): Promise<string[]> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    const names: string[] = [];
+    // ローカルファイルヘッダを頭から辿る（この実装は store のみ・extra field 無し）
+    let off = 0;
+    const dec = new TextDecoder();
+    while (off + 30 <= bytes.length && view.getUint32(off, true) === 0x0403_4b50) {
+      const size = view.getUint32(off + 18, true);
+      const nameLen = view.getUint16(off + 26, true);
+      const extraLen = view.getUint16(off + 28, true);
+      names.push(dec.decode(bytes.subarray(off + 30, off + 30 + nameLen)));
+      off += 30 + nameLen + extraLen + size;
+    }
+    return names;
+  }
+
+  async function skippedText(res: Response): Promise<string> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    const dec = new TextDecoder();
+    let off = 0;
+    while (off + 30 <= bytes.length && view.getUint32(off, true) === 0x0403_4b50) {
+      const size = view.getUint32(off + 18, true);
+      const nameLen = view.getUint16(off + 26, true);
+      const extraLen = view.getUint16(off + 28, true);
+      const name = dec.decode(bytes.subarray(off + 30, off + 30 + nameLen));
+      const start = off + 30 + nameLen + extraLen;
+      if (name === "SKIPPED.txt") return dec.decode(bytes.subarray(start, start + size));
+      off = start + size;
+    }
+    return "";
+  }
+
+  test("参照しているローカル画像だけが入る（重複は 1 件）", async () => {
+    const res = await zipOf("docs/guide.md");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/zip");
+    const names = await entryNames(res.clone());
+    expect(names.filter((n) => n !== "SKIPPED.txt")).toEqual([
+      "docs/img/a.png",
+      "shared/b.png",
+      "docs/img/日本語.png",
+      "docs/alias.png",
+    ]);
+  });
+
+  // **ここが本体。** 緩めると zip が `/api/asset` の迂回路になる
+  test("除外設定の配下は入らない", async () => {
+    const names = await entryNames(await zipOf("docs/guide.md"));
+    expect(names).not.toContain(".cache/secret.png");
+  });
+
+  test("root の外を指す symlink は入らない", async () => {
+    const names = await entryNames(await zipOf("docs/guide.md"));
+    expect(names.some((n) => n.includes("escape") || n.includes("outside"))).toBe(false);
+  });
+
+  test("エントリ名が root からの相対パスで、`..` を含まない（zip slip を作らない）", async () => {
+    const names = await entryNames(await zipOf("docs/guide.md"));
+    for (const name of names) {
+      expect(name.startsWith("/")).toBe(false);
+      expect(name.split("/")).not.toContain("..");
+    }
+  });
+
+  test("入らなかったものが理由つきで記録される", async () => {
+    const res = await zipOf("docs/guide.md");
+    expect(res.headers.get("X-Yomi-Skipped")).toBe("4");
+    const text = await skippedText(res);
+    expect(text).toContain("https://example.com/x.png\t外部の参照は取得しない");
+    expect(text).toContain(".cache/secret.png\t除外設定の配下");
+    expect(text).toContain("docs/escape.png\tルートディレクトリの外");
+    expect(text).toContain("docs/img/missing.png\tファイルが見つからない");
+  });
+
+  /**
+   * **エントリ名は「Markdown が参照しているパス」。**
+   *
+   * `docs/alias.png` は `shared/b.png` への symlink。realpath 済みのパスを名前にすると
+   * `docs/alias.png` が展開されず、**展開して隣に置いても `![](alias.png)` が壊れる**。
+   */
+  test("symlink の別名は、参照どおりのパスで入る（実体のパスではない）", async () => {
+    const names = await entryNames(await zipOf("docs/guide.md"));
+    expect(names).toContain("docs/alias.png");
+    // 実体 `shared/b.png` も別の参照（`../shared/b.png`）で入っているので、両方ある
+    expect(names).toContain("shared/b.png");
+  });
+
+  test("ファイル名を UTF-8 と宣言している（日本語名が文字化けしない）", async () => {
+    const bytes = new Uint8Array(await (await zipOf("docs/guide.md")).arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    // 各ローカルファイルヘッダの汎用フラグ (offset 6) の bit 11 が立っていること
+    let off = 0;
+    let checked = 0;
+    while (off + 30 <= bytes.length && view.getUint32(off, true) === 0x0403_4b50) {
+      expect(view.getUint16(off + 6, true) & 0x0800).toBe(0x0800);
+      checked++;
+      const size = view.getUint32(off + 18, true);
+      const nameLen = view.getUint16(off + 26, true);
+      off += 30 + nameLen + view.getUint16(off + 28, true) + size;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  test("画像を参照していなければ空の zip を返す", async () => {
+    const res = await zipOf("docs/plain.md");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Yomi-Skipped")).toBe("0");
+    expect(await entryNames(res)).toEqual([]);
+  });
+
+  test("ファイル名は元の md 由来で attachment として返す", async () => {
+    const res = await zipOf("docs/guide.md");
+    expect(res.headers.get("Content-Disposition")).toContain('filename="guide-images.zip"');
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  test.each([
+    ["../outside.md", "unsafe_path"],
+    [".cache/x.md", "excluded_path"],
+    ["docs/img/a.png", "not_markdown"],
+    ["docs/missing.md", "not_found"],
+  ])("`%s` は %s で拒否する", async (path, code) => {
+    const res = await zipOf(path);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(((await res.json()) as { code: string }).code).toBe(code);
+  });
+
+  test("path を省略したら 400", async () => {
+    const res = await fetch(`${url}/api/images.zip`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("path_required");
+  });
+
+  test("GET / HEAD 以外は 405", async () => {
+    const res = await fetch(`${url}/api/images.zip?path=docs%2Fguide.md`, { method: "POST" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("Allow")).toBe("GET, HEAD");
+  });
+});
