@@ -44,7 +44,12 @@ export function createWebSocketClient(ctx) {
       return;
     }
 
-    if (msg.type === "tree" || msg.type === "changed") {
+    // **`changed` ではツリーを取り直さない (Issue #84)。** 内容が変わっただけで
+    // 構造は変わっていないのに、ここまで来ると `/api/tree` を取り直してツリー全体を
+    // 作り直していた。10,000 ファイルで **1 イベントあたり 216ms + 724 KiB** の無駄
+    // （実測は `docs/bench/tree-baseline.md`）。**構造が変わるのは `rename` 由来の
+    // `tree` だけ**で、サーバはそれを型で区別して送っている (`src/server.ts`)。
+    if (msg.type === "tree") {
       try {
         const tree = await fetchJson("/api/tree");
         ctx.tree.renderTree(tree);

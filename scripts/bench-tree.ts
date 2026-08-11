@@ -156,11 +156,19 @@ async function measureApi(dir: string): Promise<{ times: number[]; bytes: number
  * (`openDirs` の初期値)、実ブラウザでは非表示サブツリーのレイアウトが省かれるので、
  * 実機のコスト構造とは一致しない。実機値が要るなら E2E (#80) 側で測る。
  */
-export function renderTreeInto(document: Document, host: HTMLElement, tree: TreeNode): void {
-  // 実物と同じく Map を張り直す (10,000 規模では挿入回数が無視できない)
-  const fileButtons = new Map<string, HTMLElement>();
-  const dirNodes = new Map<string, { button: HTMLElement; ul: HTMLElement }>();
-  const openDirs = new Set<string>([""]); // 既定では全ディレクトリが閉じている
+export function renderTreeInto(
+  document: Document,
+  host: HTMLElement,
+  tree: TreeNode,
+  /**
+   * 実物と同じ Map / 開閉状態を渡す。**渡さないと毎回まっさらから作る** ——
+   * 差分更新 (Issue #84) は「2 回目以降」の話なので、状態を持ち越さないと
+   * 初回描画しか測れない。
+   */
+  carry: TreeCarry = createCarry(),
+): void {
+  const { fileButtons, dirNodes, openDirs, rendered } = carry;
+  const nodeKey = (node: TreeNode) => `${node.type}:${node.path}`;
 
   const setDirOpen = (button: HTMLElement, ul: HTMLElement, open: boolean) => {
     button.classList.toggle("is-open", open);
@@ -169,6 +177,7 @@ export function renderTreeInto(document: Document, host: HTMLElement, tree: Tree
 
   const renderNode = (node: TreeNode): HTMLElement => {
     const li = document.createElement("li");
+    li.dataset.nodeKey = `${node.type}:${node.path}`;
     const button = document.createElement("button");
     button.setAttribute("type", "button");
     button.className = `tree-item is-${node.type}`;
@@ -188,6 +197,7 @@ export function renderTreeInto(document: Document, host: HTMLElement, tree: Tree
       for (const child of node.children ?? []) ul.appendChild(renderNode(child));
       li.appendChild(ul);
       dirNodes.set(node.path, { button, ul });
+      rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul });
       setDirOpen(button, ul, openDirs.has(node.path));
       button.addEventListener("click", NOOP);
 
@@ -206,17 +216,110 @@ export function renderTreeInto(document: Document, host: HTMLElement, tree: Tree
       }
     } else {
       fileButtons.set(node.path, button);
+      rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul: null });
       button.addEventListener("click", NOOP);
     }
     return li;
   };
 
+  // ── ここから差分更新 (Issue #84)。実物 `public/app-tree.js` と同じ手順 ──
+  //
+  // **`querySelector` を使わない / 位置が合っていれば DOM を触らない**のが要点。
+  // 最初の実装は両方やっており、全部作り直すより遅かった（実測 216ms → 362ms）。
+
+  const refreshNode = (known: RenderedNode, node: TreeNode): void => {
+    if (known.name !== node.name) {
+      known.nameEl.textContent = node.name;
+      known.name = node.name;
+    }
+    if (node.type !== "dir") {
+      fileButtons.set(node.path, known.button);
+      return;
+    }
+    if (!known.ul) return;
+    dirNodes.set(node.path, { button: known.button, ul: known.ul });
+    setDirOpen(known.button, known.ul, openDirs.has(node.path));
+    reconcileChildren(known.ul, node.children ?? []);
+  };
+
+  const dropSubtree = (li: HTMLElement): void => {
+    const key = li.dataset.nodeKey;
+    if (!key) return;
+    const path = key.slice(key.indexOf(":") + 1);
+    rendered.delete(key);
+    fileButtons.delete(path);
+    dirNodes.delete(path);
+    const sub = li.lastElementChild;
+    if (sub && sub.tagName === "UL") {
+      for (const c of Array.from(sub.children)) dropSubtree(c as HTMLElement);
+    }
+  };
+
+  const reconcileChildren = (ul: HTMLElement, children: TreeNode[]): void => {
+    let cursor = ul.firstElementChild;
+    for (const child of children) {
+      const key = nodeKey(child);
+      const known = rendered.get(key);
+      if (known && known.li === cursor) {
+        refreshNode(known, child);
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (known) {
+        refreshNode(known, child);
+        ul.insertBefore(known.li, cursor);
+        continue;
+      }
+      ul.insertBefore(renderNode(child), cursor);
+    }
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      dropSubtree(cursor as HTMLElement);
+      cursor.remove();
+      cursor = next;
+    }
+  };
+
   host.removeAttribute("aria-busy");
   host.removeAttribute("data-i18n");
-  host.innerHTML = "";
-  const ul = document.createElement("ul");
-  for (const child of tree.children ?? []) ul.appendChild(renderNode(child));
-  host.appendChild(ul);
+
+  let ul = host.querySelector(":scope > ul") as HTMLElement | null;
+  if (!ul) {
+    fileButtons.clear();
+    dirNodes.clear();
+    rendered.clear();
+    host.innerHTML = "";
+    ul = document.createElement("ul");
+    host.appendChild(ul);
+  }
+  reconcileChildren(ul, tree.children ?? []);
+}
+
+/** 描画をまたいで持ち越す状態。実物では `ctx.state` が持っている。 */
+export interface RenderedNode {
+  li: HTMLElement;
+  button: HTMLElement;
+  nameEl: HTMLElement;
+  name: string;
+  ul: HTMLElement | null;
+}
+
+export interface TreeCarry {
+  fileButtons: Map<string, HTMLElement>;
+  dirNodes: Map<string, { button: HTMLElement; ul: HTMLElement }>;
+  openDirs: Set<string>;
+  /** 差分更新のための参照。`querySelector` を避けるために持つ（実物と同じ） */
+  rendered: Map<string, RenderedNode>;
+}
+
+/** 既定では全ディレクトリが閉じている（実物の `openDirs` 初期値と同じ）。 */
+export function createCarry(): TreeCarry {
+  return {
+    fileButtons: new Map(),
+    dirNodes: new Map(),
+    openDirs: new Set([""]),
+    rendered: new Map(),
+  };
 }
 
 // 実物ではハンドラの中身が異なるが、ここで測りたいのは**リスナ登録のコスト**なので揃える
@@ -226,9 +329,45 @@ function measureDom(tree: TreeNode): number[] {
   const dom = new JSDOM("<!doctype html><div id='tree'></div>");
   const { document } = dom.window;
   const host = document.getElementById("tree") as HTMLElement;
-  const times = benchSync(() => renderTreeInto(document as unknown as Document, host, tree));
+  // **毎回まっさらから測る。** 状態を持ち越すと 2 回目以降が差分更新になり、
+  // この列（初回描画のコスト）の意味が変わる
+  const times = benchSync(() => {
+    host.innerHTML = "";
+    renderTreeInto(document as unknown as Document, host, tree);
+  });
   dom.window.close();
   return times;
+}
+
+/**
+ * 4) **watcher イベント 1 回あたりの反映コスト** (Issue #84)。
+ *
+ * `#83` のベースラインが「測っていないもの」に挙げていた区間。クライアントは
+ * `tree` / `changed` のどちらを受けても `/api/tree` を取り直して `renderTree` する
+ * (`public/app-websocket.js`)。**ファイルを 1 つ保存するだけでツリー全体が作り直される。**
+ *
+ * ここで測るのは「WS メッセージを受けてから DOM が入れ替わるまで」= fetch + 描画。
+ * **サーバとクライアントが同一プロセスなので、実運用の転送時間は含まれない**
+ * (`measureApi` と同じ制約)。
+ */
+async function measureWatcherRefresh(dir: string): Promise<number[]> {
+  const handle = createServer({ rootDir: dir, hostname: "127.0.0.1", port: 0, watch: false });
+  const url = `http://127.0.0.1:${handle.server.port}/api/tree`;
+  const dom = new JSDOM("<!doctype html><div id='tree'></div>");
+  const { document } = dom.window;
+  const host = document.getElementById("tree") as HTMLElement;
+  // **状態を持ち越す。** watcher イベントは「既にツリーが描かれている」状態で来るので、
+  // 差分更新 (Issue #84) の効きを測るにはここを引き継ぐ必要がある
+  const carry = createCarry();
+  try {
+    return await bench(async () => {
+      const tree = (await (await fetch(url)).json()) as TreeNode;
+      renderTreeInto(document as unknown as Document, host, tree, carry);
+    });
+  } finally {
+    dom.window.close();
+    handle.close();
+  }
 }
 
 /** 同期版の bench（DOM 構築は同期なので await のオーバーヘッドを乗せない）。 */
@@ -284,9 +423,9 @@ async function main() {
   );
   console.log("");
   console.log(
-    "| ファイル数 | 実 md 数 | ディレクトリ数 | スキャン (ms) | うち readdir (ms) | /api/tree (ms) | response size | DOM 構築 (ms) |",
+    "| ファイル数 | 実 md 数 | ディレクトリ数 | スキャン (ms) | うち readdir (ms) | /api/tree (ms) | response size | DOM 構築 (ms) | watcher 1 回 (ms) |",
   );
-  console.log("|---|---|---|---|---|---|---|---|");
+  console.log("|---|---|---|---|---|---|---|---|---|");
 
   for (const count of targets) {
     const dir = join(BENCH_ROOT, `n${count}`);
@@ -304,9 +443,12 @@ async function main() {
     const tree = await scanMarkdownTree(dir);
     const dom = stat(measureDom(tree));
 
+    process.stderr.write(`[${count}] watcher イベントの反映を計測中…\n`);
+    const refresh = stat(await measureWatcherRefresh(dir));
+
     const { files, dirs } = countNodes(tree);
     console.log(
-      `| ${count} | ${files} | ${dirs} | ${ms(scan)} | ${ms(rd)} | ${ms(stat(api.times))} | ${kib(api.bytes)} | ${ms(dom)} |`,
+      `| ${count} | ${files} | ${dirs} | ${ms(scan)} | ${ms(rd)} | ${ms(stat(api.times))} | ${kib(api.bytes)} | ${ms(dom)} | ${ms(refresh)} |`,
     );
   }
 
@@ -315,6 +457,11 @@ async function main() {
   console.log("");
   console.log(
     "**DOM 構築は jsdom 上の値**でレイアウト・ペイントを含まない。実ブラウザの描画コストではない。",
+  );
+  console.log("");
+  console.log(
+    "**`watcher 1 回` は WS メッセージ 1 通あたりの反映コスト** (`/api/tree` の取り直し + ツリー全体の再描画)。" +
+      "内容を変えただけの `changed` でも同じだけ掛かる。",
   );
 
   process.stderr.write(`\n計測が終わりました。fixture は ${BENCH_ROOT}/ に残っています\n`);

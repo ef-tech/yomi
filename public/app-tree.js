@@ -46,6 +46,9 @@ export function createTree(ctx) {
 
   function renderNode(node) {
     const li = document.createElement("li");
+    // 差分更新の鍵 (Issue #84)。**種類も含める** —— 同じパスがファイルとディレクトリで
+    // 入れ替わったら、`<li>` の中身の作りが違うので作り直す
+    li.dataset.nodeKey = `${node.type}:${node.path}`;
     const button = document.createElement("button");
     button.type = "button";
     button.className = `tree-item is-${node.type}`;
@@ -67,6 +70,7 @@ export function createTree(ctx) {
       }
       li.appendChild(ul);
       state.dirNodes.set(node.path, { button, ul });
+      rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul });
 
       const isOpen = state.openDirs.has(node.path);
       setDirOpen(button, ul, isOpen);
@@ -103,6 +107,7 @@ export function createTree(ctx) {
       }
     } else {
       state.fileButtons.set(node.path, button);
+      rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul: null });
       button.addEventListener("click", () => {
         ctx.document.navigateTo(node.path, { history: "push" }).catch((err) => {
           ctx.setStatus("error", errorText(err));
@@ -113,21 +118,166 @@ export function createTree(ctx) {
     return li;
   }
 
+  /**
+   * 差分更新のために、描画したノードの参照を鍵で引けるようにしておく (Issue #84)。
+   *
+   * **`querySelector` を使わない**ためのもの。最初は `li.querySelector(":scope > .tree-item")`
+   * で引いていたが、10,000 ノードを毎回引くと**全部作り直すより遅かった**
+   * （実測 216ms → 362ms）。参照は作った時点で分かっているので、その場で控える。
+   *
+   * @typedef {{
+   *   li: HTMLLIElement,
+   *   button: HTMLButtonElement,
+   *   nameEl: HTMLElement,
+   *   name: string,
+   *   ul: HTMLUListElement | null,
+   * }} RenderedNode
+   */
+  /** @type {Map<string, RenderedNode>} 鍵は `${type}:${path}` */
+  const rendered = new Map();
+
+  /** @param {import("./api-types.js").TreeNode} node @returns {string} */
+  const nodeKey = (node) => `${node.type}:${node.path}`;
+
+  /**
+   * `<ul>` の中身を新しい子リストへ寄せる。**同じパス・同じ種類のノードは作り直さない**
+   * (Issue #84)。
+   *
+   * 全部作り直すと 10,000 ファイルで 1 イベントあたり 216ms 掛かっていた
+   * （実測は `docs/bench/tree-baseline.md`）。追加・削除は普通 1 件なので、
+   * **変わったところだけ差し替える**。
+   *
+   * **DOM を触る回数を最小にするのが要点。** 位置が合っているノードは動かさない
+   * （`appendChild` は既存ノードでも「取り外して付け直す」ので、無条件に呼ぶと
+   * 全ノードぶんの DOM 操作が発生し、作り直すのと変わらなくなる）。
+   *
+   * 再利用すると開閉状態・フォーカス・スクロール位置がそのまま残るという利点もある。
+   *
+   * @param {HTMLUListElement} ul
+   * @param {import("./api-types.js").TreeNode[]} children
+   * @returns {void}
+   */
+  function reconcileChildren(ul, children) {
+    const keep = new Set();
+    // **`children` を前から順に、`ul` の子と突き合わせる。** 一致していれば何もしない
+    let cursor = ul.firstElementChild;
+    for (const child of children) {
+      const key = nodeKey(child);
+      keep.add(key);
+      const known = rendered.get(key);
+
+      if (known && known.li === cursor) {
+        // 位置も一致。**DOM を一切触らない**（ここが最頻ケース）
+        refreshNode(known, child);
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (known) {
+        refreshNode(known, child);
+        ul.insertBefore(known.li, cursor);
+        continue;
+      }
+      ul.insertBefore(renderNode(child), cursor);
+    }
+
+    // 残った要素は消えたノード。**マップからも外す** —— 残すと、消えたファイルを
+    // 選択中とみなしてハイライトしたり、クイックオープンから開けたりする
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      dropSubtree(/** @type {HTMLElement} */ (cursor));
+      cursor.remove();
+      cursor = next;
+    }
+    void keep;
+  }
+
+  /**
+   * 取り除く `<li>` とその配下を、各種マップから外す。
+   *
+   * **配下まで辿る。** ディレクトリを 1 つ消すと、その中のファイルも同時に消える。
+   * 親だけ外すと `state.fileButtons` に幽霊が残り、**表示中のファイルが消えたことに
+   * 気づけない**（`app-websocket.js` が `fileButtons.has(currentPath)` で判定する）。
+   * status に出るファイル数もずれる。
+   *
+   * なおクイックオープンは影響を受けない —— あちらは `syncPaths(root)` でツリーのデータから
+   * 母集団を作り直すため。**マップの汚れはそこでは観測できない**ので、テストは
+   * 「削除されました」の経路で見ている。
+   *
+   * @param {HTMLElement} li
+   * @returns {void}
+   */
+  function dropSubtree(li) {
+    const key = li.dataset.nodeKey;
+    if (!key) return;
+    const path = key.slice(key.indexOf(":") + 1);
+    rendered.delete(key);
+    state.fileButtons.delete(path);
+    state.dirNodes.delete(path);
+    const ul = rendered.get(key)?.ul ?? li.lastElementChild;
+    if (ul && ul.tagName === "UL") {
+      for (const child of Array.from(ul.children)) dropSubtree(/** @type {HTMLElement} */ (child));
+    }
+  }
+
+  /**
+   * 再利用するノードを新しい内容に合わせ直す。
+   *
+   * リスナは `path` をクロージャで掴んでいるが、**鍵にパスを含めているので再利用されるのは
+   * 同じパスのときだけ** —— 張り直す必要はない。
+   *
+   * @param {RenderedNode} known
+   * @param {import("./api-types.js").TreeNode} node
+   * @returns {void}
+   */
+  function refreshNode(known, node) {
+    // **控えてある文字列と比べる。** `textContent` を読むのも DOM 操作なので、
+    // 変わっていないときに触らないほうが速い
+    if (known.name !== node.name) {
+      known.nameEl.textContent = node.name;
+      known.name = node.name;
+    }
+    if (node.type !== "dir") {
+      state.fileButtons.set(node.path, known.button);
+      return;
+    }
+    if (!known.ul) return;
+    state.dirNodes.set(node.path, { button: known.button, ul: known.ul });
+    // 開閉は利用者の状態なので `state.openDirs` を正とする（DOM をそのまま信じない）。
+    // **食い違っているときだけ書く** —— 実際にはクリックも「全て開く」も両方を同時に
+    // 更新するので普段は一致しており、無条件に書くとディレクトリ数ぶんの DOM 書き込みが
+    // 毎イベント発生する。これは念のための同期であって、日常的に効く経路ではない
+    const shouldOpen = state.openDirs.has(node.path);
+    if (known.button.classList.contains("is-open") !== shouldOpen) {
+      setDirOpen(known.button, known.ul, shouldOpen);
+    }
+    reconcileChildren(known.ul, node.children ?? []);
+  }
+
+  /**
+   * @param {import("./api-types.js").TreeNode} root
+   * @returns {void}
+   */
   function renderTree(root) {
-    state.fileButtons.clear();
-    state.dirNodes.clear();
     els.tree.removeAttribute("aria-busy");
     // 起動時プレースホルダ "読み込み中…" の data-i18n を除去する (Issue #48)。
     // これを残すと、言語切替時の applyI18n() が #tree.textContent を loading 文言で
     // 上書きし、描画済みのツリー (ファイル/ディレクトリ) が消えてしまう。
     els.tree.removeAttribute("data-i18n");
-    els.tree.innerHTML = "";
 
-    const ul = document.createElement("ul");
-    for (const child of root.children ?? []) {
-      ul.appendChild(renderNode(child));
+    // **2 回目以降は差分更新する (Issue #84)。** 初回だけ `<ul>` を作る。
+    // マップは `reconcileChildren` が消えたぶんを外し、`renderNode` / `refreshNode` が
+    // 残るぶんを入れ直すので、ここで clear すると**再利用したノードの登録まで落ちる**
+    let ul = /** @type {HTMLUListElement | null} */ (els.tree.querySelector(":scope > ul"));
+    if (!ul) {
+      state.fileButtons.clear();
+      state.dirNodes.clear();
+      rendered.clear();
+      els.tree.innerHTML = "";
+      ul = document.createElement("ul");
+      els.tree.appendChild(ul);
     }
-    els.tree.appendChild(ul);
+    reconcileChildren(ul, root.children ?? []);
+
     updateTreeToolbarState();
     // クイックオープンの母集団を張り直す (Issue #54)。**ツリーと同じものを見る**ので、
     // 除外設定と --depth はサーバ側の適用結果がそのまま効く

@@ -76,7 +76,13 @@ describe("changed 通知", () => {
     expect(h.historyCalls).toHaveLength(1);
   });
 
-  test("表示していないファイルの変更ではツリーだけ取り直す", async () => {
+  // **`changed` はツリーを取り直さない (Issue #84)。**
+  //
+  // 以前は取り直していたが、**内容が変わっただけで構造は変わっていない**ので無駄だった。
+  // 10,000 ファイルでは 1 イベントあたり 216ms + 724 KiB 掛かっていた
+  // （実測は `docs/bench/tree-baseline.md`）。構造が変わるのは `rename` 由来の
+  // `tree` イベントだけで、サーバはそれを型で区別して送っている。
+  test("表示していないファイルの変更では何も取り直さない", async () => {
     h = await bootApp();
     const fileBefore = fileGets(h).length;
     const treeBefore = treeGets(h).length;
@@ -85,6 +91,16 @@ describe("changed 通知", () => {
     await h.flush(6);
 
     expect(fileGets(h)).toHaveLength(fileBefore);
+    expect(treeGets(h)).toHaveLength(treeBefore);
+  });
+
+  test("ファイルの追加・削除 (tree) ではツリーを取り直す", async () => {
+    h = await bootApp();
+    const treeBefore = treeGets(h).length;
+
+    h.ws.emit({ type: "tree", path: "docs/new.md" });
+    await h.flush(6);
+
     expect(treeGets(h)).toHaveLength(treeBefore + 1);
   });
 

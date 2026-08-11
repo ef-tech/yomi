@@ -266,3 +266,136 @@ describe("新規 Markdown 作成", () => {
     expect(h.el("content-body").classList.contains("is-editing")).toBe(false);
   });
 });
+
+describe("ツリーの差分更新 (Issue #84)", () => {
+  /**
+   * `tree` 通知が来たときにツリー全体を作り直さず、**変わったノードだけ差し替える**
+   * ことを固定する。
+   *
+   * 速さのためだけの変更ではない —— 作り直すと**開いていたディレクトリが閉じ、
+   * フォーカスが body へ落ちる**。ここではどちらも観測可能な振る舞いとして見る。
+   * 計測値は `docs/bench/tree-baseline.md`。
+   */
+
+  /** ツリーを差し替えて `tree` 通知を送る（watcher イベントと同じ経路）。 */
+  async function pushTree(harness: AppHarness, next: TreeNode) {
+    harness.tree = next;
+    harness.ws.emit({ type: "tree", path: "" });
+    await harness.flush(6);
+  }
+
+  test("変わっていないノードの DOM 要素は作り直されない", async () => {
+    h = await bootApp();
+    const before = h.treeItem("README.md");
+    const dirBefore = h.treeItem("docs");
+
+    await pushTree(h, h.tree);
+
+    // **同一の要素インスタンスであること。** 作り直すと別インスタンスになる
+    expect(h.treeItem("README.md")).toBe(before);
+    expect(h.treeItem("docs")).toBe(dirBefore);
+  });
+
+  test("追加されたファイルだけが増え、既存ノードは据え置かれる", async () => {
+    h = await bootApp();
+    const before = h.treeItem("README.md");
+    const countBefore = h.qa(".tree-item").length;
+
+    const next = structuredClone(h.tree);
+    next.children?.push({ name: "added.md", path: "added.md", type: "file" });
+    await pushTree(h, next);
+
+    expect(h.treeItem("added.md")).toBeTruthy();
+    expect(h.qa(".tree-item").length).toBe(countBefore + 1);
+    expect(h.treeItem("README.md")).toBe(before);
+  });
+
+  /**
+   * **`state.fileButtons` に幽霊が残っていないことを見る。**
+   *
+   * クイックオープンでは見られない —— あちらは `syncPaths(root)` でツリーのデータから
+   * 母集団を作り直すので、マップが汚れていても気づけない（実際、最初はそれで
+   * 検出できていなかった）。観測できるのは次の 2 つ:
+   *
+   * - **表示中のファイルが消えたときの「ファイルが削除されました」**
+   *   （`app-websocket.js` が `fileButtons.has(currentPath)` を見る）
+   * - **status のファイル数**（`app.js` が `fileButtons.size` を出す）
+   */
+  test("削除されたファイルは DOM からもマップからも消える", async () => {
+    h = await bootApp();
+    h.click(h.treeItem("README.md"));
+    await h.flush(6);
+    expect(h.el("current-path").textContent).toBe("README.md");
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).filter((c) => c.path !== "README.md");
+    await pushTree(h, next);
+
+    expect(h.document.querySelector(".tree-item[title='README.md']")).toBeNull();
+    // マップに残っていると「削除された」に気づけず、開いたまま編集できてしまう
+    expect(h.el("status").classList.contains("is-error")).toBe(true);
+    expect(h.el("status").textContent).toContain("README.md");
+  });
+
+  test("ディレクトリごと消すと、その中のファイルもマップから消える", async () => {
+    h = await bootApp();
+    h.click(h.treeItem("docs"));
+    await h.flush();
+    h.click(h.treeItem("docs/guide.md"));
+    await h.flush(6);
+    expect(h.el("current-path").textContent).toBe("docs/guide.md");
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).filter((c) => c.path !== "docs");
+    await pushTree(h, next);
+
+    expect(h.document.querySelector(".tree-item[title='docs/guide.md']")).toBeNull();
+    // **配下まで辿っていないと、ここが通らない。** 親だけ外すと子のマップ登録が残る
+    expect(h.el("status").classList.contains("is-error")).toBe(true);
+    expect(h.el("status").textContent).toContain("docs/guide.md");
+  });
+
+  test("並び順が変わっても新しい要素を作らずに並べ替える", async () => {
+    h = await bootApp();
+    const readme = h.treeItem("README.md");
+
+    const next = structuredClone(h.tree);
+    next.children = [...(next.children ?? [])].reverse();
+    await pushTree(h, next);
+
+    expect(h.treeItem("README.md")).toBe(readme);
+    const order = h.qa<HTMLElement>("#tree > ul > li > .tree-item").map((b) => b.title);
+    expect(order).toEqual([...(h.tree.children ?? [])].map((c) => c.path));
+  });
+
+  test("開いていたディレクトリは開いたまま残る", async () => {
+    h = await bootApp();
+    h.click(h.treeItem("docs"));
+    await h.flush();
+    expect(isDirOpen(h, "docs")).toBe(true);
+
+    const next = structuredClone(h.tree);
+    next.children?.push({ name: "z.md", path: "z.md", type: "file" });
+    await pushTree(h, next);
+
+    // **作り直すと閉じてしまう。** 利用者が開いた状態は保つ
+    expect(isDirOpen(h, "docs")).toBe(true);
+  });
+
+  test("同じパスがファイルからディレクトリに変わったら作り直す", async () => {
+    h = await bootApp();
+    const before = h.treeItem("README.md");
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).map((c) =>
+      c.path === "README.md"
+        ? { name: "README.md", path: "README.md", type: "dir" as const, children: [] }
+        : c,
+    );
+    await pushTree(h, next);
+
+    // 中身の作りが違うので**別インスタンス**になる
+    expect(h.treeItem("README.md")).not.toBe(before);
+    expect(h.treeItem("README.md").classList.contains("is-dir")).toBe(true);
+  });
+});
