@@ -4,7 +4,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertPortIsFree,
   describeNoStopTarget,
+  describePortInUse,
+  describeServeFailure,
   describeStop,
   type StopOutcome,
   selectStopTargets,
@@ -119,10 +122,13 @@ interface CliResult {
   stderr: string;
 }
 
-async function runCli(args: string[], opts: { cwd: string; state: string }): Promise<CliResult> {
+async function runCli(
+  args: string[],
+  opts: { cwd: string; state: string; env?: Record<string, string> },
+): Promise<CliResult> {
   const proc = Bun.spawn([process.execPath, ENTRY, ...args], {
     cwd: opts.cwd,
-    env: { ...process.env, XDG_STATE_HOME: opts.state },
+    env: { ...process.env, XDG_STATE_HOME: opts.state, ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -543,6 +549,85 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     );
   });
 
+  /**
+   * **事前検査と `Bun.serve` の間の窓 (Issue #107)。**
+   *
+   * #94 は事前検査を足したが隙間が残り、その窓で別プロセスがポートを掴むと
+   * throw が `main().catch` へ流れて**ソースの抜粋つきスタックトレース**が出ていた
+   * （#94 以前の出力に戻る）。
+   *
+   * **窓そのものをテストから作るのはタイミング勝負**になるが、`YOMI_DETACHED=1` は
+   * 事前検査を丸ごと飛ばす実在の経路（切り離された子）なので、**窓を通り抜けた後と
+   * 同じ状態**を決定的に作れる。テスト専用のフックを足す必要がない。
+   */
+  describe("事前検査を通り抜けてポートを奪われたとき (Issue #107)", () => {
+    const detached = { YOMI_DETACHED: "1" };
+
+    test(
+      "yomi 以外が掴んでいれば別ポートを案内し、終了コード 1 で落ちる",
+      async () => {
+        const port = await findAvailablePort("127.0.0.1", 39380);
+        const holder = Bun.listen({
+          hostname: "127.0.0.1",
+          port,
+          socket: { data() {}, open() {}, close() {} },
+        });
+        try {
+          const res = await runCli(["up", "--port", String(port), "--no-open"], {
+            cwd: workDir,
+            state: stateDir,
+            env: detached,
+          });
+
+          expect(res.code).toBe(1);
+          expect(res.stderr).toContain(`ポート ${port} は既に使用されています`);
+          expect(res.stderr).toContain("別のポートを指定してください");
+          // **スタックトレースに戻っていないこと。** ここが Issue #107 の本体
+          expect(res.stderr).not.toContain("EADDRINUSE");
+          expect(res.stderr).not.toContain("Bun.serve");
+          expect(res.stderr).not.toContain("at runForeground");
+          expect(res.stderr).not.toContain("src/server.ts");
+          expect(res.stderr.trim().split("\n")).toHaveLength(1);
+        } finally {
+          holder.stop(true);
+        }
+      },
+      INTEGRATION_TIMEOUT_MS,
+    );
+
+    test(
+      "先に動いている yomi が掴んでいれば yomi down を案内し、記録を汚さない",
+      async () => {
+        const port = await findAvailablePort("127.0.0.1", 39400);
+        const proc = await startForeground(port);
+
+        const res = await runCli(["up", "--port", String(port), "--no-open"], {
+          cwd: workDir,
+          state: stateDir,
+          env: detached,
+        });
+
+        expect(res.code).toBe(1);
+        // **相手が yomi なら #94 と同じ文面**（判定と文面は assertPortIsFree が正本）
+        expect(res.stderr).toContain(`ポート ${port} では既に yomi が起動しています`);
+        expect(res.stderr).toContain(`yomi down --port ${port}`);
+        expect(res.stderr).toContain(String(proc.pid));
+        expect(res.stderr).not.toContain("EADDRINUSE");
+        expect(res.stderr.trim().split("\n")).toHaveLength(1);
+
+        // 先に動いているインスタンスの記録が無傷であること。
+        //
+        // **この経路では強い保証にならない。** `YOMI_DETACHED=1` だと `saveInstance`
+        // 自体を通らない（`bin/yomi.ts` の `if (!detachedChild)`）ので、修正の有無に
+        // かかわらず通る。**DoD「レジストリが汚れない」を実際に守っているのは
+        // 上の #94 のテスト**（事前検査の経路）。ここは出力の検証が本体
+        expect((await readInstances(paths)).map((r) => r.pid)).toEqual([proc.pid]);
+        expect((await fetch(`http://127.0.0.1:${port}/api/tree`)).status).toBe(200);
+      },
+      INTEGRATION_TIMEOUT_MS,
+    );
+  });
+
   test(
     "フォアグラウンド起動もレジストリに記録され、list に出る",
     async () => {
@@ -677,4 +762,103 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     },
     INTEGRATION_TIMEOUT_MS,
   );
+});
+
+/**
+ * `Bun.serve` の EADDRINUSE を文面へ変換する部分 (Issue #107)。
+ *
+ * 上の結合テストは**実プロセスを起こす**ので遅く、境界（衝突以外のエラー・
+ * 調べる前に相手が消えた場合）まで全部そちらで見ると時間が掛かる。
+ * ここは変換だけを速く固定する。
+ */
+describe("describeServeFailure (Issue #107)", () => {
+  let stateDir: string;
+  let paths: RegistryPaths;
+
+  beforeEach(async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "yomi-conflict-state-"));
+    paths = resolvePaths({ XDG_STATE_HOME: stateDir });
+  });
+
+  afterEach(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  /** `Bun.serve` が投げるものの形（`code` を持つ Error）。 */
+  const addrInUse = () =>
+    Object.assign(new Error("Failed to start server."), {
+      code: "EADDRINUSE",
+    });
+
+  test("ポート衝突でなければ null を返す（呼び出し元がそのまま投げ直せる）", async () => {
+    // **これを取り違えると、無関係な失敗が「ポートが使われています」に化ける**
+    const other = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    expect(await describeServeFailure(other, "127.0.0.1", 39900, paths)).toBeNull();
+    expect(
+      await describeServeFailure(new Error("何か別の失敗"), "127.0.0.1", 39900, paths),
+    ).toBeNull();
+    expect(await describeServeFailure(null, "127.0.0.1", 39900, paths)).toBeNull();
+    expect(await describeServeFailure("文字列", "127.0.0.1", 39900, paths)).toBeNull();
+  });
+
+  // **`code` が消えたら黙ってスタックトレースへ戻る**ので、メッセージでも拾う。
+  // Bun の現行メッセージに `EADDRINUSE` の文字列は入っていない（実測）ので、
+  // **その言い回しを実物のまま**置いておく —— Node 形式だけ試しても保険にならない
+  test.each([
+    ["Bun の実物", "Failed to start server. Is port 39910 in use?"],
+    ["Node 形式", "listen EADDRINUSE: address already in use"],
+  ])("code が無くてもメッセージで拾う（%s）", async (_label, message) => {
+    const port = 39910;
+    const holder = Bun.listen({
+      hostname: "127.0.0.1",
+      port,
+      socket: { data() {}, open() {}, close() {} },
+    });
+    try {
+      expect(await describeServeFailure(new Error(message), "127.0.0.1", port, paths)).toContain(
+        `ポート ${port} は既に使用されています`,
+      );
+    } finally {
+      holder.stop(true);
+    }
+  });
+
+  // `assertPortIsFree` は「非 null なら throw」するだけの皮。ずれると
+  // 事前検査と衝突時で文面が食い違う
+  test("assertPortIsFree と同じ文面を返す", async () => {
+    const port = 39940;
+    await saveInstance(
+      record({ pid: process.pid, port, host: "127.0.0.1", rootDir: "/tmp/same-wording" }),
+      paths,
+    );
+    const reason = await describePortInUse("127.0.0.1", port, paths);
+    expect(reason).not.toBeNull();
+    await expect(assertPortIsFree("127.0.0.1", port, paths)).rejects.toThrow(reason as string);
+  });
+
+  test("空いていれば describePortInUse は null を返す", async () => {
+    const port = await findAvailablePort("127.0.0.1", 39950);
+    expect(await describePortInUse("127.0.0.1", port, paths)).toBeNull();
+  });
+
+  test("相手が yomi なら yomi down を案内する", async () => {
+    const port = 39920;
+    await saveInstance(
+      record({ pid: process.pid, port, host: "127.0.0.1", rootDir: "/tmp/some-docs" }),
+      paths,
+    );
+    const message = await describeServeFailure(addrInUse(), "127.0.0.1", port, paths);
+    expect(message).toContain(`ポート ${port} では既に yomi が起動しています`);
+    expect(message).toContain(`yomi down --port ${port}`);
+    expect(message).toContain("/tmp/some-docs");
+  });
+
+  test("調べるまでの間に相手が消えていたら、使用中とは言わずに再試行を促す", async () => {
+    // 記録も無く、ポートも空いている = EADDRINUSE を受けてから相手が終了した状態
+    const port = await findAvailablePort("127.0.0.1", 39930);
+    const message = await describeServeFailure(addrInUse(), "127.0.0.1", port, paths);
+    expect(message).toBe(`ポート ${port} を確保できませんでした。もう一度お試しください`);
+    // **「使用されています」と言わない。** 空いているので嘘になる
+    expect(message).not.toContain("既に使用されています");
+  });
 });
