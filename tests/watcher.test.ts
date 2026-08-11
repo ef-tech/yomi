@@ -195,6 +195,46 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
     }
   });
 
+  /**
+   * **これが Issue #120 の本命。**
+   *
+   * 同じファイルを 2 本のリクエストが保存すると、こう壊れていた:
+   *
+   * 1. R1 がマーク A を立てる
+   * 2. R2 がマーク B で上書きする
+   * 3. **R1 が失敗して `clear` を呼び、B まで消す**
+   * 4. R2 の正常な保存が「他人の変更」に見え、編集中の画面に余計なリロードが飛ぶ
+   *
+   * 実消費者（`isOwnSave` → `onChange`）を通して 3 → 4 が起きないことを見る。
+   * **fake-watch なので sleep もタイミング勝負も無い。**
+   */
+  test("先に始まったリクエストの失敗が、後続の保存に余計なリロードを起こさない (Issue #120)", async () => {
+    const saveMark = new SaveMark();
+    const r1Body = "R1 が書こうとして失敗した内容";
+    const r2Body = "R2 が実際に書いた内容";
+
+    // 実ファイルに残るのは R2 の内容（R1 は書けずに失敗した）
+    await writeFile(join(root, "race.md"), r2Body);
+
+    saveMark.set("race.md", sha256(r1Body)); // 1. R1 がマークを立てる
+    saveMark.set("race.md", sha256(r2Body)); // 2. R2 が上書きする
+    saveMark.clear("race.md", sha256(r1Body)); // 3. R1 が失敗して自分のぶんを消す
+
+    const calls: string[] = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (p) => calls.push(p), { watch, saveMark });
+
+    try {
+      emit("change", "race.md");
+      await wait(SETTLE_MS); // 単一イベントなので固定 settle で判定できる
+      // **R2 のマークが生きているので自己保存として抑止される。**
+      // 無条件削除に戻すと B が消え、ここが publish される
+      expect(calls).not.toContain("race.md");
+    } finally {
+      handle.close();
+    }
+  });
+
   test("save-mark 登録済みでも内容が違えば publish される (外部書き換えを見逃さない)", async () => {
     const saveMark = new SaveMark();
     saveMark.set("ext.md", sha256("expected-content"));
