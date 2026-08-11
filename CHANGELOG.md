@@ -10,6 +10,11 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Added (Issue #82)
+
+- **主要ユーザーフロー 6 種をブラウザ E2E で守るようにした**: ファイル選択と履歴（戻る・進む）、編集と保存と未保存確認と競合表示、新規 Markdown 作成、Mermaid 描画、目次とキーボードショートカット、スマホ幅のメニュー開閉。**実ブラウザでしか出ない部分**（実 history API・実 `window.confirm`・実 SVG 描画・実スクロール・実 CSS のブレークポイント）に絞ってあり、ロジックの網羅は従来どおりユニットテストが持つ
+- 固定 sleep は使っていない（Playwright の auto-retry で同期）。**連続 3 回 green を確認済み**（Issue #45 の flaky を持ち込まない方針）
+
 ### Added (Issue #97)
 
 - **`.yomiignore` に否定パターン (`!name`) を追加した**: 既定の除外 (`node_modules` / `dist` / `build` / `vendor` / `coverage` / `.cache` 等) を解除できるようになった。v0.20.0 の Issue #65 で除外が読み書きの拒否にも使われるようになり、`build/` に生成した md や画像へ到達する手段が失われていた。**これがその退避弁**
