@@ -28,7 +28,15 @@ export interface ResolvedPath {
    * `rel` が実体側に揃うことで、watcher が emit する名前や saveMark と一致する。
    */
   rel: string;
-  /** 実際にファイル読み取り・作成に使う絶対パス（要求の綴りを保つ） */
+  /**
+   * 実際にファイル読み取り・作成に使う絶対パス。
+   *
+   * **leaf が解決できたときは realpath 済み**（symlink も大小も正規化される）で、
+   * **解決できなかったときだけ要求の綴りを保つ**（realpath が lexical fallback するため）。
+   *
+   * 「常に要求の綴りを保つ」と書いていたが誤りで、`resolveSafe` の親 realpath チェックが
+   * 冗長かどうかの判断を難しくしていた（#118 のレビューで判明）。
+   */
   abs: string;
 }
 
@@ -55,7 +63,8 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   const resolved = candidate.resolved;
   const rel = relative(rootAbs, candidateAbs);
 
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  // root 外の判定は `isOutsideRoot` に集約してある (Issue #118)
+  if (isOutsideRoot(rel)) {
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
@@ -72,7 +81,7 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   // 過剰なため対応しない。静的な symlink エスケープはこのチェックで防げる。
   const parentReal = await safeRealpath(dirname(requestedAbs));
   const parentRel = relative(rootAbs, parentReal);
-  if (parentRel === ".." || parentRel.startsWith(`..${sep}`) || isAbsolute(parentRel)) {
+  if (isOutsideRoot(parentRel)) {
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
@@ -121,7 +130,7 @@ async function relFromDeepestReal(
       const base = relative(rootAbs, probe.path);
       // **祖先が root 外を指していたら弾く。** 上の `parentRel` チェックと同じ判定を
       // 遡った先にも掛ける (深い階層の symlink エスケープを見逃さない)
-      if (base === ".." || base.startsWith(`..${sep}`) || isAbsolute(base)) {
+      if (isOutsideRoot(base)) {
         throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
       }
       tail.reverse();
@@ -132,6 +141,43 @@ async function relFromDeepestReal(
     tail.push(basename(cur));
     cur = dirname(cur);
   }
+}
+
+/**
+ * root からの相対パスが**ルートの外**を指しているか (Issue #118)。
+ *
+ * **`startsWith("..")` では駄目。** `..cache` のような**通常のエントリ名**にも当たり、
+ * root 内の正当なパスを弾いてしまう（実際に `..cache/x.md` が 400 になっていた）。
+ * 親を辿っているのは、
+ *
+ * - `..` そのもの（= root の親）
+ * - `../` で始まる（区切りまで見て初めて「親へ 1 つ上がった」と言える）
+ * - そもそも絶対パス（`relative` が相対で表せなかった＝別のドライブ等）
+ *
+ * の 3 つだけ。**3 箇所で同じ判定を書き写していた**ので関数にした
+ * （1 箇所だけ `startsWith("..")` のままで、作法が割れていた）。
+ *
+ * ## 区切り文字
+ *
+ * `..${sep}` に加えて **`../` も見る。** 呼び出し元はいまどれも `relative()` の
+ * 生出力（ネイティブ区切り）だが、このモジュールは `toPosix` 済みの `rel` も
+ * 公開しており、**Windows でそれを渡されると `..\` しか見ない実装は
+ * fail-open する**（`../other` を「root 内」と判定する）。
+ *
+ * **逆に `..\` を無条件で足してはいけない** —— POSIX では `\` が合法な
+ * ファイル名文字なので、`..\x.md` という正当な名前を弾いて #118 と同じバグを作る。
+ * `/` は Windows でもファイル名に使えないので、こちらは足しても誤検知しない。
+ *
+ * ## `isAbsolute` は Windows 専用
+ *
+ * POSIX の `relative()` は絶対パスを返さない（両引数が絶対パスなので）。
+ * 効くのは win32 の**別ドライブ**（`D:\x`）と **UNC**（`\\srv\share\x`）だけ。
+ * **POSIX のテストでは落ちないが、消さないこと。**
+ *
+ * @param rel `relative(rootAbs, ...)` の結果、または `toPosix` 済みのそれ
+ */
+function isOutsideRoot(rel: string): boolean {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   assertPortIsFree,
   DETACHED_ENV,
   describeNoStopTarget,
+  describeServeFailure,
   describeStop,
   selectStopTargets,
   servingInstances,
@@ -108,13 +109,31 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
   // 「書いたのに効いていない」は「除外したつもりのファイルが読める」を意味する
   if (yomiignore.invalid.length > 0) console.warn(describeInvalidLines(yomiignore.invalid));
 
-  const handle = createServer({
-    rootDir,
-    hostname: options.host,
-    port,
-    excludes,
-    maxDepth: options.depth ?? undefined,
-  });
+  // **ポート衝突の最後の砦 (Issue #107)。** 事前検査 (`runUp`) とここの間には隙間があり、
+  // その窓で別プロセスがポートを掴むと throw が `main().catch` へ流れて
+  // **ソースの抜粋つきスタックトレース**が出ていた。事前検査を通らない経路
+  // （切り離された子）でも同じ。文面は `assertPortIsFree` に集約してある
+  let handle: ServerHandle;
+  try {
+    handle = createServer({
+      rootDir,
+      hostname: options.host,
+      port,
+      excludes,
+      maxDepth: options.depth ?? undefined,
+    });
+  } catch (err) {
+    const message = await describeServeFailure(err, options.host, port, resolvePaths());
+    // **ポート衝突でなければ投げ直す。** 別の原因を「ポートが使われています」に化けさせない。
+    // **この分岐は自動テストで踏めていない** —— `createServer` を bind 以外で
+    // 失敗させる移植性のある手段が無い（`--port 80` の EACCES は root だと通る）
+    if (message === null) throw err;
+    console.error(`エラー: ${message}`);
+    // **原因を隠すので逃げ道を用意する。** Bun は EADDRNOTAVAIL も EADDRINUSE に
+    // 寄せてくるので、誤診したときに辿れる手段が無いと詰む
+    if (process.env.YOMI_DEBUG === "1") console.error(err);
+    process.exit(1);
+  }
 
   // 切り離された子が自分のログへ出す場合は、届かない Ctrl+C ではなく yomi down を案内する
   const detachedChild = process.env[DETACHED_ENV] === "1";
@@ -127,9 +146,9 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
   // 事前検査と `Bun.serve` の間には隙間があり (別プロセスがその間に掴みうる)、
   // 検査を通り抜けた二重起動を最終的に止めるのは `Bun.serve` の throw だから。
   //
-  // **その窓に入ると利用者向けの出力は #94 以前のスタックトレースに戻る**
-  // (レジストリは上のとおり守られる)。窓が極めて狭く、塞ぐには createServer を
-  // try/catch して EADDRINUSE を文面へ変換する必要があるため、#107 で扱う。
+  // **その窓の出力は #107 で直した。** `createServer` を try/catch して
+  // `describePortConflict` が `assertPortIsFree` と同じ文面へ変換するので、
+  // スタックトレースにはもう戻らない。記録を書かない点はこの順序が守っている。
   //
   // **切り離された子 (up -d の実体) は記録しない。** 親の startDetached が
   // logPath 付きの記録を書くので、ここでも書くと logPath が空の記録で上書きしてしまう。

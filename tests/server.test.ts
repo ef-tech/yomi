@@ -1752,3 +1752,105 @@ describe("server - 保存の失敗がマークを壊さない (Issue #120)", () 
     expect(h.saveMark.size).toBe(0);
   });
 });
+
+/**
+ * **`..` で始まるだけの名前が API から読み書きできる (Issue #118)。**
+ *
+ * `tests/safepath.test.ts` が `resolveSafe` 単体を固定しているが、**サーバ層には
+ * もう 1 つ字句判定がある** —— `isRequestExcluded` が**解決前の生の要求文字列**に
+ * `isExcludedPath` を掛ける（`GET` / `POST` / `create` の 3 経路すべてが通る）。
+ * `..cache` が `.cache` と誤って一致すれば、ここで 400 になる。
+ *
+ * 利用者に見えていた症状（**ツリーには出るのに開くと 400**）は API 層の挙動なので、
+ * そこを直接固定しておく。
+ */
+describe("server - `..` で始まるだけの名前 (Issue #118)", () => {
+  let root: string;
+  let outside: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-dotdot-api-"));
+    outside = await mkdtemp(join(tmpdir(), "yomi-dotdot-api-out-"));
+    await writeFile(join(outside, "secret.md"), "# 外の秘密\n");
+
+    await mkdir(join(root, "..cache"), { recursive: true });
+    await mkdir(join(root, ".cache"), { recursive: true });
+    await writeFile(join(root, "..cache", "x.md"), "# ..cache の中身\n");
+    await writeFile(join(root, ".cache", "hidden.md"), "# 隠しディレクトリ\n");
+    // root の外を指す symlink。`..` で始まる名前でも通ってはいけない
+    await symlink(outside, join(root, "..link"));
+
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const get = (path: string) => fetch(`${url}/api/file?path=${encodeURIComponent(path)}`);
+  const post = (body: unknown) =>
+    fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const create = (path: string) =>
+    fetch(`${url}/api/file/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+
+  test("GET できる（従来は 400 unsafe_path だった）", async () => {
+    const res = await get("..cache/x.md");
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { raw: string }).raw).toBe("# ..cache の中身\n");
+  });
+
+  test("POST で保存できる", async () => {
+    const res = await post({ path: "..cache/x.md", body: "# 書き換えた\n" });
+    expect(res.status).toBe(200);
+    expect(await readFile(join(root, "..cache", "x.md"), "utf8")).toBe("# 書き換えた\n");
+  });
+
+  test("新規作成できる", async () => {
+    const res = await create("..cache/created.md");
+    expect(res.status).toBe(200);
+    expect(await readFile(join(root, "..cache", "created.md"), "utf8")).toBe("");
+  });
+
+  test("ツリーにも出る（表示と読み取りが食い違わない）", async () => {
+    const tree = (await (await fetch(`${url}/api/tree`)).json()) as {
+      children: { name: string }[];
+    };
+    expect(tree.children.map((c) => c.name)).toContain("..cache");
+  });
+
+  // **`..cache` が `.cache` と一致してはいけない。** 除外判定はセグメント完全一致
+  test("隠しディレクトリの除外は効いたまま", async () => {
+    const res = await get(".cache/hidden.md");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("excluded_path");
+  });
+
+  test.each([
+    ["..link/secret.md"],
+    ["..link/new.md"],
+    ["../secret.md"],
+  ])("root の外へは出られない (`%s`)", async (path) => {
+    const res = await get(path);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("unsafe_path");
+  });
+
+  test("root の外へは新規作成もできない", async () => {
+    const res = await create("..link/new.md");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("unsafe_path");
+  });
+});
