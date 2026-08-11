@@ -2,6 +2,20 @@ import { randomBytes } from "node:crypto";
 import { chmod, rename as fsRename, open, rm, stat } from "node:fs/promises";
 
 /**
+ * 一時ファイルの作成から `rename` までに空ける間隔 (Issue #119)。
+ *
+ * **実測の境界は 1ms と 2ms のあいだ**（`scripts/probe-watcher-atomic.ts`）。
+ * 境界ぎりぎりに置くと、負荷や FS が変わったときに黙って取りこぼしへ戻るので
+ * **余裕を持たせて 5ms** にしてある。
+ *
+ * **この値は chokidar の実装依存**で、版が変われば変わりうる。
+ * `tests/watcher.test.ts` の発火率テストが、変わったときに落ちる。
+ */
+export const WATCH_GAP_MS = 5;
+
+const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+/**
  * 一時ファイルへ書いてから rename する、原子的なファイル書き込み (Issue #101)。
  *
  * `writeFile` は `O_TRUNC` でファイルを開いてから書くので、**truncate 後・write 完了前に
@@ -32,46 +46,42 @@ import { chmod, rename as fsRename, open, rm, stat } from "node:fs/promises";
  * 既定で作られるので **0600 のファイルが保存のたびに 0664 へ緩む**（実測）。
  * 所有者は非特権では引き継げないため、対象が別ユーザ所有のときは呼び出し元の所有になる。
  *
- * ## ファイル監視がこの経路の上書きを取りこぼす (Issue #119)
+ * ## ファイル監視がこの経路の上書きを取りこぼしていた (Issue #119)
  *
  * **inode の差し替えとは別の問題。** 効くのは **write と rename の間隔**で、
- * 空ければ取りこぼさない。**この関数は間を空けないので 5 回に 4 回ほど届かない**
- * （計測では 80 回中 15 回しか発火せず、間隔 2ms 以上は 80/80 発火した）。
- * 届かなかった試行には `change` だけでなく**どのイベントも来ていない**ので、
- * ツリー再取得 (`add`) で拾われることもない。
- * **0〜1ms 付近は実行ごとのばらつきが大きい**（20 回中 0〜8 回）ので、
- * 個々の率より「2ms 空ければ安定する」という境界のほうが再現性が高い。
+ * 空けないと **chokidar が対象ファイルのイベントを 1 件も出さない**
+ * （`change` だけでなく `add` も来ないので、ツリー再取得でも拾われない）。
+ *
+ * 自分の保存は `saveMark` が抑止するので実害はないが、**同じディレクトリを開いた
+ * 別インスタンス**には届かず、編集が反映されないままになる。
+ *
+ * **{@link WATCH_GAP_MS} だけ待って解消した。** watcher 側で直そうとすると
+ * `usePolling` しかなく（`atomic: false` / `alwaysStat` / `awaitWriteFinish` は
+ * いずれも改善しないことを実測）、ポーリングは**アイドル時の CPU が 5,000 ファイルで
+ * 7 倍**になる。**保存 1 回あたり数 ms** のほうが安い。
  *
  * **計測の正本は `scripts/probe-watcher-atomic.ts`。** 条件つきの表はそこの出力と
  * Issue #119 にあり、ここには載せない（3 か所に置くと必ず片方が古くなる ——
  * それがこの記述を 2 度書き直す羽目になった原因）。**数字を疑ったら回して測り直すこと。**
  *
- * **機構は未特定。** chokidar 5 はファイル単位の watch リスナに 5ms のスロットルを持つが
- * (`handler.js` の `_throttle(THROTTLE_MODE_WATCH, file, 5)`)、これが原因かは検証していない。
- * **いずれにせよ閾値は chokidar の実装依存**で、版が変われば変わりうる。
+ * **機構は未特定。** 分かっているのは「間隔を空ければ取りこぼさない」という観測だけで、
+ * chokidar のどの仕組みが効いているかは検証していない。
  *
- * **測っていないこと**（断定しないための明示）:
- *
- * - **外部エディタ（vim / VSCode 等）は未測定。** 保存に要する時間から境界の 2ms は
- *   優に超えると考えられるが、確かめていない。そもそも保存方式が違う（原本を退避して
- *   新規作成する方式は unlink + add になり、chokidar の `atomic` オプションの経路に乗る）
- * - **Linux / inotify のみ**（tmpfs と ext4 では同じ結果）。macOS（Node の `fs.watch` 経由で
- *   FSEvents）と Windows は未測定。このリポジトリは FSEvents に配信遅延・結合があることを
- *   別途記録している
- *
- * 自分の保存は `saveMark` が元々抑止しているので、実害は**同じディレクトリを開いた
- * 別インスタンスが取りこぼす**ことに限られる。**取りこぼしても監視が壊れたままにはならない**
- * （全部取りこぼした直後の直書きが 20/20 で届くことを確認済み）。解消は Issue #119 で扱う。
+ * **残る限界: yomi 以外が同じ速さで temp + rename すると、やはり取りこぼす。**
+ * 外部エディタは保存に要する時間から境界を優に超えると考えられるが、測っていない。
  *
  * @param target 書き込み先
  * @param data 書き込む内容
  * @param rename `fs.rename` 相当。**テストから差し替えて EXDEV / EACCES を再現する**ための
  *   注入点で、既定は本番実装そのもの (`src/network.ts` の `readInterfaces` と同じ作法)
+ * @param gapMs rename の直前に空ける間隔。**テストから 0 にして取りこぼしを再現する**ための
+ *   注入点で、既定は {@link WATCH_GAP_MS}
  */
 export async function writeFileAtomic(
   target: string,
   data: Buffer | string,
   rename: typeof fsRename = fsRename,
+  gapMs: number = WATCH_GAP_MS,
 ): Promise<void> {
   // **同じディレクトリに置く。** `rename` が原子的なのは同一ファイルシステム内だけで、
   // `/tmp` に置くとマウントが分かれている環境で EXDEV になる。
@@ -101,6 +111,9 @@ export async function writeFileAtomic(
       .catch(() => null);
     if (mode !== null) await chmod(temp, mode);
 
+    // **rename の直前に待つ (Issue #119)。** 空けないと chokidar が対象ファイルの
+    // イベントを 1 件も出さず、同じディレクトリを開いた別インスタンスに届かない
+    await sleep(gapMs);
     await rename(temp, target);
   } catch (err) {
     // **後始末の失敗で原因を隠さない。** `rm` は `force: true` でも EACCES 等では throw するので、
