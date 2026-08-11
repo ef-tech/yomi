@@ -48,7 +48,13 @@ import { prefs } from "./prefs.js";
 const els = createElements();
 const state = createState();
 // mobileQuery は横断的関心事なので els / state と同格に置く (status の内部詳細ではない)。
-const ctx = { els, state, mobileQuery: window.matchMedia(MOBILE_MEDIA_QUERY) };
+//
+// **型は完成形 (`Ctx`) で受ける。** ここでは 3 つしか入っていないが、直後の
+// `Object.assign` と `ctx.xxx = createXxx(ctx)` で埋まる (このファイル冒頭の遅延束縛)。
+// 途中の部分的な形を型にすると、各モジュールが受け取る `ctx` の型と食い違う。
+const ctx = /** @type {import("./app-context.js").Ctx} */ (
+  /** @type {unknown} */ ({ els, state, mobileQuery: window.matchMedia(MOBILE_MEDIA_QUERY) })
+);
 Object.assign(ctx, createStatus(ctx));
 const { setStatus, clearStatus } = ctx;
 
@@ -105,6 +111,7 @@ async function init() {
   seedNavCounter(window.history.state?.navIndex);
 
   try {
+    /** @type {import("./api-types.js").TreeNode} */
     const tree = await fetchJson("/api/tree");
     ctx.tree.renderTree(tree);
     setStatus("ok", t("status.fileCount", { count: state.fileButtons.size }));
@@ -137,6 +144,10 @@ async function init() {
  * - setLang でメッセージ辞書を切替 → onLangChange 経由で reapplyDynamicI18n が
  *   静的 (data-i18n) + 動的 (JS で組み立てた) 文言を一括再描画する
  */
+/**
+ * @param {string} mode
+ * @returns {void}
+ */
 function applyLang(mode) {
   state.langMode = mode;
   const effective = resolveLang(mode, navigator.language);
@@ -148,6 +159,7 @@ function applyLang(mode) {
 }
 
 function wireLangToggle() {
+  /** @param {string | null | undefined} mode */
   const onSelect = (mode) => {
     if (!mode || !LANG_MODES.includes(mode)) return;
     if (state.langMode === mode) return;
@@ -167,7 +179,8 @@ function wireLangToggle() {
 function reapplyDynamicI18n() {
   applyI18n(document);
   // ツリーの「＋」ボタンのツールチップ (ディレクトリ path / name 入り)
-  for (const btn of els.tree.querySelectorAll(".dir-new-btn")) {
+  for (const el of els.tree.querySelectorAll(".dir-new-btn")) {
+    const btn = /** @type {HTMLElement} */ (el);
     btn.title = t("tree.newFileInDir.title", { path: btn.dataset.dirPath ?? "" });
     btn.setAttribute(
       "aria-label",
@@ -241,7 +254,7 @@ function wireKeyboard() {
   els.editor.addEventListener("keydown", (ev) => {
     if (ev.key !== "Tab") return;
     ev.preventDefault();
-    const ta = ev.currentTarget;
+    const ta = /** @type {HTMLTextAreaElement} */ (ev.currentTarget);
     const start = ta.selectionStart;
     const end = ta.selectionEnd;
     const before = ta.value.slice(0, start);

@@ -13,7 +13,7 @@
  * Mermaid を初期化し直して再描画する必要があるため (描画と不可分)。
  */
 
-import { errorText, fetchJson, THEME_MODES, VIEW_MODES } from "./app-context.js";
+import { errorText, fetchJson, messageOf, THEME_MODES, VIEW_MODES } from "./app-context.js";
 import { t } from "./i18n.js";
 import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
 import { prefs } from "./prefs.js";
@@ -22,23 +22,33 @@ import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 import mermaid from "./vendor/mermaid.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createPreview(ctx) {
   const { els, state } = ctx;
 
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
   // pair: { sourceY: number, previewY: number } の配列 (sourceY 昇順)
+  /** @type {{ sourceY: number, previewY: number }[]} */
   let scrollSyncPairs = [];
   let scrollSyncing = false;
 
   /* ===== Mermaid ===== */
 
+  /**
+   * @param {string} mode
+   * @returns {"light" | "dark"}
+   */
   function effectiveTheme(mode) {
     if (mode === "light") return "light";
     if (mode === "dark") return "dark";
     return darkQuery.matches ? "dark" : "light";
   }
 
+  /**
+   * @param {string} mode
+   * @returns {void}
+   */
   function initMermaid(mode) {
     mermaid.initialize({
       startOnLoad: false,
@@ -55,13 +65,15 @@ export function createPreview(ctx) {
   }
 
   async function renderMermaid() {
-    const nodes = els.preview.querySelectorAll("pre.mermaid");
+    const nodes = /** @type {NodeListOf<HTMLElement>} */ (
+      els.preview.querySelectorAll("pre.mermaid")
+    );
     if (nodes.length === 0) return;
     try {
       await mermaid.run({ nodes });
     } catch (err) {
       console.error("Mermaid render error:", err);
-      ctx.setStatus("error", t("status.mermaidError", { msg: err.message ?? err }));
+      ctx.setStatus("error", t("status.mermaidError", { msg: messageOf(err) }));
     }
   }
 
@@ -98,7 +110,9 @@ export function createPreview(ctx) {
     const headingLines = findHeadingLines(state.currentRaw);
     if (headingLines.length === 0) return;
     // preview 側の data-line 付き要素を line→Y で索引化
-    const previewHeadings = els.preview.querySelectorAll("[data-line]");
+    const previewHeadings = /** @type {NodeListOf<HTMLElement>} */ (
+      els.preview.querySelectorAll("[data-line]")
+    );
     const previewLineToY = new Map();
     for (const el of previewHeadings) {
       const line = Number(el.dataset.line);
@@ -159,6 +173,10 @@ export function createPreview(ctx) {
     prefs.viewMode.save(state.viewMode);
   }
 
+  /**
+   * @param {string} mode
+   * @returns {void}
+   */
   function applyViewMode(mode) {
     state.viewMode = mode;
     els.contentBody.dataset.mode = mode;
@@ -181,6 +199,10 @@ export function createPreview(ctx) {
   /**
    * 表示モードを選ぶ。**PC のトグルとスマホの ⋮ メニューが共有する**
    * (入口が違うだけで挙動は同じ)。不正値・同一モードは無視する。
+   */
+  /**
+   * @param {string | null | undefined} mode
+   * @returns {void}
    */
   function selectViewMode(mode) {
     if (!mode || !VIEW_MODES.includes(mode)) return;
@@ -207,6 +229,10 @@ export function createPreview(ctx) {
     prefs.themeMode.save(state.themeMode);
   }
 
+  /**
+   * @param {string} mode
+   * @returns {void}
+   */
   function applyThemeMode(mode) {
     state.themeMode = mode;
     if (mode === "auto") {
@@ -226,6 +252,10 @@ export function createPreview(ctx) {
   }
 
   /** テーマを選ぶ。**PC のトグルとスマホの ⋮ メニューが共有する**。 */
+  /**
+   * @param {string | null | undefined} mode
+   * @returns {void}
+   */
   function selectThemeMode(mode) {
     if (!mode || !THEME_MODES.includes(mode)) return;
     if (state.themeMode === mode) return;
@@ -245,8 +275,12 @@ export function createPreview(ctx) {
 
   /* ===== インタラクティブ チェックボックス (Issue #17) ===== */
 
+  /**
+   * @param {Event} ev
+   * @returns {Promise<void>}
+   */
   async function onTaskCheckboxToggle(ev) {
-    const target = ev.currentTarget;
+    const target = /** @type {HTMLInputElement | null} */ (ev.currentTarget);
     if (!target || !state.currentPath || state.editing) {
       // 編集モード中は disabled なので通常は届かないが、保険
       if (target) target.checked = !target.checked;
@@ -264,6 +298,7 @@ export function createPreview(ctx) {
       return;
     }
 
+    /** @type {{ path: string, body: string, baseSha?: string }} */
     const payload = { path: state.currentPath, body };
     if (state.currentSha) payload.baseSha = state.currentSha;
 
@@ -271,6 +306,7 @@ export function createPreview(ctx) {
     target.disabled = true;
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -288,10 +324,11 @@ export function createPreview(ctx) {
     } catch (err) {
       target.checked = !target.checked; // revert UI
       target.disabled = state.editing;
-      if (err.status === 409 && err.payload) {
+      const e = /** @type {import("./app-context.js").ApiError} */ (err);
+      if (e.status === 409 && e.payload) {
         // **エディタの中身ではなく、チェックを反映した本文を渡す。**
         // この経路は編集モードでないのでエディタは空
-        ctx.editor.showConflict(err.payload, body);
+        ctx.editor.showConflict(/** @type {any} */ (e.payload), body);
         ctx.setStatus("error", t("status.conflict"));
       } else {
         ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
@@ -310,7 +347,9 @@ export function createPreview(ctx) {
    * 編集モード中は disabled = true でクリック不可（編集モード優先）。
    */
   function wireTaskCheckboxes() {
-    const boxes = els.preview.querySelectorAll('input[type="checkbox"]');
+    const boxes = /** @type {NodeListOf<HTMLInputElement>} */ (
+      els.preview.querySelectorAll('input[type="checkbox"]')
+    );
     boxes.forEach((box, idx) => {
       box.dataset.taskIndex = String(idx);
       box.disabled = state.editing;
@@ -328,6 +367,10 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * @param {HTMLElement} previewEl
+   * @returns {{ level: number, text: string, id: string, el: Element }[]}
+   */
   function collectHeadings(previewEl) {
     return Array.from(previewEl.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((el) => ({
       level: Number(el.tagName.substring(1)),
@@ -337,6 +380,10 @@ export function createPreview(ctx) {
     }));
   }
 
+  /**
+   * @param {import("./toc.js").TocNode} node
+   * @returns {HTMLLIElement}
+   */
   function renderTocNode(node) {
     const li = document.createElement("li");
     const btn = document.createElement("button");
@@ -359,6 +406,10 @@ export function createPreview(ctx) {
     return li;
   }
 
+  /**
+   * @param {import("./toc.js").TocNode[]} tree
+   * @returns {void}
+   */
   function renderTocTree(tree) {
     state.tocEntries.clear();
     els.tocList.innerHTML = "";
@@ -376,6 +427,11 @@ export function createPreview(ctx) {
     els.tocList.appendChild(ul);
   }
 
+  /**
+   * @param {{ level: number, text: string, id: string, el: Element }[]} headings
+   * @param {number} maxLevel
+   * @returns {void}
+   */
   function setupTocHighlight(headings, maxLevel) {
     teardownTocObserver();
     if (headings.length === 0) return;
@@ -438,6 +494,11 @@ export function createPreview(ctx) {
     els.tocExpandToggle.title = isExpanded ? t("toc.collapseH4.title") : t("toc.expandH4.title");
   }
 
+  /**
+   * @param {boolean} visible
+   * @param {{ persist?: boolean }} [options]
+   * @returns {void}
+   */
   function applyTocVisibility(visible, { persist = true } = {}) {
     state.tocVisible = visible;
     els.tocPanel.hidden = !visible;

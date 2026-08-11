@@ -10,6 +10,12 @@
 
 const PARAM = "path";
 
+/**
+ * URL クエリ `?path=foo.md` から開いているファイルのパスを取得する。
+ *
+ * @param {{ search: string } | null} [location] 省略時は `window.location`
+ * @returns {string | null}
+ */
 export function getPathFromUrl(location) {
   const loc = location ?? (typeof window !== "undefined" ? window.location : null);
   if (!loc) return null;
@@ -22,6 +28,9 @@ export function getPathFromUrl(location) {
  *
  * 例: location.hash = "#%E5%89%8A%E9%99%A4%E6%88%A6%E7%95%A5"
  *     -> "削除戦略"
+ *
+ * @param {{ hash: string } | null} [location] 省略時は `window.location`
+ * @returns {string | null}
  */
 export function getHashFromUrl(location) {
   const loc = location ?? (typeof window !== "undefined" ? window.location : null);
@@ -41,6 +50,13 @@ export function getHashFromUrl(location) {
   }
 }
 
+/**
+ * `?path=...#hash` の形の URL を組み立てる。
+ *
+ * @param {string | null | undefined} path
+ * @param {string | null} [hash]
+ * @returns {string}
+ */
 export function buildUrl(path, hash) {
   const params = new URLSearchParams();
   if (path) params.set(PARAM, path);
@@ -56,10 +72,12 @@ export function buildUrl(path, hash) {
 
 let navCounter = 0;
 
+/** @returns {number} 次の navIndex（単調増加） */
 export function nextNavIndex() {
   return ++navCounter;
 }
 
+/** @returns {number} 現在の navIndex */
 export function currentNavIndex() {
   return navCounter;
 }
@@ -67,6 +85,9 @@ export function currentNavIndex() {
 /**
  * リロード時に history.state.navIndex から再開する。
  * 既存 navCounter より小さい値は無視（後退させない）。
+ *
+ * @param {number | null | undefined} from
+ * @returns {void}
  */
 export function seedNavCounter(from) {
   if (typeof from === "number" && from > navCounter) {
@@ -74,7 +95,7 @@ export function seedNavCounter(from) {
   }
 }
 
-// テスト用: navCounter をリセット（プロダクションでは呼ばない）
+/** テスト用: navCounter をリセット（プロダクションでは呼ばない） @returns {void} */
 export function __resetNavCounterForTest() {
   navCounter = 0;
 }

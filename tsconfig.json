@@ -16,7 +16,12 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": false,
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    // **`public/*.js` を型付きで import できるようにする** (Issue #79)。
+    // テストと `src/renderer.ts` はブラウザ側の純粋モジュールを直接 import しており、
+    // これが無いと戻り値が丸ごと `any` になる。**`checkJs` は付けない** ——
+    // `public/` の検査は環境（DOM / Bun）が違うので `tsconfig.public.json` が担当する。
+    "allowJs": true
   },
   "include": [
     "bin/**/*.ts",
