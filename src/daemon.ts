@@ -141,6 +141,53 @@ export async function assertPortIsFree(
   }
 }
 
+/**
+ * `Bun.serve` の EADDRINUSE を、{@link assertPortIsFree} と同じ文面へ変換する (Issue #107)。
+ *
+ * ## なぜ要るか
+ *
+ * #94 が事前検査を入れたが、**検査と `Bun.serve` の間には隙間がある**。その窓で
+ * 別プロセスがポートを掴むと、throw が `main().catch` へ流れて**ソースの抜粋つき
+ * スタックトレース**が出る（#94 以前の出力に戻る）。事前検査を通らない経路
+ * （切り離された子＝`YOMI_DETACHED=1`）でも同じことが起きる。
+ *
+ * 事前検査は「レジストリ由来の案内を先出しする」役割に純化し、**最後の砦はここ**にする。
+ *
+ * @returns 利用者向けの 1 行。**ポート衝突でなければ `null`**（呼び出し元はそのまま
+ *   投げ直すこと —— 別の原因を「ポートが使われています」に化けさせない）
+ */
+export async function describePortConflict(
+  err: unknown,
+  host: string,
+  port: number,
+  paths: RegistryPaths,
+): Promise<string | null> {
+  if (!isAddrInUse(err)) return null;
+  try {
+    // **文面の正本は assertPortIsFree。** 相手が yomi かどうかの出し分けも含めて、
+    // ここで書き写すと 2 か所に散って必ずずれる
+    await assertPortIsFree(host, port, paths);
+  } catch (converted) {
+    return (converted as Error).message;
+  }
+  // **検査が通ってしまった** = EADDRINUSE を受けてから調べるまでの間に相手が消えた。
+  // もう「使用中」とは言えないので、そう書かずに再試行を促す
+  return `ポート ${port} を確保できませんでした。もう一度お試しください`;
+}
+
+/**
+ * ポートが埋まっていることを示すエラーか。
+ *
+ * `code` を第一の根拠にし、**メッセージも見る** —— ランタイムが `code` を載せない形に
+ * 変わると、黙ってスタックトレースに戻る（この Issue が直したかったもの）。
+ */
+function isAddrInUse(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  if ((err as { code?: unknown }).code === "EADDRINUSE") return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" && message.includes("EADDRINUSE");
+}
+
 function childArgs(opts: StartDetachedOptions): string[] {
   // 子は通常のフォアグラウンド起動。--no-open は親側でブラウザを開くため常に付ける。
   const args = ["up", "--port", String(opts.port), "--host", opts.host, "--no-open"];
