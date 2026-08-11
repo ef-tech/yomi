@@ -1547,3 +1547,91 @@ describe("server - watcher が /api/tree のキャッシュを捨てる (Issue #
     expect(seen).toContain("b.md");
   });
 });
+
+// **500 応答が内部状態を漏らさない (Issue #99)。**
+//
+// FS のエラーメッセージは `EACCES: permission denied, open '/home/<user>/…/x.md'` の形で
+// **絶対パスを含む**。既定バインドは 127.0.0.1 なので外部到達は `--share` 明示時に限られるが、
+// `handleFileCreate` は同じ理由で既に汎用化しており、非対称だった。
+describe("server - 500 応答が生の FS エラーを返さない (Issue #99)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-500-"));
+    await writeFile(join(root, "ok.md"), "# ok\n");
+    // **uid に依存しない起こし方を使う。** `chmod 000` は root で効かないので、
+    // CI の実行ユーザ次第で「テストは通ったが何も検証していない」状態になる。
+    // EISDIR と ELOOP なら誰が走らせても同じ 500 に落ちる
+    await mkdir(join(root, "dir.md"));
+    await symlink(join(root, "loop-b.png"), join(root, "loop-a.png"));
+    await symlink(join(root, "loop-a.png"), join(root, "loop-b.png"));
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** 応答に絶対パスや errno が混ざっていないこと。 */
+  const assertNoLeak = (body: { error?: string; code?: string }) => {
+    expect(body.error).toBeTruthy();
+    expect(body.error).not.toContain(root);
+    expect(body.error).not.toContain(tmpdir());
+    expect(body.error).not.toMatch(/E[A-Z]{3,}/);
+  };
+
+  test("読み取りの 500 が汎用メッセージと code を返す", async () => {
+    // `dir.md` はディレクトリなので `readFile` が EISDIR で落ちる
+    const res = await fetch(`${url}/api/file?path=dir.md`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("アセット配信の 500 が汎用メッセージと code を返す", async () => {
+    // symlink の循環 → ELOOP。EISDIR はアセット側では 400 に振り分けられるので使えない
+    const res = await fetch(`${url}/api/asset?path=loop-a.png`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("asset_failed");
+    assertNoLeak(body);
+  });
+
+  test("競合判定の読み取りが失敗しても汎用メッセージを返す", async () => {
+    // `baseSha` を渡すと現在の内容を読んで比較する。その読み取りが EISDIR で落ちる
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "dir.md", body: "x", baseSha: "dummy" }),
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("ハンドラを抜けた例外でも HTML のエラーページを返さない", async () => {
+    // **`fetch` の外へ throw が抜けると Bun の開発用エラーページ（HTML 約 70KB）が返る。**
+    // ソース断片・スタック・絶対パスが載るので、個別の catch を丁寧に書いても
+    // 1 箇所漏れれば台無しになる。実際 20KB の Markdown で `marked` が
+    // `RangeError: Maximum call stack size exceeded` を投げてここへ抜けていた。
+    //
+    // ここでは**応答の形**を固定する（ソースの綴りではなく）。
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "deep.md", body: ">".repeat(20_000) }),
+    });
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const text = await res.text();
+    expect(text).not.toContain("node_modules");
+    expect(text).not.toContain(root);
+    // 保存自体は成功しているので 200。描画に失敗しても「書けたのに 500」にはしない
+    expect(res.status).toBe(200);
+  });
+});
