@@ -450,12 +450,20 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    throw new Error(`フォアグラウンド起動が ${port} で listen しませんでした`);
+    // **子の stderr を添える。** 捨てると、起動を拒否された理由（「既に yomi が
+    // 起動しています」等）が一切出ず、15 秒待った末に「listen しなかった」しか分からない
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(
+      `フォアグラウンド起動が ${port} で listen しませんでした\n子の stderr: ${stderr}`,
+    );
   }
 
   // Issue #94: フォアグラウンドは assertPortIsFree を通っておらず、Bun.serve の throw が
   // main().catch にそのまま流れて**ソースの抜粋つきスタックトレース**が出ていた。
   // up -d は同じ状況で利用者向けの 1 行を出しており、その非対称を解消する。
+  //
+  // **Issue #108 の DoD 3（生きている相手は従来どおり拒否する）もここが守っている。**
+  // #108 で緩めたのは「残骸の扱い」だけなので、同じ内容のテストを増やさない。
   describe("使用中ポートを指定したとき (Issue #94)", () => {
     test(
       "既に yomi が使っていれば yomi down を案内し、終了コード 1 で落ちる",
@@ -551,17 +559,6 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
   });
 
   /**
-   * **事前検査と `Bun.serve` の間の窓 (Issue #107)。**
-   *
-   * #94 は事前検査を足したが隙間が残り、その窓で別プロセスがポートを掴むと
-   * throw が `main().catch` へ流れて**ソースの抜粋つきスタックトレース**が出ていた
-   * （#94 以前の出力に戻る）。
-   *
-   * **窓そのものをテストから作るのはタイミング勝負**になるが、`YOMI_DETACHED=1` は
-   * 事前検査を丸ごと飛ばす実在の経路（切り離された子）なので、**窓を通り抜けた後と
-   * 同じ状態**を決定的に作れる。テスト専用のフックを足す必要がない。
-   */
-  /**
    * **「list に出ないのに起動できない」を潰す (Issue #108)。**
    *
    * `assertPortIsFree` は記録の pid が生きているかだけを見ていた。**残骸記録の pid が
@@ -608,26 +605,17 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     INTEGRATION_TIMEOUT_MS,
   );
 
-  test(
-    "本当に起動中の yomi がいれば、従来どおり yomi down を案内する (Issue #108)",
-    async () => {
-      const port = await findAvailablePort("127.0.0.1", 39440);
-      const proc = await startForeground(port);
-
-      const second = await runCli(["--port", String(port), "--no-open"], {
-        cwd: workDir,
-        state: stateDir,
-      });
-
-      // **緩めたのは「残骸」の扱いだけ。** 生きている相手を素通りさせては本末転倒
-      expect(second.code).toBe(1);
-      expect(second.stderr).toContain(`ポート ${port} では既に yomi が起動しています`);
-      expect(second.stderr).toContain(`yomi down --port ${port}`);
-      expect((await readInstances(paths)).map((r) => r.pid)).toEqual([proc.pid]);
-    },
-    INTEGRATION_TIMEOUT_MS,
-  );
-
+  /**
+   * **事前検査と `Bun.serve` の間の窓 (Issue #107)。**
+   *
+   * #94 は事前検査を足したが隙間が残り、その窓で別プロセスがポートを掴むと
+   * throw が `main().catch` へ流れて**ソースの抜粋つきスタックトレース**が出ていた
+   * （#94 以前の出力に戻る）。
+   *
+   * **窓そのものをテストから作るのはタイミング勝負**になるが、`YOMI_DETACHED=1` は
+   * 事前検査を丸ごと飛ばす実在の経路（切り離された子）なので、**窓を通り抜けた後と
+   * 同じ状態**を決定的に作れる。テスト専用のフックを足す必要がない。
+   */
   describe("事前検査を通り抜けてポートを奪われたとき (Issue #107)", () => {
     const detached = { YOMI_DETACHED: "1" };
 
@@ -812,6 +800,44 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     INTEGRATION_TIMEOUT_MS,
   );
 
+  // **`assertPortIsFree` は `startDetached` からも呼ばれる (Issue #108)。**
+  // 記録の書き手が違う（親が logPath 付きで書き、子は書かない）ので、
+  // フォアグラウンドだけ見ていると up -d 側の退行に気づけない。
+  test(
+    "up -d も残骸記録の pid 再利用で拒否されない (Issue #108)",
+    async () => {
+      // 生きてはいるが yomi ではないプロセス = pid 再利用の再現
+      const bystander = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      const port = await findAvailablePort("127.0.0.1", 39370);
+      await saveInstance(
+        record({ pid: bystander.pid, port, host: "127.0.0.1", rootDir: workDir }),
+        paths,
+      );
+
+      try {
+        const up = await runCli(["up", "-d", "--port", String(port)], {
+          cwd: workDir,
+          state: stateDir,
+        });
+        expect(up.code).toBe(0);
+
+        // 残骸は**親の記録**（logPath 付き）で置き換わる。ここが空だと
+        // 停止手段そのものを失う（`startDetached` は記録に失敗したら起動を失敗させる）
+        const records = await readInstances(paths);
+        expect(records).toHaveLength(1);
+        expect((records[0] as InstanceRecord).logPath).toBe(logPath(port, paths));
+        expect((records[0] as InstanceRecord).pid).not.toBe(bystander.pid);
+
+        // 無関係なプロセスは巻き添えにしない
+        expect(isAlive(bystander.pid)).toBe(true);
+      } finally {
+        bystander.kill(9);
+        await bystander.exited;
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
   test(
     "up -d の子はレジストリを上書きしない (親が書いた logPath 付きの記録が残る)",
     async () => {
@@ -894,7 +920,7 @@ describe("describeServeFailure (Issue #107)", () => {
   // `assertPortIsFree` は「非 null なら throw」するだけの皮。ずれると
   // 事前検査と衝突時で文面が食い違う
   test("assertPortIsFree と同じ文面を返す", async () => {
-    const port = 39940;
+    const port = await findAvailablePort("127.0.0.1", 39940);
     const listening = Bun.listen({
       hostname: "127.0.0.1",
       port,
@@ -947,7 +973,7 @@ describe("describeServeFailure (Issue #107)", () => {
   });
 
   test("相手が yomi なら yomi down を案内する", async () => {
-    const port = 39920;
+    const port = await findAvailablePort("127.0.0.1", 39920);
     // **記録の pid が生きているだけでは足りない (Issue #108)。** そのポートで
     // listen していることまで揃って初めて「起動中の yomi」とみなす
     const listening = Bun.listen({

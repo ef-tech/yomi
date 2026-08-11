@@ -152,9 +152,13 @@ export async function assertPortIsFree(
  * 誤って名指しする。とくに `describeServeFailure` の経路は**ポートが必ず誰かに
  * 掴まれている状態**で呼ばれるので、この誤認が起きやすい。
  *
- * `isAlive` 単独だった頃も同じ誤答なので**悪化はしていない**。案内どおり
- * `yomi down --port <n>` を打てば、`stopInstance` が `isThisInstance` false で
- * **記録だけ消して無関係なプロセスは巻き添えにしない**ので復旧できる。
+ * `isAlive` 単独だった頃も同じ誤答なので**悪化はしていない**。**が、案内どおり
+ * `yomi down --port <n>` を打つと、`stopInstance` からも `isThisInstance` が true に
+ * 見えるので、無関係なプロセスへ SIGTERM が飛ぶ**（実測。`yomi list` にも同じ理由で並ぶ）。
+ * つまり list / 起動検査 / down が**揃って同じ間違いをする**。→ **#132**
+ *
+ * ここを直すには「そのポートで listen している = yomi 本人」という同定そのものを
+ * 変える必要があり、`stopInstance` も巻き込むので #108 のスコープを超える。
  */
 export async function describePortInUse(
   host: string,
