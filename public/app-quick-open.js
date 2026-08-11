@@ -8,8 +8,10 @@
  * ハイライトがそこにまとまっているので、独自経路を作るとその全部を書き写すことになる。
  */
 
+import { errorText } from "./app-context.js";
 import { collectFilePaths, moveSelection, QUICK_OPEN_LIMIT, searchPaths } from "./quick-open.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createQuickOpen(ctx) {
   const { els, state } = ctx;
   const { setStatus } = ctx;
@@ -88,6 +90,10 @@ export function createQuickOpen(ctx) {
   }
 
   /** クイックオープンが開いている間のキー操作。`wireQuickOpen` の capture リスナーから呼ぶ。 */
+  /**
+   * @param {KeyboardEvent} ev
+   * @returns {void}
+   */
   function handleQuickOpenKeydown(ev) {
     // **IME 変換中は何もしない。** yomi は日本語のドキュメントを読む道具なので、
     // ファイル名も日本語であることが普通にある。変換中のキーはすべて IME のもので、
@@ -144,7 +150,9 @@ export function createQuickOpen(ctx) {
   function openQuickOpen() {
     if (!els.quickOpen.hidden) return;
     // 閉じたときにフォーカスを戻す先を覚えておく (キーボード利用者が位置を失わないように)
-    state.quickOpenReturnFocus = document.activeElement;
+    // `activeElement` は `Element | null`。戻す先は要素なので型だけで絞る
+    // (`instanceof` は実行時チェックを足してしまう。i18n.js の applyI18n 参照)
+    state.quickOpenReturnFocus = /** @type {HTMLElement | null} */ (document.activeElement);
     els.quickOpen.hidden = false;
     els.quickOpenInput.value = "";
     refreshQuickOpen();
@@ -172,6 +180,10 @@ export function createQuickOpen(ctx) {
    *
    * **順序を入れ替えても解決しない** —— メニューを閉じるのが先でも後でも、*閉じるとき*には
    * どのみち非表示になっているため。実際に効いたかどうかを見て、駄目ならフォールバックする。
+   */
+  /**
+   * @param {HTMLElement | null} back
+   * @returns {void}
    */
   function restoreFocusAfterQuickOpen(back) {
     if (back?.isConnected && typeof back.focus === "function") {
@@ -273,9 +285,17 @@ export function createQuickOpen(ctx) {
    * 数えると絵文字入りのファイル名でサロゲートペアが割れ、`<mark>` に孤立サロゲートが
    * 入って `�` が出る。
    */
+  /**
+   * @param {HTMLElement} host
+   * @param {string} text
+   * @param {number[]} positions
+   * @returns {void}
+   */
   function appendHighlighted(host, text, positions) {
     const chars = Array.from(text);
-    const marks = new Set(positions.filter((p) => p >= 0 && p < chars.length));
+    const marks = new Set(
+      positions.filter((/** @type {number} */ p) => p >= 0 && p < chars.length),
+    );
     let buffer = "";
     let inMark = false;
     const flush = () => {
@@ -300,6 +320,10 @@ export function createQuickOpen(ctx) {
     flush();
   }
 
+  /**
+   * @param {number} index
+   * @returns {void}
+   */
   function setQuickOpenIndex(index) {
     state.quickOpenIndex = index;
     const items = els.quickOpenList.querySelectorAll(".quick-open-item");
@@ -339,7 +363,11 @@ export function createQuickOpen(ctx) {
     openQuickOpen,
     closeQuickOpen,
     refreshQuickOpen,
-    /** ツリー再描画のたびに母集団を張り直す (app-tree.js から呼ぶ)。 */
+    /**
+     * ツリー再描画のたびに母集団を張り直す (app-tree.js から呼ぶ)。
+     * @param {{ type?: string, path?: string, children?: unknown[] }} root
+     * @returns {void}
+     */
     syncPaths(root) {
       state.quickOpenPaths = collectFilePaths(root);
       // 開いたまま watcher の tree イベントが来たら候補も引き直す。母集団だけ更新して

@@ -15,6 +15,7 @@ import { errorText, fetchJson, sanitize } from "./app-context.js";
 import { collapseUnchanged, diffLines } from "./diff.js";
 import { t } from "./i18n.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createEditor(ctx) {
   const { els, state } = ctx;
 

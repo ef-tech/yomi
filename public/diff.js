@@ -52,7 +52,16 @@ function toLines(text) {
   return text.replace(/\r\n?/g, "\n").split("\n");
 }
 
-/** UTF-8 でのバイト数。 */
+/**
+ * @typedef {{ type: "equal" | "del" | "add", text: string, leftNo: number | null, rightNo: number | null }} DiffRow
+ *   1 行ぶんの差分。`leftNo` / `rightNo` は片側にしか存在しない行では null
+ */
+
+/**
+ * UTF-8 でのバイト数。
+ * @param {string} text
+ * @returns {number}
+ */
 function byteLength(text) {
   return new TextEncoder().encode(text).length;
 }
@@ -70,34 +79,45 @@ function lcsDiff(a, b) {
   const n = a.length;
   const m = b.length;
   // (n+1) x (m+1) の DP。行ごとに Int32Array を持つ (数値配列より密で速い)
+  /** @type {Int32Array[]} */
   const table = [];
   for (let i = 0; i <= n; i++) table.push(new Int32Array(m + 1));
+  // **添字は範囲内なので必ず実在する。** `noUncheckedIndexedAccess` の型を満たすために
+  // 非 null アサーションの代わりにローカルへ受けて絞り込む（DP の内側なので回数が多く、
+  // ここでの `??` はホットループのコストになる）。
+  const at = (/** @type {number} */ i) => /** @type {Int32Array} */ (table[i]);
+  const lineA = (/** @type {number} */ i) => /** @type {string} */ (a[i]);
+  const lineB = (/** @type {number} */ j) => /** @type {string} */ (b[j]);
   for (let i = n - 1; i >= 0; i--) {
-    const row = table[i];
-    const next = table[i + 1];
+    const row = at(i);
+    const next = at(i + 1);
     for (let j = m - 1; j >= 0; j--) {
-      row[j] = a[i] === b[j] ? next[j + 1] + 1 : Math.max(next[j], row[j + 1]);
+      row[j] =
+        lineA(i) === lineB(j)
+          ? Number(next[j + 1]) + 1
+          : Math.max(Number(next[j]), Number(row[j + 1]));
     }
   }
 
+  /** @type {{ type: "equal" | "del" | "add", text: string }[]} */
   const out = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      out.push({ type: "equal", text: a[i] });
+    if (lineA(i) === lineB(j)) {
+      out.push({ type: "equal", text: lineA(i) });
       i++;
       j++;
-    } else if (table[i + 1][j] >= table[i][j + 1]) {
-      out.push({ type: "del", text: a[i] });
+    } else if (Number(at(i + 1)[j]) >= Number(at(i)[j + 1])) {
+      out.push({ type: "del", text: lineA(i) });
       i++;
     } else {
-      out.push({ type: "add", text: b[j] });
+      out.push({ type: "add", text: lineB(j) });
       j++;
     }
   }
-  while (i < n) out.push({ type: "del", text: a[i++] });
-  while (j < m) out.push({ type: "add", text: b[j++] });
+  while (i < n) out.push({ type: "del", text: lineA(i++) });
+  while (j < m) out.push({ type: "add", text: lineB(j++) });
   return out;
 }
 
@@ -162,13 +182,15 @@ export function diffLines(localText, serverText, options = {}) {
     return { rows: [], truncated: true, reason: "bytes", stats: { added: 0, removed: 0 } };
   }
 
+  /** @type {{ type: "equal" | "del" | "add", text: string }[]} */
   const parts = [
-    ...left.slice(0, head).map((text) => ({ type: "equal", text })),
+    ...left.slice(0, head).map((text) => /** @type {const} */ ({ type: "equal", text })),
     ...lcsDiff(midLeft, midRight),
-    ...left.slice(left.length - tail).map((text) => ({ type: "equal", text })),
+    ...left.slice(left.length - tail).map((text) => /** @type {const} */ ({ type: "equal", text })),
   ];
 
   // 行番号を振る。equal は両側、del は左だけ、add は右だけ
+  /** @type {DiffRow[]} */
   const rows = [];
   let leftNo = 0;
   let rightNo = 0;
@@ -209,15 +231,17 @@ export function collapseUnchanged(rows, context = 3) {
   // **変更行は context に関わらず必ず残す** —— 負値を渡されると内側のループが
   // 1 度も回らず、変更行まで畳まれて「差分が無い」ように見えてしまう
   const span = Math.max(0, context);
+  /** @type {boolean[]} */
   const keep = new Array(rows.length).fill(false);
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].type === "equal") continue;
+    if (rows[i]?.type === "equal") continue;
     keep[i] = true;
     for (let j = Math.max(0, i - span); j <= Math.min(rows.length - 1, i + span); j++) {
       keep[j] = true;
     }
   }
 
+  /** @type {(DiffRow | { type: "skip", count: number })[]} */
   const out = [];
   let skipped = 0;
   const flushSkip = () => {
@@ -227,9 +251,10 @@ export function collapseUnchanged(rows, context = 3) {
     }
   };
   for (let i = 0; i < rows.length; i++) {
-    if (keep[i]) {
+    const row = rows[i];
+    if (keep[i] && row) {
       flushSkip();
-      out.push(rows[i]);
+      out.push(row);
     } else {
       skipped++;
     }

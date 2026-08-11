@@ -19,6 +19,7 @@ import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
 import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createTree(ctx) {
   const { els, state } = ctx;
 
@@ -26,6 +27,12 @@ export function createTree(ctx) {
     prefs.openDirs.save([...state.openDirs]);
   }
 
+  /**
+   * @param {HTMLElement} button
+   * @param {HTMLElement} ul
+   * @param {boolean} open
+   * @returns {void}
+   */
   function setDirOpen(button, ul, open) {
     button.classList.toggle("is-open", open);
     ul.style.display = open ? "" : "none";
@@ -44,6 +51,11 @@ export function createTree(ctx) {
     els.treeNewFile.disabled = false;
   }
 
+  /**
+   * @typedef {{ type: "file" | "dir", name: string, path: string, children?: TreeNode[] }} TreeNode
+   * @param {TreeNode} node
+   * @returns {HTMLLIElement}
+   */
   function renderNode(node) {
     const li = document.createElement("li");
     const button = document.createElement("button");
@@ -113,6 +125,10 @@ export function createTree(ctx) {
     return li;
   }
 
+  /**
+   * @param {TreeNode} root
+   * @returns {void}
+   */
   function renderTree(root) {
     state.fileButtons.clear();
     state.dirNodes.clear();
@@ -165,6 +181,11 @@ export function createTree(ctx) {
    * Enter で確定、Esc / フォーカス喪失でキャンセル。
    * trigger は呼び出し元のボタン (ツールバー / ディレクトリの「＋」)。入力欄を
    * 閉じたときにフォーカスをここへ戻し、キーボード利用者がツリー内の位置を失わないようにする。
+   */
+  /**
+   * @param {string} dirPath
+   * @param {HTMLElement | null} [trigger]
+   * @returns {void}
    */
   function openNewFileInput(dirPath, trigger = null) {
     closeNewFileInput();
@@ -223,6 +244,11 @@ export function createTree(ctx) {
    * 入力名を補完して POST /api/file/create → ツリー再取得 → 新規ファイルを
    * 編集モードで開く。失敗 (409 / 400) は status にエラー表示する。
    */
+  /**
+   * @param {string} rawName
+   * @param {string} dirPath
+   * @returns {Promise<void>}
+   */
   async function submitNewFile(rawName, dirPath) {
     const name = completeMarkdownFileName(rawName);
     if (name === null) {
@@ -258,6 +284,10 @@ export function createTree(ctx) {
 
   /* ===== 選択状態 ===== */
 
+  /**
+   * @param {string | null} path
+   * @returns {void}
+   */
   function highlightSelected(path) {
     for (const [p, btn] of state.fileButtons) {
       btn.classList.toggle("is-selected", p === path);
@@ -265,6 +295,10 @@ export function createTree(ctx) {
   }
 
   /** 選択したファイルの祖先ディレクトリをすべて開く (deep-link からの復元用)。 */
+  /**
+   * @param {string} path
+   * @returns {void}
+   */
   function expandAncestors(path) {
     const segments = path.split("/");
     segments.pop();

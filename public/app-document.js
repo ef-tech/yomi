@@ -34,6 +34,7 @@ import {
 
 const COPY_FEEDBACK_MS = 1500;
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createDocument(ctx) {
   const { els, state } = ctx;
 

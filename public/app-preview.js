@@ -22,6 +22,7 @@ import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
 import mermaid from "./vendor/mermaid.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createPreview(ctx) {
   const { els, state } = ctx;
 

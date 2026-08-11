@@ -19,12 +19,17 @@ const SWIPE_EDGE_PX = 24;
 const SWIPE_MIN_DX = 60;
 const SWIPE_MAX_DY = 50;
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createMobileUi(ctx) {
   const { els, state } = ctx;
   // **生成時に他モジュールを読まない。** ctx.mobileQuery は app.js が els / state と一緒に
   // 作るので、ここで掴んでもモジュールの生成順に依存しない。
   const { mobileQuery } = ctx;
 
+  /**
+   * @param {boolean} open
+   * @returns {void}
+   */
   function setSidebarOpen(open) {
     els.sidebar.classList.toggle("is-open", open);
     els.sidebarBackdrop.hidden = !open;
@@ -36,6 +41,10 @@ export function createMobileUi(ctx) {
     if (mobileQuery.matches) setSidebarOpen(false);
   }
 
+  /**
+   * @param {boolean} open
+   * @returns {void}
+   */
   function setOverflowOpen(open) {
     els.overflowMenu.hidden = !open;
     els.overflowBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -63,13 +72,19 @@ export function createMobileUi(ctx) {
   function wireOverflowMenu() {
     els.overflowBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      setOverflowOpen(els.overflowMenu.hidden);
+      // `hidden` は `boolean | "until-found"`。どちらも「隠れている」なので真偽に潰す
+      // （従来の JS も truthy 判定で同じ結果になっていた）
+      setOverflowOpen(Boolean(els.overflowMenu.hidden));
     });
     // 外クリックで閉じる
     document.addEventListener("click", (ev) => {
       if (els.overflowMenu.hidden) return;
-      if (els.overflowMenu.contains(ev.target)) return;
-      if (els.overflowBtn.contains(ev.target)) return;
+      // `EventTarget` は `Node` とは限らないが、click の実物は常に要素。
+      // **`instanceof` で絞らない** —— 実行時チェックを足すと挙動が変わり、
+      // 特性テストのハーネスには `Node` グローバルも無い (i18n.js の applyI18n 参照)
+      const target = /** @type {Node | null} */ (ev.target);
+      if (els.overflowMenu.contains(target)) return;
+      if (els.overflowBtn.contains(target)) return;
       setOverflowOpen(false);
     });
     // Esc で閉じる (外部 URL バナー優先は既存 keydown リスナーと衝突しないよう個別判定)
@@ -108,6 +123,10 @@ export function createMobileUi(ctx) {
     if (!topbar) return;
     const targets = [els.preview, els.source];
     const lastY = new WeakMap();
+    /**
+     * @param {HTMLElement} target
+     * @returns {void}
+     */
     const onScroll = (target) => {
       if (!mobileQuery.matches) return;
       const y = target.scrollTop;
@@ -130,7 +149,9 @@ export function createMobileUi(ctx) {
   }
 
   function wireSidebarSwipe() {
+    /** @type {number | null} */
     let startX = null;
+    /** @type {number | null} */
     let startY = null;
     let startedFromEdge = false;
     let startedInDrawer = false;
@@ -141,11 +162,13 @@ export function createMobileUi(ctx) {
         if (!mobileQuery.matches) return;
         if (ev.touches.length !== 1) return;
         const t = ev.touches[0];
+        if (!t) return;
         startX = t.clientX;
         startY = t.clientY;
         const open = els.sidebar.classList.contains("is-open");
         startedFromEdge = !open && t.clientX <= SWIPE_EDGE_PX;
-        startedInDrawer = open && els.sidebar.contains(ev.target);
+        startedInDrawer =
+          open && els.sidebar.contains(ev.target instanceof Node ? ev.target : null);
       },
       { passive: true },
     );
@@ -154,8 +177,9 @@ export function createMobileUi(ctx) {
       "touchend",
       (ev) => {
         if (!mobileQuery.matches) return;
-        if (startX === null) return;
+        if (startX === null || startY === null) return;
         const t = ev.changedTouches[0];
+        if (!t) return;
         const dx = t.clientX - startX;
         const dy = Math.abs(t.clientY - startY);
         const fromEdge = startedFromEdge;

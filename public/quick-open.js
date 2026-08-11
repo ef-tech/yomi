@@ -19,17 +19,25 @@
  */
 
 /**
+ * @typedef {{ type: "file" | "dir", path: string, children?: QuickOpenTreeNode[] }} QuickOpenTreeNode
+ *   `/api/tree` が返すノード
+ * @typedef {{ path: string, positions: number[], inName: boolean }} QuickOpenHit
+ *   `path` はルートからの相対パス、`positions` はクエリ文字が一致したコードポイント位置
+ *   （クエリが空なら空配列）、`inName` はファイル名部分に当たったか
+ */
+
+/**
  * ツリーからファイルの相対パスを document order で集める。
  *
  * ディレクトリは候補にしない (開く対象ではないため)。
  *
- * @param {{ type: string, path: string, children?: unknown[] }} node
+ * @param {QuickOpenTreeNode} node
  * @returns {string[]}
  */
 export function collectFilePaths(node) {
   /** @type {string[]} */
   const out = [];
-  /** @param {{ type?: string, path?: string, children?: unknown[] } | null | undefined} n */
+  /** @param {QuickOpenTreeNode | null | undefined} n */
   const walk = (n) => {
     if (!n) return;
     if (n.type === "file") {
