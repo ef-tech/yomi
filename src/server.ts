@@ -214,6 +214,8 @@ export function createServer(config: ServerConfig): ServerHandle {
     close() {
       watcher?.close();
       server.stop();
+      // マークは「いま保存中のリクエスト」を指すので、サーバを閉じたら意味を失う
+      saveMark.clearAll();
     },
   };
 }
@@ -570,7 +572,10 @@ async function handleFileWrite(
   try {
     await writeFileAtomic(safe.abs, buf);
   } catch (err) {
-    saveMark.clear(safe.rel);
+    // **自分が立てたマークだけを消す (Issue #120)。** 同じファイルを別のリクエストが
+    // 保存中なら、そちらのマークが入っている。無条件に消すと、そのリクエストの
+    // 正常な保存が watcher から「他人の変更」に見えて余計なリロードが飛ぶ
+    saveMark.clear(safe.rel, newSha);
     // **生のメッセージを返さない。** 一時ファイルの絶対パスと pid が載るので、
     // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）
     console.error(`保存に失敗しました (${safe.rel}):`, err);
