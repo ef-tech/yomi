@@ -9,6 +9,7 @@ import { scanMarkdownTree } from "./scanner.ts";
 import { assetContentType, assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
 import { writeFileAtomic } from "./util/atomic-write.ts";
 import { buildContentDisposition } from "./util/content-disposition.ts";
+import type { ErrorCode } from "./util/error-codes.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES } from "./util/image-ext.ts";
@@ -75,6 +76,18 @@ export function createServer(config: ServerConfig): ServerHandle {
   const server = Bun.serve({
     hostname: config.hostname,
     port: config.port,
+    /**
+     * `fetch` を抜けた例外の受け皿 (Issue #99)。
+     *
+     * **これが無いと Bun の開発用エラーページ（HTML 約 70KB）が返る。** ソース断片・
+     * スタック・**絶対パス**が載るので、個別の catch を丁寧に書いても 1 箇所漏れれば
+     * 台無しになる。実際、20KB の Markdown を保存しようとすると `marked` が
+     * `RangeError: Maximum call stack size exceeded` を投げてここへ抜けていた。
+     *
+     * **個別の catch の代わりではなく、最後の砦。** ここに落ちること自体が想定外なので、
+     * 詳細はサーバのログに出して調査できるようにする。
+     */
+    error: internalErrorResponse,
     async fetch(req, server) {
       const url = new URL(req.url);
 
@@ -90,7 +103,16 @@ export function createServer(config: ServerConfig): ServerHandle {
             // エラーを返し続ける（自力で復帰できない）
             treeCache = await serializeTree(config.rootDir, excludes, config.maxDepth);
           } catch (err) {
-            return Response.json({ error: (err as Error).message }, { status: 500 });
+            // **生のメッセージを返さない。** FS のエラーには絶対パスが載る (Issue #99)。
+            //
+            // **通常は到達しない。** `scanner.ts` の `walk` が `readdir` の失敗を
+            // root も含めて握り潰すので、対象を消しても「空のツリー」を 200 で返す。
+            // ここは `JSON.stringify` の失敗など、それ以外の想定外に対する備え
+            console.error("ツリーの走査に失敗しました:", err);
+            return Response.json(
+              { error: "ツリーの取得に失敗しました", code: "tree_failed" },
+              { status: 500 },
+            );
           }
         }
         return new Response(treeCache, { headers: JSON_HEADERS });
@@ -190,8 +212,13 @@ export function createServer(config: ServerConfig): ServerHandle {
     server,
     saveMark,
     close() {
+      // **順序が効いている。** watcher を先に閉じること —— 先にマークを消すと、
+      // debounce 待ちの `isOwnSave` がマークを見失って「他人の変更」と判定し、
+      // まさに消したかった余計なリロードを自分で作る (Issue #120)
       watcher?.close();
       server.stop();
+      // マークは「いま保存中のリクエスト」を指すので、サーバを閉じたら意味を失う
+      saveMark.clearAll();
     },
   };
 }
@@ -218,7 +245,27 @@ export function checkOrigin(req: Request): boolean {
   return originHost === host;
 }
 
-function forbidden(message: string, code?: string): Response {
+/**
+ * `fetch` を抜けた例外の受け皿 (Issue #99)。
+ *
+ * **これが無いと Bun の開発用エラーページ（HTML 約 70KB）が返る。** ソース断片・
+ * スタック・**絶対パス**が載るので、個別の catch を丁寧に書いても 1 箇所漏れれば
+ * 台無しになる。実際、20KB の Markdown を保存しようとすると `marked` が
+ * `RangeError: Maximum call stack size exceeded` を投げてここへ抜けていた。
+ *
+ * **個別の catch の代わりではなく、最後の砦。** いまは全ハンドラが捕捉するので
+ * 通常は到達しないが、経路が増えたときの保険として置く。ここに落ちること自体が
+ * 想定外なので、詳細はサーバのログに出して調査できるようにする。
+ */
+export function internalErrorResponse(err: unknown): Response {
+  console.error("未捕捉のエラー:", err);
+  return Response.json(
+    { error: "サーバ内部エラーが発生しました", code: "internal_error" },
+    { status: 500 },
+  );
+}
+
+function forbidden(message: string, code?: ErrorCode): Response {
   return Response.json({ error: message, code }, { status: 403 });
 }
 
@@ -392,7 +439,15 @@ async function handleFileRead(
         { status: 404 },
       );
     }
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // 想定外の FS エラー (EACCES / EIO 等) は生メッセージを返さず汎用化する (Issue #99)。
+    // `EACCES: permission denied, open '/home/<user>/…/x.md'` のように**絶対パスが載る**
+    // **要求文字列を連結しない。** 改行や ANSI エスケープを含みうるので、
+    // 端末に偽のログ行を差し込まれない形（オブジェクト）で渡す
+    console.error("ファイルの読み取りに失敗しました:", { path: requested }, err);
+    return Response.json(
+      { error: `ファイルの読み取りに失敗しました: ${requested}`, code: "read_failed" },
+      { status: 500 },
+    );
   }
 }
 
@@ -480,12 +535,27 @@ async function handleFileWrite(
         currentSha = null;
         currentRaw = null;
       } else {
-        return Response.json({ error: (err as Error).message }, { status: 500 });
+        // 競合判定のための読み取り。ここも生メッセージを返さない (Issue #99)
+        console.error(`競合判定の読み取りに失敗しました (${safe.rel}):`, err);
+        return Response.json(
+          { error: `ファイルの読み取りに失敗しました: ${path}`, code: "read_failed" },
+          { status: 500 },
+        );
       }
     }
     if (currentSha !== baseSha) {
-      const currentHtml =
-        currentRaw === null ? "" : await renderMarkdown(currentRaw, { currentPath: safe.rel });
+      // 描画に失敗しても競合の通知自体は返す（`raw` があれば差分は出せる）
+      let currentHtml = "";
+      if (currentRaw !== null) {
+        try {
+          currentHtml = await renderMarkdown(currentRaw, { currentPath: safe.rel });
+        } catch (err) {
+          console.error("競合レスポンスの描画に失敗しました:", {
+            path: safe.rel,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       return Response.json(
         {
           error: "ファイルが他で更新されています",
@@ -505,17 +575,43 @@ async function handleFileWrite(
   try {
     await writeFileAtomic(safe.abs, buf);
   } catch (err) {
-    saveMark.clear(safe.rel);
+    // **自分が立てたマークだけを消す (Issue #120)。** 同じファイルを別のリクエストが
+    // 保存中なら、そちらのマークが入っている。無条件に消すと、そのリクエストの
+    // 正常な保存が watcher から「他人の変更」に見えて余計なリロードが飛ぶ
+    const cleared = saveMark.clear(safe.rel, newSha);
     // **生のメッセージを返さない。** 一時ファイルの絶対パスと pid が載るので、
-    // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）
-    console.error(`保存に失敗しました (${safe.rel}):`, err);
+    // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）。
+    // **パスも連結しない** —— ファイル名に改行や ANSI を入れられると偽のログ行を
+    // 差し込めるので、オブジェクトで渡す（#99 が同じ理由で立てた作法）
+    console.error("保存に失敗しました:", {
+      path: safe.rel,
+      // `false` = 別リクエストのマークが載っていた。**並行保存が実際に起きた観測点**で、
+      // 余計なリロードの報告を切り分けるときの唯一の手掛かりになる (Issue #120)
+      mark: cleared ? "cleared" : "別リクエストのものを保持",
+      error: err instanceof Error ? err.message : String(err),
+    });
     return Response.json(
       { error: `ファイルの保存に失敗しました: ${path}`, code: "write_failed" },
       { status: 500 },
     );
   }
 
-  const html = await renderMarkdown(body, { currentPath: safe.rel });
+  // **保存は成功しているので、描画に失敗しても 200 を返す (Issue #99)。**
+  // ここを覆っていなかったため、`marked` が落ちると「ファイルは書けたのに 500」という
+  // 事実と食い違う応答になっていた（しかも Bun のエラーページで内部情報が漏れる）。
+  // 本文は返せているので、クライアントは `raw` から再描画できる
+  let html = "";
+  try {
+    html = await renderMarkdown(body, { currentPath: safe.rel });
+  } catch (err) {
+    // **メッセージだけを出す。** ここに来る典型は `marked` の再帰上限で、スタックには
+    // 縮小済みのライブラリのソースが数十行ぶん載る。原因の特定にはメッセージで足り、
+    // 全部出すとテストや運用のログが読めなくなる
+    console.error("保存後の描画に失敗しました:", {
+      path: safe.rel,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
 }
 
@@ -721,7 +817,12 @@ async function handleAssetRead(
     if (code === "EISDIR") {
       return Response.json({ error: "ファイルではありません" }, { status: 400 });
     }
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // 想定外の FS エラーは生メッセージを返さず汎用化する (Issue #99)
+    console.error("アセットの配信に失敗しました:", { path: requested }, err);
+    return Response.json(
+      { error: `ファイルの読み取りに失敗しました: ${requested}`, code: "asset_failed" },
+      { status: 500 },
+    );
   } finally {
     // fd close 失敗 (極稀な EBADF 等) は response に影響させない
     await fh?.close().catch(() => {});
