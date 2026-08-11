@@ -46,6 +46,12 @@ import { writeFileAtomic } from "../src/util/atomic-write.ts";
 
 /** イベントが来なくなってから、この時間だけ静かなら試行を閉じる */
 const QUIET_MS = 300;
+/**
+ * **最初の 1 件を待つ上限。** これを過ぎて何も来なければ「取りこぼし」と判定する。
+ * chokidar のディレクトリ再走査スロットル (1000ms) より長く取る —— レビューで
+ * 「700ms の窓を超えて届くイベントがある」と実測されたのがこの経路。
+ */
+const FIRST_EVENT_MS = 1_500;
 /** 1 試行の上限。静穏に達しなくてもここで打ち切る */
 const MAX_WAIT_MS = 3_000;
 /** 振る間隔 (ms)。0 は「書いた直後に rename」 */
@@ -70,16 +76,25 @@ w.on("all", (ev, p) => events.push(`${ev}:${p.slice(root.length + 1)}`));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** イベントが `QUIET_MS` 止まるまで待つ（上限 `MAX_WAIT_MS`）。試行境界の染み出しを防ぐ */
+/**
+ * イベントが `QUIET_MS` 止まるまで待つ。試行境界の染み出しを防ぐ。
+ *
+ * **1 件も来ない試行は `FIRST_EVENT_MS` で切り上げる。** そうしないと取りこぼし条件
+ * （間隔 0ms は 1 件も飛ばない）が毎回 `MAX_WAIT_MS` を使い切り、全体の実行時間が
+ * 数倍になる（実測: 20 試行 × 8 条件 × 2 パスで 15 分を超えた）。
+ */
 const settle = async () => {
-  const deadline = Date.now() + MAX_WAIT_MS;
+  const started = Date.now();
+  const deadline = started + MAX_WAIT_MS;
   let seen = events.length;
-  let quietSince = Date.now();
+  let quietSince = started;
   while (Date.now() < deadline) {
     await sleep(50);
     if (events.length !== seen) {
       seen = events.length;
       quietSince = Date.now();
+    } else if (events.length === 0) {
+      if (Date.now() - started >= FIRST_EVENT_MS) return;
     } else if (Date.now() - quietSince >= QUIET_MS) {
       return;
     }

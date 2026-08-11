@@ -61,7 +61,7 @@ export function toChokidarDepth(treeDepth: number | undefined): number | undefin
  * chokidar 側が扱う（外部エディタの保存は未測定）。
  *
  * **別の話として、書き込みと rename が近すぎると chokidar が取りこぼす。**
- * `writeFileAtomic` (Issue #101) の上書きは約 4 分の 3 が届かない (Issue #119)。
+ * `writeFileAtomic` (Issue #101) の上書きは 5 回に 4 回ほど届かない (Issue #119)。
  * 計測は `scripts/probe-watcher-atomic.ts`。
  *
  * onChange の kind:
