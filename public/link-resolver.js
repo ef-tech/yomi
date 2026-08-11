@@ -8,6 +8,10 @@
  */
 
 /** `#fragment` だけのリンク (ページ内アンカー)。`foo.md#bar` 等は false */
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
 export function isAnchor(href) {
   return typeof href === "string" && href.startsWith("#");
 }
@@ -48,6 +52,10 @@ const HAS_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * `vbscript:` 含む) を true にしていた。現在は app.js の外部リンクバナーで
  * 安全に新タブを開ける https/mailto/tel に限定する。
  */
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
 export function isExternalUrl(href) {
   if (typeof href !== "string") return false;
   return SAFE_LINK_SCHEME.test(href);
@@ -60,6 +68,10 @@ export function isExternalUrl(href) {
  * Issue #22 以降、より広く危険スキームを判定する [[isUnsafeScheme]] も追加した。
  * 既存呼び出しの後方互換のためこの関数は javascript: のみマッチに維持する。
  */
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
 export function isJavascriptUrl(href) {
   if (typeof href !== "string") return false;
   return /^\s*javascript\s*:/i.test(href);
@@ -69,6 +81,10 @@ export function isJavascriptUrl(href) {
  * Issue #22: 危険スキームの拡張判定。
  * javascript / vbscript / file / chrome-extension / intent / view-source / wyciwyg / jar / data
  * のいずれかをマッチする。link click / image src 両方で実行・表示・遷移を阻止する。
+ */
+/**
+ * @param {string} href
+ * @returns {boolean}
  */
 export function isUnsafeScheme(href) {
   if (typeof href !== "string") return false;
@@ -83,6 +99,10 @@ export function isUnsafeScheme(href) {
  *
  * スキームなし (相対パス) は呼び出し側 ([[rewriteImageHref]]) で別途解決する。
  */
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
 export function isSafeImageHref(href) {
   if (typeof href !== "string") return false;
   if (/^https?:/i.test(href)) return true;
@@ -94,6 +114,10 @@ export function isSafeImageHref(href) {
  * RFC 3986 風のスキーム接頭辞 (`http:`, `mailto:`, `foo+bar.baz:`, ...) を持つかの判定。
  * 安全性とは無関係の純粋な構文判定。`isSafeImageHref` / `isExternalUrl` / `isUnsafeScheme` の
  * 前段フィルタとして使う。
+ */
+/**
+ * @param {string} href
+ * @returns {boolean}
  */
 export function hasScheme(href) {
   if (typeof href !== "string") return false;
@@ -111,6 +135,10 @@ export function hasScheme(href) {
  *
  * クエリ (`?...`) は path 側に残す。yomi の resolveRelativePath はクエリも
  * 切り落とすため、現状クエリ付き内部リンクは想定外。
+ */
+/**
+ * @param {string} href
+ * @returns {{ path: string, hash: string | null }}
  */
 export function splitHrefHash(href) {
   if (typeof href !== "string") return { path: "", hash: null };
@@ -145,6 +173,10 @@ export function splitHrefHash(href) {
  * `/api/asset?path=...` の path クエリ用などに使う共有ヘルパー (Issue #37 で
  * server-side renderer.ts と client-side app.js の重複を解消)。
  */
+/**
+ * @param {string} p
+ * @returns {string}
+ */
 export function encodePathForUrl(p) {
   if (typeof p !== "string") return "";
   return p.split("/").map(encodeURIComponent).join("/");
@@ -159,6 +191,11 @@ export function encodePathForUrl(p) {
  * - 戻り値: 解決された相対 path (例: "api.md")
  *
  * root を超える `..` は root 止まり (= 配列が空になるまで pop)。
+ */
+/**
+ * @param {string} currentPath
+ * @param {string} href
+ * @returns {string}
  */
 export function resolveRelativePath(currentPath, href) {
   if (typeof currentPath !== "string" || typeof href !== "string") return "";
@@ -177,8 +214,8 @@ export function resolveRelativePath(currentPath, href) {
 
   // 末尾のクエリ/フラグメントは無視 (yomi の API には fragment 部は不要、内部遷移のみ扱う)
   const lastIdx = hrefSegments.length - 1;
-  if (lastIdx >= 0) {
-    const last = hrefSegments[lastIdx];
+  const last = lastIdx >= 0 ? hrefSegments[lastIdx] : undefined;
+  if (last !== undefined) {
     const hashIdx = last.indexOf("#");
     const queryIdx = last.indexOf("?");
     const cutAt = Math.min(

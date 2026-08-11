@@ -11,7 +11,7 @@
 
 /**
  * Markdown ソーステキストから見出し行の番号 (1-indexed) を抽出する。
- * フェンス内 (` ``` ... ``` ` や ` ~~~ ... ~~~ ` ) の "## " は見出しとして扱わない。
+ * フェンス内 (バッククォート 3 個 や `~~~` で囲まれた範囲) の "## " は見出しとして扱わない。
  *
  * @param {string} sourceText - markdown ソース全体 (frontmatter 込み)
  * @returns {number[]} 見出し行番号の配列 (1-indexed、現れた順)
@@ -22,7 +22,8 @@ export function findHeadingLines(sourceText) {
   const result = [];
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // `noUncheckedIndexedAccess` により添字は undefined を含む（範囲内なので実在する）
+    const line = lines[i] ?? "";
     if (/^\s*(```|~~~)/.test(line)) {
       inFence = !inFence;
       continue;
@@ -51,8 +52,10 @@ export function findHeadingLines(sourceText) {
  */
 export function mapScrollTop(scrollTop, pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return scrollTop;
-  const first = pairs[0];
-  const last = pairs[pairs.length - 1];
+  // **公開の純関数なので、穴あき配列を渡されたら従来どおり落ちる。**
+  // 早期 return にすると、壊れた入力が「同期不能」に化けて気づけない
+  const first = /** @type {{ from: number, to: number }} */ (pairs[0]);
+  const last = /** @type {{ from: number, to: number }} */ (pairs[pairs.length - 1]);
 
   if (scrollTop <= first.from) {
     if (first.from <= 0) return first.to;
@@ -63,8 +66,8 @@ export function mapScrollTop(scrollTop, pairs) {
     return last.to;
   }
   for (let i = 0; i < pairs.length - 1; i++) {
-    const a = pairs[i];
-    const b = pairs[i + 1];
+    const a = /** @type {{ from: number, to: number }} */ (pairs[i]);
+    const b = /** @type {{ from: number, to: number }} */ (pairs[i + 1]);
     if (scrollTop >= a.from && scrollTop < b.from) {
       const span = b.from - a.from;
       if (span === 0) return a.to;

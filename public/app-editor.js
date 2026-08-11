@@ -15,10 +15,18 @@ import { errorText, fetchJson, sanitize } from "./app-context.js";
 import { collapseUnchanged, diffLines } from "./diff.js";
 import { t } from "./i18n.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createEditor(ctx) {
   const { els, state } = ctx;
 
-  /** 409 で受け取ったサーバ側スナップショット (取り込み時に使う)。 */
+  /**
+   * 409 の応答。**`raw` は null になりうる**（保存中にサーバ側でファイルが消えた場合）。
+   * 下の `serverGone` 判定がこれを見ている。
+   *
+   * @typedef {import("./api-types.js").ConflictPayload} FilePayload
+   */
+
+  /** @type {FilePayload | null} 409 で受け取ったサーバ側スナップショット (取り込み時に使う)。 */
   let conflictServerSnapshot = null;
 
   /** 編集モードの状態に応じて編集ボタン / overflow ボタンの表記を現在言語で設定する。 */
@@ -34,11 +42,19 @@ export function createEditor(ctx) {
     }
   }
 
+  /**
+   * @param {boolean} dirty
+   * @returns {void}
+   */
   function setDirty(dirty) {
     state.dirty = dirty;
     els.dirtyIndicator.hidden = !dirty;
   }
 
+  /**
+   * @param {boolean} enabled
+   * @returns {void}
+   */
   function enableEditActions(enabled) {
     els.editBtn.disabled = !enabled;
     els.tocBtn.disabled = !enabled;
@@ -113,6 +129,10 @@ export function createEditor(ctx) {
    * 編集モードでないのでエディタから本文を取れない。明示しなければ従来どおり
    * エディタの中身を保存し、編集モードでなければ何もしない。
    */
+  /**
+   * @param {{ force?: boolean, body?: string | null }} [options]
+   * @returns {Promise<boolean>}
+   */
   async function saveEdit({ force = false, body: overrideBody = null } = {}) {
     if (overrideBody === null && !state.editing) return false;
     if (!state.currentPath) {
@@ -120,10 +140,12 @@ export function createEditor(ctx) {
       return false;
     }
     const body = overrideBody ?? els.editor.value;
+    /** @type {{ path: string, body: string, baseSha?: string }} */
     const payload = { path: state.currentPath, body };
     if (!force && state.currentSha) payload.baseSha = state.currentSha;
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,8 +171,9 @@ export function createEditor(ctx) {
       ctx.setStatus("ok", t("status.saved", { path: state.currentPath }));
       return true;
     } catch (err) {
-      if (err.status === 409 && err.payload) {
-        showConflict(err.payload, body);
+      const e = /** @type {import("./app-context.js").ApiError} */ (err);
+      if (e.status === 409 && e.payload) {
+        showConflict(/** @type {FilePayload} */ (e.payload), body);
         ctx.setStatus("error", t("status.conflict"));
       } else {
         ctx.setStatus("error", t("status.saveFailed", { msg: errorText(err) }));
@@ -189,12 +212,13 @@ export function createEditor(ctx) {
    * エディタは空のまま。それを「ローカル版」として差分に出すと
    * 「自分の変更が全部消えている」という嘘を見せることになる。
    */
+  /** @type {string | null} */
   let conflictLocalBody = null;
 
   /**
    * 競合を伝える。
    *
-   * @param {object} payload 409 のレスポンス (サーバの最新内容)
+   * @param {FilePayload} payload 409 のレスポンス (サーバの最新内容)
    * @param {string} localBody 保存しようとした本文
    */
   function showConflict(payload, localBody) {
@@ -250,7 +274,7 @@ export function createEditor(ctx) {
    */
   const CONFLICT_DIFF_CONTEXT = 3;
 
-  /** 差分ダイアログを閉じたときのフォーカス戻り先。 */
+  /** @type {HTMLElement | null} 差分ダイアログを閉じたときのフォーカス戻り先。 */
   let conflictDiffReturnFocus = null;
 
   function wireConflictDiff() {
@@ -259,13 +283,17 @@ export function createEditor(ctx) {
     els.conflictDiffTakeServer.addEventListener("click", () => takeServerVersion());
     els.conflictDiffOverwrite.addEventListener("click", () => forceOverwrite());
     els.conflictDiffCopyLocal.addEventListener("click", (ev) =>
-      copyConflictSide(conflictLocalBody ?? "", "conflict.diff.copiedLocal", ev.currentTarget),
+      copyConflictSide(
+        conflictLocalBody ?? "",
+        "conflict.diff.copiedLocal",
+        /** @type {HTMLButtonElement} */ (ev.currentTarget),
+      ),
     );
     els.conflictDiffCopyServer.addEventListener("click", (ev) =>
       copyConflictSide(
         conflictServerSnapshot?.raw ?? "",
         "conflict.diff.copiedServer",
-        ev.currentTarget,
+        /** @type {HTMLButtonElement} */ (ev.currentTarget),
       ),
     );
 
@@ -287,6 +315,10 @@ export function createEditor(ctx) {
     );
   }
 
+  /**
+   * @param {KeyboardEvent} ev
+   * @returns {void}
+   */
   function handleConflictDiffKeydown(ev) {
     if (ev.isComposing) return;
 
@@ -308,6 +340,7 @@ export function createEditor(ctx) {
       if (focusables.length === 0) return;
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
+      if (!first || !last) return;
       const active = document.activeElement;
 
       if (!els.conflictDiff.contains(active)) {
@@ -325,21 +358,26 @@ export function createEditor(ctx) {
     }
   }
 
-  /** ダイアログ内でフォーカスを取れる要素を、DOM 順で返す。 */
+  /**
+   * ダイアログ内でフォーカスを取れる要素を、DOM 順で返す。
+   * @returns {HTMLElement[]}
+   */
   function conflictDiffFocusables() {
     return Array.from(
-      els.conflictDiff.querySelectorAll("button:not([disabled]), [tabindex='0']"),
+      /** @type {NodeListOf<HTMLElement>} */ (
+        els.conflictDiff.querySelectorAll("button:not([disabled]), [tabindex='0']")
+      ),
     ).filter((el) => {
       // **祖先の hidden まで見る。** `Element.hidden` は自要素の属性しか反映しないので、
       // 隠したラッパーの中のボタンを拾ってしまう。`checkVisibility` があればそれを使う
       // (jsdom には無いので、無ければ祖先を辿る。`offsetParent` はレイアウトが要るので使わない)
       if (typeof el.checkVisibility === "function") return el.checkVisibility();
-      for (
-        let node = el;
-        node && node !== els.conflictDiff.parentElement;
-        node = node.parentElement
-      ) {
+      // 祖先を root 手前まで遡る。`parentElement` は `HTMLElement | null` を返すので
+      // ループ変数を明示的に nullable にする
+      let node = /** @type {HTMLElement | null} */ (el);
+      while (node && node !== els.conflictDiff.parentElement) {
         if (node.hidden) return false;
+        node = node.parentElement;
       }
       return true;
     });
@@ -349,7 +387,8 @@ export function createEditor(ctx) {
     if (!conflictServerSnapshot) return;
     // 再入すると戻り先がダイアログ内の要素で上書きされ、閉じたときの復帰が壊れる
     if (!els.conflictDiff.hidden) return;
-    conflictDiffReturnFocus = document.activeElement;
+    // 戻す先は要素。`instanceof` は実行時チェックを足すので使わない (理由は i18n.js)
+    conflictDiffReturnFocus = /** @type {HTMLElement | null} */ (document.activeElement);
     els.conflictDiffNotice.hidden = true;
     els.conflictDiffNotice.textContent = "";
     // **先に表示してから中身を書く。** live region (`role="status"`) の更新は
@@ -441,6 +480,10 @@ export function createEditor(ctx) {
    * 入りうる。テキストノードで組み立てれば、エスケープ漏れの経路そのものが無い
    * (Issue #21 / #59 のサニタイズ方針を迂回しない)。
    */
+  /**
+   * @param {import("./diff.js").DiffRow} row
+   * @returns {HTMLDivElement}
+   */
   function buildConflictDiffRow(row) {
     const div = document.createElement("div");
     div.className = `conflict-diff-row is-${row.type}`;
@@ -465,6 +508,10 @@ export function createEditor(ctx) {
     return div;
   }
 
+  /**
+   * @param {number} count
+   * @returns {HTMLDivElement}
+   */
   function buildConflictSkipRow(count) {
     const div = document.createElement("div");
     div.className = "conflict-diff-skip";
@@ -472,6 +519,12 @@ export function createEditor(ctx) {
     return div;
   }
 
+  /**
+   * @param {string} text
+   * @param {string} messageKey
+   * @param {HTMLButtonElement} button
+   * @returns {Promise<void>}
+   */
   async function copyConflictSide(text, messageKey, button) {
     let message;
     try {

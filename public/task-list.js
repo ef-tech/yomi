@@ -17,13 +17,17 @@ const FENCE_RE = /^(\s*)(```+|~~~+)\s*(.*?)\r?$/;
  * body 内の N 番目 (0-indexed) のタスクリスト行をトグルする。
  *
  * - index 範囲外、type 不正、対象なしの場合: body 不変、newChecked: null
- * - code fence (``` または ~~~) 内のタスク風文字列は無視
+ * - code fence (バッククォート 3 個 または `~~~`) 内のタスク風文字列は無視
  * - インデント (ネスト) はそのまま保持
  * - `[X]` (大文字) も off にできる
  *
  * 戻り値: { body, newChecked }
  *   body: トグル後の本文 (失敗時は元の body)
  *   newChecked: トグル後の状態 (true = checked, false = unchecked, null = 該当なし)
+ *
+ * @param {string} body
+ * @param {number} index
+ * @returns {{ body: string, newChecked: boolean | null }}
  */
 export function toggleTaskInMarkdown(body, index) {
   if (typeof body !== "string") return { body: "", newChecked: null };
@@ -34,15 +38,18 @@ export function toggleTaskInMarkdown(body, index) {
   let inFence = false;
   /** @type {string | null} */
   let fenceMarker = null;
+  /** @type {boolean | null} */
   let newChecked = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // `noUncheckedIndexedAccess` により添字は undefined を含む。ループ範囲内なので実在するが、
+    // 型でも示すために受けてから使う。
+    const line = lines[i] ?? "";
 
     // fence boundary detect
     const fm = line.match(FENCE_RE);
     if (fm) {
-      const marker = fm[2];
+      const marker = fm[2] ?? "";
       if (!inFence) {
         inFence = true;
         fenceMarker = marker;
@@ -61,7 +68,7 @@ export function toggleTaskInMarkdown(body, index) {
     if (!m) continue;
 
     if (taskNo === index) {
-      const checked = m[2].toLowerCase() === "x";
+      const checked = (m[2] ?? "").toLowerCase() === "x";
       newChecked = !checked;
       // m[4] で末尾 CR (`\r`) を保持し CRLF 改行を維持
       lines[i] = `${m[1]}[${newChecked ? "x" : " "}]${m[3]}${m[4]}`;
@@ -76,17 +83,21 @@ export function toggleTaskInMarkdown(body, index) {
 /**
  * body 内のタスクリスト行の総数を返す (code fence 内は除外、document order)。
  * テスト/UI 用のヘルパ。
+ *
+ * @param {string} body
+ * @returns {number}
  */
 export function countTasksInMarkdown(body) {
   if (typeof body !== "string") return 0;
   const lines = body.split("\n");
   let n = 0;
   let inFence = false;
+  /** @type {string | null} */
   let fenceMarker = null;
   for (const line of lines) {
     const fm = line.match(FENCE_RE);
     if (fm) {
-      const marker = fm[2];
+      const marker = fm[2] ?? "";
       if (!inFence) {
         inFence = true;
         fenceMarker = marker;

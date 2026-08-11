@@ -1,0 +1,31 @@
+{
+  // ブラウザへそのまま配る `public/*.js` を `tsc` の検査対象にする (Issue #79)。
+  //
+  // **なぜ別ファイルなのか。** ルートの tsconfig は Bun 上で動くサーバ側 (`src/` / `tests/`) 用で、
+  // `types: ["bun"]` が入っている。ブラウザ側に Bun の型を見せると、実際には存在しない
+  // グローバル (`Bun` / `process` など) を書いても検査を通ってしまう。**環境が違うものは
+  // 設定も分ける**。`bun run typecheck` が両方を続けて走らせる。
+  //
+  // **なぜ `.ts` にしないのか。** bundler を入れない方針なので (#79 の対象外)、
+  // ブラウザが直接読める `.js` のままにする必要がある。型は JSDoc で書き、`checkJs` で検査する。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // ブラウザ環境。`types: []` で Bun / Node の型を持ち込まない
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  // **`public/vendor/` は含めない。** bundle された生成物で、型は隣の `*.d.ts` が
+  // 本体パッケージから再輸出する (`import` で辿られたときはそちらが使われる)。
+  "include": ["public/*.js"],
+  "exclude": ["node_modules"]
+}
