@@ -4,6 +4,26 @@ import { toPosix } from "./util/path-util.ts";
 
 export { isMarkdownExtension as isMarkdownPath } from "./util/markdown-ext.ts";
 
+/**
+ * root からの相対パスが**ルートの外**を指しているか (Issue #118)。
+ *
+ * **`startsWith("..")` では駄目。** `..cache` のような**通常のエントリ名**にも当たり、
+ * root 内の正当なパスを弾いてしまう（実際に `..cache/x.md` が 400 になっていた）。
+ * 親を辿っているのは、
+ *
+ * - `..` そのもの（= root の親）
+ * - `../` で始まる（`..${sep}`。区切りまで見て初めて「親へ 1 つ上がった」と言える）
+ * - そもそも絶対パス（`relative` が相対で表せなかった＝別のドライブ等）
+ *
+ * の 3 つだけ。**3 箇所で同じ判定を書き写していた**ので関数にした
+ * （1 箇所だけ `startsWith("..")` のままで、作法が割れていた）。
+ *
+ * @param rel `relative(rootAbs, ...)` の結果
+ */
+function isOutsideRoot(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
 export class UnsafePathError extends Error {
   constructor(
     public readonly requestedPath: string,
@@ -55,7 +75,14 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   const resolved = candidate.resolved;
   const rel = relative(rootAbs, candidateAbs);
 
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  // **`..` で始まるだけの名前を弾かない (Issue #118)。** `startsWith("..")` だと
+  // `..cache` のような**通常のエントリ名**にも当たり、root 内の正当なパスが 400 になる。
+  // 親を辿るのは `..` 単体か `../` で始まるときだけ。
+  //
+  // **同じ関数の下 2 箇所は元からこの形**（`parentRel` と `base`）で、1 ファイル内で
+  // 作法が割れていた。`src/watcher.ts` にも「単に `..` で始まる名前（例: `..cache`）は
+  // 通常の in-tree パス」という明示コメントがあり、そちらは正しく扱っている。
+  if (isOutsideRoot(rel)) {
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
@@ -72,7 +99,7 @@ export async function resolveSafe(rootDir: string, requested: string): Promise<R
   // 過剰なため対応しない。静的な symlink エスケープはこのチェックで防げる。
   const parentReal = await safeRealpath(dirname(requestedAbs));
   const parentRel = relative(rootAbs, parentReal);
-  if (parentRel === ".." || parentRel.startsWith(`..${sep}`) || isAbsolute(parentRel)) {
+  if (isOutsideRoot(parentRel)) {
     throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
   }
 
@@ -121,7 +148,7 @@ async function relFromDeepestReal(
       const base = relative(rootAbs, probe.path);
       // **祖先が root 外を指していたら弾く。** 上の `parentRel` チェックと同じ判定を
       // 遡った先にも掛ける (深い階層の symlink エスケープを見逃さない)
-      if (base === ".." || base.startsWith(`..${sep}`) || isAbsolute(base)) {
+      if (isOutsideRoot(base)) {
         throw new UnsafePathError(requested, "ルートディレクトリの外を参照しています");
       }
       tail.reverse();
