@@ -1641,7 +1641,7 @@ describe("server - 500 応答が生の FS エラーを返さない (Issue #99)",
 // `saveMark` は「自分が書いた直後の sha」を覚えて、watcher のイベントを自己保存として
 // 抑止するためのもの。失敗時にパス単位で無条件に消していたので、同じファイルを
 // 2 つのリクエストが保存すると**後から来たほうのマークを先のリクエストの失敗が消して**いた。
-describe("server - 並行保存で saveMark を壊さない (Issue #120)", () => {
+describe("server - 保存の失敗がマークを壊さない (Issue #120)", () => {
   let root: string;
   let handle: ServerHandle;
   let url: string;
@@ -1674,10 +1674,15 @@ describe("server - 並行保存で saveMark を壊さない (Issue #120)", () =>
    *
    * 壊れる順序は「失敗する側が `set` → 別リクエストが上書き → 失敗側が `clear`」で、
    * HTTP 越しにその間へ割り込むのはタイミング勝負になり flaky を持ち込む
-   * （`rename` が落ちるまでが速すぎる）。**順序の検証は
-   * `tests/save-mark.test.ts` が決定的に行う**（値が食い違えば消さない）。
+   * （`rename` が落ちるまでが速すぎる）。
    *
-   * ここで見るのは、サーバがその契約を**実際に使っているか**の 2 点。
+   * **#120 の本命は `tests/watcher.test.ts` の
+   * 「先に始まったリクエストの失敗が、後続の保存に余計なリロードを起こさない」**で、
+   * fake-watch を使って実消費者（`isOwnSave` → `onChange`）まで決定的に通している。
+   * `tests/save-mark.test.ts` は `SaveMark` 単体の契約を固定する。
+   *
+   * **ここで見るのは、サーバがその契約を実際に使っているか**（失敗時に自分の sha を
+   * 渡しているか）だけ。ここだけでは #120 の退行は捕まらない。
    */
   test("失敗した保存は、自分が立てたマークを残さない", async () => {
     const { saveMark } = handle;
@@ -1710,6 +1715,8 @@ describe("server - 並行保存で saveMark を壊さない (Issue #120)", () =>
 
   test("成功した保存はマークを立てる（自己保存の抑止に回帰がない）", async () => {
     const { saveMark } = handle;
+    saveMark.clearAll();
+
     const body = "# 自分の保存\n";
     const res = await save("a.md", body);
     expect(res.status).toBe(200);
@@ -1720,15 +1727,18 @@ describe("server - 並行保存で saveMark を壊さない (Issue #120)", () =>
   test("close() でマークを捨てる", async () => {
     const h = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
     const body = "# 閉じる前の保存\n";
-    const res = await fetch(`http://127.0.0.1:${h.server.port}/api/file`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "a.md", body }),
-    });
-    expect(res.status).toBe(200);
-    expect(h.saveMark.size).toBe(1);
-
-    h.close();
+    try {
+      const res = await fetch(`http://127.0.0.1:${h.server.port}/api/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "a.md", body }),
+      });
+      expect(res.status).toBe(200);
+      expect(h.saveMark.size).toBe(1);
+    } finally {
+      // assert が落ちてもポートを掴んだままにしない（このファイルの他テストと揃える）
+      h.close();
+    }
     expect(h.saveMark.size).toBe(0);
   });
 });
