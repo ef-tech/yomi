@@ -544,6 +544,8 @@ echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.co
 sudo sysctl -p /etc/sysctl.d/99-inotify.conf
 ```
 
+**ポーリングには倒していません。** inotify なら 5,000 ファイルのツリーでもアイドル時の CPU は 10 秒あたり 62ms ですが、ポーリング（100ms 間隔）では 455ms とおよそ 7 倍になり、ファイル数に比例して増えます。読むだけで置きっぱなしにする道具なので、常駐コストの低い inotify のままにしてあります（計測は `bun run scripts/probe-watcher-poll-cost.ts` で再現できます）。
+
 上限を引き上げられない（`sudo` が使えない等）場合は、[`--depth`](#オプション) で監視する階層を絞る方法もあります。たとえば `yomi --depth 2` なら 2 階層までしか監視しないため、watch 数を抑えられます。
 
 ### 応答しなくなったときの自動復旧 (Issue #91)

@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FSWatcher } from "chokidar";
 import { SaveMark, sha256 } from "../src/save-mark.ts";
+import { WATCH_GAP_MS, writeFileAtomic } from "../src/util/atomic-write.ts";
 import {
   type ChangeListener,
   createWatcher,
@@ -460,6 +461,107 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
       handle.close();
       await rm(droot, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * **`writeFileAtomic` の上書きが取りこぼされない (Issue #119)。**
+ *
+ * ## 1 回試すテストでは足りない
+ *
+ * 取りこぼしは**タイミング次第**なので、1 回だけ試すテストは**壊れた状態でも
+ * 5 回に 1 回は通る**。だから **N 回中 N 回**を見る。
+ *
+ * 実測（`scripts/probe-watcher-atomic.ts`、tmpfs / 20 試行 × 昇降 2 パス）:
+ *
+ * | 間隔 | `change` の発火 |
+ * |---|---|
+ * | 0ms（修正前の `writeFileAtomic`） | 5/40 |
+ * | 1ms | 33/40 |
+ * | **{@link WATCH_GAP_MS}（5ms）** | **40/40** |
+ *
+ * ## ここが落ちたら
+ *
+ * `WATCH_GAP_MS` は **Bun の実装依存**の値（落としているのは chokidar より下の
+ * `fs.watch`。Node では同条件で取りこぼさない → #138）。**`bun upgrade` のあとに
+ * 落ちたら**、`scripts/probe-watcher-atomic.ts` を回して境界を測り直すこと
+ * （`docs/` の表と CHANGELOG の数字もそこの出力が正本）。
+ */
+describe("writeFileAtomic の上書きを取りこぼさない (Issue #119)", () => {
+  let root: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-atomic-watch-"));
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /**
+   * 実 chokidar を通して N 回上書きし、届いた回数を数える。
+   *
+   * **「別インスタンス」(DoD 2) の代理。** 取りこぼしは**カーネルからランタイムへの
+   * 配送段**で起きるのでプロセス境界に依存しない（別プロセスで 10/10 になることは
+   * `.ef/verify/issue-119/REPORT.md` に記録）。テストを別プロセス化すると起動コストと
+   * flaky のリスクだけが増えるので、ここは同一プロセスで見る。
+   */
+  async function detectionRate(name: string, gapMs: number | undefined, trials: number) {
+    const target = join(root, name);
+    await writeFile(target, "# 初期\n");
+
+    const calls: string[] = [];
+    const { handle, ready } = startWatcher(root, (path) => calls.push(path));
+    try {
+      await ready;
+      let hit = 0;
+      for (let i = 0; i < trials; i++) {
+        calls.length = 0;
+        await writeFileAtomic(target, Buffer.from(`# ${i}\n`, "utf-8"), { gapMs });
+        // debounce(80ms) + 配送を超える猶予。届かない試行はここを使い切る
+        await wait(DEBOUNCE_MARGIN_MS);
+        if (calls.includes(name)) hit++;
+      }
+      return hit;
+    } finally {
+      handle.close();
+    }
+  }
+
+  test("既定の間隔なら 10 回中 10 回届く", async () => {
+    expect(await detectionRate("atomic.md", undefined, 10)).toBe(10);
+  }, 30_000);
+
+  /**
+   * **「間隔 0 なら取りこぼす」を自動テストにはしない。**
+   *
+   * 取りこぼしは確率的なので、遅いマシンでは syscall のあいだに 2ms 経ってしまい
+   * **偶然 10/10 届いて落ちる**。このリポジトリは watcher の結合テストが macOS でだけ
+   * 間欠 fail した既往があり、そこへ確率的な negative control を足すのは割に合わない。
+   * **修正前の再現は変異テスト**（`WATCH_GAP_MS` を 0 にして上の 10/10 が落ちることを
+   * 確認）で見て、レポートに残す。
+   *
+   * 代わりにここでは、**間隔が実際に効いていること**を決定的に固定する。
+   */
+  test("gapMs のぶんだけ待ってから rename する", async () => {
+    const target = join(root, "gap.md");
+    await writeFile(target, "# 初期\n");
+
+    const gapMs = 200;
+    const t0 = Date.now();
+    await writeFileAtomic(target, Buffer.from("# 待つ\n", "utf-8"), { gapMs });
+    const waited = Date.now() - t0;
+
+    // 待っていなければ数 ms で終わる。**下限だけを見る**（上限を見ると負荷で落ちる）。
+    // **閾値ちょうどにしない** —— タイマが 1ms 早発する実装でも落ちないよう 1 割引く
+    expect(waited).toBeGreaterThanOrEqual(gapMs * 0.9);
+    expect(await readFile(target, "utf8")).toBe("# 待つ\n");
+  });
+
+  test("WATCH_GAP_MS は実測の境界 (2ms) の 2 倍以上ある", () => {
+    // **境界ちょうど (2) を通してはいけない。** ぎりぎりだと、負荷や FS が変わったときに
+    // 黙って取りこぼしへ戻る。2 倍を下限にする
+    expect(WATCH_GAP_MS).toBeGreaterThanOrEqual(4);
   });
 });
 

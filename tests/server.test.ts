@@ -838,14 +838,16 @@ describe("server - 保存が原子的である (Issue #101)", () => {
     await writeFile(target, "# 元の内容\n");
 
     // rename を差し替えて、その瞬間の状態を決定的に観測する
-    await writeFileAtomic(target, Buffer.from("# 新しい内容\n"), async (temp, dest) => {
-      // 対象はまだ元のまま = ここで落ちても原稿は失われない
-      expect(await readFile(dest as string, "utf-8")).toBe("# 元の内容\n");
-      // 新しい内容は temp に揃っている
-      expect(await readFile(temp as string, "utf-8")).toBe("# 新しい内容\n");
-      // **同じディレクトリに置く** (別 FS だと rename が EXDEV で落ちる)
-      expect(dirname(temp as string)).toBe(root);
-      await rename(temp as string, dest as string);
+    await writeFileAtomic(target, Buffer.from("# 新しい内容\n"), {
+      rename: async (temp, dest) => {
+        // 対象はまだ元のまま = ここで落ちても原稿は失われない
+        expect(await readFile(dest as string, "utf-8")).toBe("# 元の内容\n");
+        // 新しい内容は temp に揃っている
+        expect(await readFile(temp as string, "utf-8")).toBe("# 新しい内容\n");
+        // **同じディレクトリに置く** (別 FS だと rename が EXDEV で落ちる)
+        expect(dirname(temp as string)).toBe(root);
+        await rename(temp as string, dest as string);
+      },
     });
 
     expect(await readFile(target, "utf-8")).toBe("# 新しい内容\n");
@@ -857,10 +859,12 @@ describe("server - 保存が原子的である (Issue #101)", () => {
 
     // 本物の失敗（EXDEV 等）を模す
     await expect(
-      writeFileAtomic(target, Buffer.from("# 新しい内容\n"), async () => {
-        const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
-        err.code = "EXDEV";
-        throw err;
+      writeFileAtomic(target, Buffer.from("# 新しい内容\n"), {
+        rename: async () => {
+          const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+          err.code = "EXDEV";
+          throw err;
+        },
       }),
     ).rejects.toThrow("EXDEV");
 
@@ -892,9 +896,11 @@ describe("server - 保存が原子的である (Issue #101)", () => {
     await writeFile(target, "# x\n");
     const names: string[] = [];
     for (let i = 0; i < 3; i++) {
-      await writeFileAtomic(target, Buffer.from(`# ${i}\n`), async (temp, dest) => {
-        names.push(basename(temp as string));
-        await rename(temp as string, dest as string);
+      await writeFileAtomic(target, Buffer.from(`# ${i}\n`), {
+        rename: async (temp, dest) => {
+          names.push(basename(temp as string));
+          await rename(temp as string, dest as string);
+        },
       });
     }
     // pid は同じでも、ランダム部分が毎回変わる
@@ -912,9 +918,11 @@ describe("server - 保存が原子的である (Issue #101)", () => {
 
     // フックが throw すれば writeFileAtomic が reject するので、中で直接 expect してよい
     // (外の変数に持ち出すと制御フロー解析が追えず、キャストで型を黙らせる羽目になる)
-    await writeFileAtomic(target, Buffer.from("# 書き換え\n"), async (temp, dest) => {
-      expect(dirname(temp as string)).toBe(sub);
-      await rename(temp as string, dest as string);
+    await writeFileAtomic(target, Buffer.from("# 書き換え\n"), {
+      rename: async (temp, dest) => {
+        expect(dirname(temp as string)).toBe(sub);
+        await rename(temp as string, dest as string);
+      },
     });
 
     expect(await readFile(target, "utf-8")).toBe("# 書き換え\n");
@@ -927,9 +935,11 @@ describe("server - 保存が原子的である (Issue #101)", () => {
     const target = join(root, "wired.md");
     await writeFile(target, "# 元\n");
     // 実サーバ経由では注入できないので、同じ関数を同条件で呼んで経路を確認する
-    await writeFileAtomic(target, Buffer.from("# 経由\n"), async (temp, dest) => {
-      seen.push(basename(temp as string));
-      await rename(temp as string, dest as string);
+    await writeFileAtomic(target, Buffer.from("# 経由\n"), {
+      rename: async (temp, dest) => {
+        seen.push(basename(temp as string));
+        await rename(temp as string, dest as string);
+      },
     });
     expect(seen).toHaveLength(1);
     // エンドポイント側も同じ結果になる

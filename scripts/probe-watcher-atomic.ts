@@ -12,7 +12,8 @@
  * ## なぜ残すか
  *
  * `writeFileAtomic` (Issue #101) は temp へ書いてから rename で差し替えるが、**この経路の
- * 変更を watcher が取りこぼす**。#122 までに **同じ計測を 2 度間違えた**:
+ * 変更を watcher が取りこぼしていた**（#119 で rename の直前に待って解消）。
+ * #122 までに **同じ計測を 2 度間違えた**:
  *
  * 1. 1 回きりの計測で「chokidar は既存ファイルへの rename で `change` を発火しない」と
  *    決定論的に一般化した
@@ -21,6 +22,16 @@
  *
  * だから**何をどう測ったかをコードとして残す**。数値は環境依存なので、
  * **docstring や CHANGELOG の数字を疑ったらこれを回して測り直すこと。**
+ *
+ * ## 原因は Bun の `fs.watch`（chokidar ではない）
+ *
+ * chokidar を通さず素の `node:fs` の `watch` だけで測ると、**Bun は間隔 0ms で 0/10、
+ * Node は 10/10**（同じスクリプト・同じマシン）。chokidar の `atomic` /
+ * `alwaysStat` / `awaitWriteFinish` が効かないのは、いずれも**イベントが届いて
+ * 初めて動く**分岐だから。`usePolling` だけが効くのは `fs.watchFile` に分岐して
+ * **`fs.watch` を経路から外す**ため。詳細と上流への報告は **#138**。
+ *
+ * **つまり境界の値を左右するのは Bun の版。** `bun upgrade` のあとに疑うならここを回す。
  *
  * ## 測り方の方針（過去 2 回の失敗が全部ここに効いている）
  *
@@ -42,7 +53,7 @@ import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { watch } from "chokidar";
-import { writeFileAtomic } from "../src/util/atomic-write.ts";
+import { WATCH_GAP_MS, writeFileAtomic } from "../src/util/atomic-write.ts";
 
 /** イベントが来なくなってから、この時間だけ静かなら試行を閉じる */
 const QUIET_MS = 300;
@@ -139,7 +150,16 @@ const conditions: Array<[string, (i: number) => Promise<void>]> = [
         },
       ] as [string, (i: number) => Promise<void>],
   ),
-  ["writeFileAtomic での上書き", async (i) => void (await writeFileAtomic(target, `a${i}\n`))],
+  // **修正前と修正後を並べる。** 既定だけを測ると「間隔 5ms」と同じものを二度測るだけになり、
+  // このスクリプトが本来見たかった取りこぼしが表から消える (Issue #119)
+  [
+    "writeFileAtomic（gapMs=0・修正前）",
+    async (i) => void (await writeFileAtomic(target, `a${i}\n`, { gapMs: 0 })),
+  ],
+  [
+    `writeFileAtomic（既定 ${WATCH_GAP_MS}ms）`,
+    async (i) => void (await writeFileAtomic(target, `a${i}\n`)),
+  ],
 ];
 
 try {
