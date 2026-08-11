@@ -24,26 +24,48 @@ import { chmod, rename as fsRename, open, rm, stat } from "node:fs/promises";
  *
  * - **ハードリンク**が切れる。リンクの片方だけが更新され、もう片方は古い内容で残る
  * - **開いている fd** は古い内容を見続ける
- * - **ファイル監視が上書き保存を取りこぼすことがある。** chokidar は inotify で temp を認識して
- *   から rename を関連付けるので、**その処理が終わる前に rename すると対象の `change` が出ない**。
- *   下は Linux / Bun 1.3.12 / chokidar 5 で各 20 回試した実測で、決め手は
- *   **temp を書いてから rename するまでの間隔**:
- *
- *   | 操作 | `change` / `add` の発火 |
- *   |---|---|
- *   | 既存ファイルへ直書き | 20/20 |
- *   | temp + rename（間隔 0ms） | **3/20** |
- *   | temp + rename（間隔 5ms 以上） | 20/20 |
- *   | この関数での上書き | 15/20 |
- *
- *   この関数は temp を書いてすぐ rename するため取りこぼす側に入る。**外部エディタの
- *   atomic save は間隔が閾値を超えるので影響を受けない**（同じ状態ではない）。
- *   自分の保存は `saveMark` が元々抑止しているので、実害は**同じディレクトリを開いた
- *   別インスタンスが取りこぼす**ことに限られる。解消は Issue #119 で扱う
+ * - **ファイル監視**が inode ベースなら追随しない（`fs.watch(file)` は inotify watch を
+ *   inode に張るので、差し替えられると古いほうを見続ける）。chokidar は inode の変化を見て
+ *   watch を張り直す (`node_modules/chokidar/handler.js` の `prevStats.ino !== newStats.ino`)
  *
  * モード（パーミッション）は**明示的に引き継ぐ** —— 引き継がないと、新規 inode が umask
  * 既定で作られるので **0600 のファイルが保存のたびに 0664 へ緩む**（実測）。
  * 所有者は非特権では引き継げないため、対象が別ユーザ所有のときは呼び出し元の所有になる。
+ *
+ * ## ファイル監視がこの経路の上書きを取りこぼす (Issue #119)
+ *
+ * **inode の差し替えとは別の問題。** 原因は「write と rename が近すぎること」で、
+ * **間隔を空ければ取りこぼさない**（下記）。
+ *
+ * 計測は `scripts/probe-watcher-atomic.ts` にある。**数字を疑ったら回して測り直すこと。**
+ * 下は Linux / Bun 1.3.12 / chokidar 5.0.0 / 素の `watch(dir)` で、**20 回試行 × 3 実行**:
+ *
+ * | 操作 | `change` の発火（3 実行ぶん） |
+ * |---|---|
+ * | 既存ファイルへ直書き | 20/20 · 20/20 · 20/20 |
+ * | temp + rename（間隔 0ms） | 1/20 · 2/20 · 0/20 |
+ * | temp + rename（間隔 1ms） | 6/20 · 12/20 · 10/20 |
+ * | temp + rename（間隔 2 / 5 / 20 / 50ms） | すべて 20/20 |
+ * | **この関数での上書き** | **2/20 · 3/20 · 7/20** |
+ *
+ * **この関数の上書きは 6 割〜9 割が届かない**（3 実行で 60 回中 12 回のみ発火）。
+ * write と rename のあいだに `close` / `stat` / `chmod` が入るぶん 0ms より少し長いが、
+ * 境界（1〜2ms のあいだ）には届いていない。
+ *
+ * **機構は未特定。** chokidar 5 はファイル単位の watch リスナに 5ms のスロットルを持つが
+ * (`handler.js` の `_throttle(THROTTLE_MODE_WATCH, file, 5)`)、これが原因かは検証していない。
+ * **いずれにせよ閾値は chokidar の実装依存**で、版が変われば変わりうる。
+ *
+ * **測っていないこと**（断定しないための明示）:
+ *
+ * - **外部エディタ（vim / VSCode 等）は未測定。** 保存に要する時間から境界の 2ms は
+ *   優に超えると考えられるが、確かめていない。そもそも保存方式が違う（原本を退避して
+ *   新規作成する方式は unlink + add になり、chokidar の `atomic` オプションの経路に乗る）
+ * - **Linux / inotify のみ。** macOS (FSEvents) と Windows は未測定。このリポジトリは
+ *   FSEvents に配信遅延・結合があることを別途記録している
+ *
+ * 自分の保存は `saveMark` が元々抑止しているので、実害は**同じディレクトリを開いた
+ * 別インスタンスが取りこぼす**ことに限られる。解消は Issue #119 で扱う。
  *
  * @param target 書き込み先
  * @param data 書き込む内容
@@ -57,8 +79,9 @@ export async function writeFileAtomic(
 ): Promise<void> {
   // **同じディレクトリに置く。** `rename` が原子的なのは同一ファイルシステム内だけで、
   // `/tmp` に置くとマウントが分かれている環境で EXDEV になる。
-  // **拡張子は `.tmp`** —— watcher は Markdown 拡張子で絞っているので、一時ファイルの
-  // 作成・削除でイベントが飛ばない。
+  // **拡張子は `.tmp`** —— yomi 側が Markdown 拡張子で絞る (`src/watcher.ts` の `emit`) ので、
+  // 一時ファイルの作成・削除は `onChange` に出ない。**chokidar 自体は `.tmp` も監視している**
+  // （`ignored` は除外ディレクトリ名しか弾かない）ので、上の「取りこぼし」の話とは層が違う。
   // **名前は暗号学的乱数**。`Math.random()` だと予測できるので、他ユーザも書けるディレクトリで
   // 先回りして symlink を置かれる余地が残る。
   const temp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
