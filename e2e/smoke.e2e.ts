@@ -1,4 +1,5 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { treeItem } from "./helpers.ts";
 
 /**
  * E2E 基盤が動くことを示す最小フロー (Issue #80)。
@@ -10,15 +11,6 @@ import { expect, type Page, test } from "@playwright/test";
  * 固定 sleep は使わない (`playwright.config.ts` の方針)。`expect(locator)` の
  * auto-retry で同期する。
  */
-/**
- * ツリーの項目は `title` 属性にフルパスを持つ。
- *
- * **`getByRole("button", { name })` を使わない。** `.tree-item` の accessible name には
- * 装飾アイコン (`.icon::before` の `≡` / `▸`) が混ざるため完全一致にできず、部分一致だと
- * `README.md` が `SUB-README.md` にもマッチして strict mode violation になる (#82 で
- * fixture が増えたときに踏む)。`title` なら一意で完全一致。
- */
-const treeItem = (page: Page, path: string) => page.locator(`#tree .tree-item[title="${path}"]`);
 
 test("ファイルを選ぶとプレビューに描画される", async ({ page }) => {
   await page.goto("/");
