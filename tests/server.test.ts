@@ -1547,3 +1547,96 @@ describe("server - watcher が /api/tree のキャッシュを捨てる (Issue #
     expect(seen).toContain("b.md");
   });
 });
+
+// **500 応答が内部状態を漏らさない (Issue #99)。**
+//
+// FS のエラーメッセージは `EACCES: permission denied, open '/home/<user>/…/x.md'` の形で
+// **絶対パスを含む**。既定バインドは 127.0.0.1 なので外部到達は `--share` 明示時に限られるが、
+// `handleFileCreate` は同じ理由で既に汎用化しており、非対称だった。
+describe("server - 500 応答が生の FS エラーを返さない (Issue #99)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+  /** root でない環境でだけ権限エラーを起こせる（root は権限を素通りする） */
+  let canDenyRead = false;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-500-"));
+    await writeFile(join(root, "locked.md"), "# locked\n");
+    await writeFile(join(root, "locked.csv"), "a,b\n");
+    await chmod(join(root, "locked.md"), 0o000);
+    await chmod(join(root, "locked.csv"), 0o000);
+    // **実際に読めなくなったかを確かめる。** root で走ると chmod が効かず、
+    // 「テストは通ったが何も検証していない」状態になる
+    canDenyRead = await readFile(join(root, "locked.md"))
+      .then(() => false)
+      .catch(() => true);
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await chmod(join(root, "locked.md"), 0o600).catch(() => {});
+    await chmod(join(root, "locked.csv"), 0o600).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** 応答に絶対パスや errno が混ざっていないこと。 */
+  const assertNoLeak = (body: { error?: string; code?: string }) => {
+    expect(body.error).toBeTruthy();
+    expect(body.error).not.toContain(root);
+    expect(body.error).not.toContain("EACCES");
+    expect(body.error).not.toContain("permission denied");
+  };
+
+  test("読み取りの 500 が汎用メッセージと code を返す", async () => {
+    if (!canDenyRead) {
+      // root だと権限で弾けない。**黙って pass させず、何を確認できなかったかを残す**
+      console.warn("[Issue #99] root 実行のため読み取りの権限エラーを起こせず未検証");
+      return;
+    }
+    const res = await fetch(`${url}/api/file?path=locked.md`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("アセット配信の 500 が汎用メッセージと code を返す", async () => {
+    if (!canDenyRead) {
+      console.warn("[Issue #99] root 実行のためアセットの権限エラーを起こせず未検証");
+      return;
+    }
+    const res = await fetch(`${url}/api/asset?path=locked.csv`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("asset_failed");
+    assertNoLeak(body);
+  });
+
+  test("競合判定の読み取りが失敗しても汎用メッセージを返す", async () => {
+    if (!canDenyRead) {
+      console.warn("[Issue #99] root 実行のため競合判定の権限エラーを起こせず未検証");
+      return;
+    }
+    // `baseSha` を渡すと現在の内容を読んで比較する。その読み取りが EACCES で落ちる
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "locked.md", body: "x", baseSha: "dummy" }),
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(body.code).toBe("read_failed");
+    assertNoLeak(body);
+  });
+
+  test("ツリーの走査が失敗しても汎用メッセージを返す", async () => {
+    // スキャンを失敗させるのは難しい（読めないディレクトリは walk が握り潰す）ので、
+    // **コードの形で固定する** —— `(err as Error).message` をそのまま返す箇所が
+    // 1 つも無いこと。これが残っていると、経路が増えたときに再発する
+    const src = await readFile(join(import.meta.dir, "..", "src", "server.ts"), "utf-8");
+    expect(src).not.toContain("(err as Error).message }, { status: 500 }");
+  });
+});

@@ -90,7 +90,12 @@ export function createServer(config: ServerConfig): ServerHandle {
             // エラーを返し続ける（自力で復帰できない）
             treeCache = await serializeTree(config.rootDir, excludes, config.maxDepth);
           } catch (err) {
-            return Response.json({ error: (err as Error).message }, { status: 500 });
+            // **生のメッセージを返さない。** FS のエラーには絶対パスが載る (Issue #99)
+            console.error("ツリーの走査に失敗しました:", err);
+            return Response.json(
+              { error: "ツリーの取得に失敗しました", code: "tree_failed" },
+              { status: 500 },
+            );
           }
         }
         return new Response(treeCache, { headers: JSON_HEADERS });
@@ -392,7 +397,13 @@ async function handleFileRead(
         { status: 404 },
       );
     }
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // 想定外の FS エラー (EACCES / EIO 等) は生メッセージを返さず汎用化する (Issue #99)。
+    // `EACCES: permission denied, open '/home/<user>/…/x.md'` のように**絶対パスが載る**
+    console.error(`ファイルの読み取りに失敗しました (${requested}):`, err);
+    return Response.json(
+      { error: `ファイルの読み取りに失敗しました: ${requested}`, code: "read_failed" },
+      { status: 500 },
+    );
   }
 }
 
@@ -480,7 +491,12 @@ async function handleFileWrite(
         currentSha = null;
         currentRaw = null;
       } else {
-        return Response.json({ error: (err as Error).message }, { status: 500 });
+        // 競合判定のための読み取り。ここも生メッセージを返さない (Issue #99)
+        console.error(`競合判定の読み取りに失敗しました (${safe.rel}):`, err);
+        return Response.json(
+          { error: `ファイルの読み取りに失敗しました: ${path}`, code: "read_failed" },
+          { status: 500 },
+        );
       }
     }
     if (currentSha !== baseSha) {
@@ -721,7 +737,12 @@ async function handleAssetRead(
     if (code === "EISDIR") {
       return Response.json({ error: "ファイルではありません" }, { status: 400 });
     }
-    return Response.json({ error: (err as Error).message }, { status: 500 });
+    // 想定外の FS エラーは生メッセージを返さず汎用化する (Issue #99)
+    console.error(`アセットの配信に失敗しました (${requested}):`, err);
+    return Response.json(
+      { error: `ファイルの読み取りに失敗しました: ${requested}`, code: "asset_failed" },
+      { status: 500 },
+    );
   } finally {
     // fd close 失敗 (極稀な EBADF 等) は response に影響させない
     await fh?.close().catch(() => {});
