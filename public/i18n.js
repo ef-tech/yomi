@@ -28,6 +28,7 @@ export const ERROR_CODE_KEYS = {
   read_failed: "error.read_failed",
   asset_failed: "error.asset_failed",
   tree_failed: "error.tree_failed",
+  internal_error: "error.internal_error",
   body_too_large: "error.body_too_large",
   origin_forbidden: "error.origin_forbidden",
 };
@@ -175,6 +176,7 @@ const MESSAGES = {
     "error.read_failed": "ファイルの読み取りに失敗しました",
     "error.asset_failed": "ファイルの読み取りに失敗しました",
     "error.tree_failed": "ツリーの取得に失敗しました",
+    "error.internal_error": "サーバ内部エラーが発生しました",
     "error.body_too_large": "body が大きすぎます",
     "error.origin_forbidden": "Origin が許可されていません",
     "error.copyExec": "execCommand copy が失敗しました",
@@ -321,6 +323,7 @@ const MESSAGES = {
     "error.read_failed": "Failed to read the file",
     "error.asset_failed": "Failed to read the file",
     "error.tree_failed": "Failed to load the tree",
+    "error.internal_error": "Internal server error",
     "error.body_too_large": "Request body is too large",
     "error.origin_forbidden": "Origin is not allowed",
     "error.copyExec": "execCommand copy failed",

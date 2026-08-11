@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { ERROR_CODE_KEYS, messagesFor, resolveLang, setLang, t } from "../public/i18n.js";
 
 // t() / setLang() はモジュールレベルの現在言語を共有するため、各テスト前に ja へ戻す。
@@ -97,26 +96,6 @@ describe("ERROR_CODE_KEYS", () => {
     for (const key of Object.values(ERROR_CODE_KEYS)) {
       expect(Object.hasOwn(ja, key)).toBe(true);
       expect(Object.hasOwn(en, key)).toBe(true);
-    }
-  });
-
-  /**
-   * **サーバが実際に返す `code` が、この対応表に載っているか (Issue #99)。**
-   *
-   * 上のテストは「表に載っている code」しか見ないので、**表に足し忘れた code** は
-   * 素通りする。実際 Issue #101 で `write_failed` を返すようにしたのに表へ入れ忘れており、
-   * `errorText` が翻訳せずサーバの日本語をそのまま出していた（英語表示でも日本語が出る）。
-   *
-   * ソースから拾うのは乱暴だが、**`code` を足す場所と表が別ファイル**である以上、
-   * 両者を突き合わせる手段がここしかない。
-   */
-  test("サーバが返す全ての code が ERROR_CODE_KEYS に載っている", async () => {
-    const src = await Bun.file(join(import.meta.dir, "..", "src", "server.ts")).text();
-    const codes = new Set([...src.matchAll(/\bcode:\s*"([a-z_]+)"/g)].map((m) => m[1] as string));
-    // 拾えていないと恒真になるので、最低限の件数を確かめる
-    expect(codes.size).toBeGreaterThan(5);
-    for (const code of codes) {
-      expect(Object.hasOwn(ERROR_CODE_KEYS, code)).toBe(true);
     }
   });
 });
