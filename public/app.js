@@ -11,6 +11,7 @@ import {
 import { createDocument } from "./app-document.js";
 import { createEditor } from "./app-editor.js";
 import { createMobileUi } from "./app-mobile.js";
+import { isTopOverlay, shortcutsBlocked } from "./app-overlays.js";
 import { createPreview } from "./app-preview.js";
 import { createQuickOpen } from "./app-quick-open.js";
 import { createTree } from "./app-tree.js";
@@ -34,6 +35,7 @@ import { prefs } from "./prefs.js";
  * | `app-preview.js` | Mermaid、表示モード、テーマ、スクロール同期、TOC、タスクリスト |
  * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
  * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
+ * | `app-overlays.js` | 重なったオーバーレイの優先順位 (`Esc` とショートカットの門番) |
  * | `app-websocket.js` | ライブリロード |
  *
  * ここに残しているのは、どのモジュールにも属さない横断的なもの
@@ -84,9 +86,9 @@ ctx.preview.wireThemeToggle();
 wireLangToggle();
 ctx.editor.wireEditActions();
 ctx.document.wireCopyPath();
-// **登録順を変えない。** sidebar の Esc ハンドラは外部 URL バナーが開いていたら譲る
-// 設計で、後から登録される wireKeyboard 側がバナーを閉じる。順序が逆転すると
-// 「Esc 1 回で両方閉じる」に変わってしまう。
+// **登録順に依存しない (Issue #112)。** どのオーバーレイが最前面かは
+// `app-overlays.js` が宣言された重なり順で決めるので、ここを並べ替えても
+// Esc とショートカットの優先順位は変わらない。
 ctx.mobile.wireSidebar();
 ctx.tree.wireTreeToolbar();
 ctx.mobile.wireOverflowMenu();
@@ -218,6 +220,9 @@ function wireKeyboard() {
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isSaveKey || ev.altKey || ev.shiftKey) return;
       if (!state.editing) return;
+      // **全画面モーダルの裏で走らせない (Issue #112)。** 競合ダイアログは
+      // 「保存が失敗した」直後に出るものなので、その上から保存が走るのは筋が通らない
+      if (shortcutsBlocked(els)) return;
       ev.preventDefault();
       ev.stopPropagation();
       ctx.editor
@@ -235,6 +240,8 @@ function wireKeyboard() {
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isTocKey || !ev.shiftKey || ev.altKey) return;
       if (!state.currentPath || state.editing) return;
+      // 全画面モーダルの裏で TOC を開かない (Issue #112)
+      if (shortcutsBlocked(els)) return;
       ev.preventDefault();
       ev.stopPropagation();
       ctx.preview.toggleToc();
@@ -242,10 +249,10 @@ function wireKeyboard() {
     { capture: true },
   );
 
-  // Esc で外部 URL バナーを閉じる
+  // Esc で外部 URL バナーを閉じる。最前面のときだけ (Issue #112)
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
-    if (els.externalLinkBanner.hidden) return;
+    if (!isTopOverlay("externalLinkBanner", els)) return;
     ev.preventDefault();
     ctx.document.hideExternalLinkBanner();
   });

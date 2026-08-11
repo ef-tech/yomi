@@ -9,6 +9,7 @@
  */
 
 import { errorText } from "./app-context.js";
+import { isTopOverlay, shortcutsBlocked } from "./app-overlays.js";
 import { collectFilePaths, moveSelection, QUICK_OPEN_LIMIT, searchPaths } from "./quick-open.js";
 
 /** @param {import("./app-context.js").Ctx} ctx */
@@ -29,11 +30,13 @@ export function createQuickOpen(ctx) {
     // - Tab の preventDefault が走らず、フォーカストラップをすり抜ける
     //
     // capture なら DOM のどこにフォーカスがあっても最初に通るので、この迂回路が消える。
-    // 開いている間だけ効かせるため、先頭で `hidden` を門番にする (Ctrl/Cmd+P と同じ形)。
+    // 開いている間だけ効かせるため、先頭で**最前面かどうか**を門番にする (Issue #112)。
     document.addEventListener(
       "keydown",
       (ev) => {
-        if (els.quickOpen.hidden) return;
+        // **最前面のときだけ扱う (Issue #112)。** `hidden` だけを門番にしていたので、
+        // 競合ダイアログと重なると Esc 1 回で両方閉じていた
+        if (!isTopOverlay("quickOpen", els)) return;
         handleQuickOpenKeydown(ev);
       },
       true,
@@ -77,6 +80,10 @@ export function createQuickOpen(ctx) {
         const isKey = ev.code === "KeyP" || ev.key === "p" || ev.key === "P";
         const isModifier = ev.metaKey || ev.ctrlKey;
         if (!isModifier || !isKey || ev.altKey || ev.shiftKey) return;
+        // **手前に別のモーダルがあるなら開かない (Issue #112)。** 見ていなかったので、
+        // 競合ダイアログ (z-index 70) のスクリムの下にパネル (60) が開き、
+        // フォーカスだけがトラップの外へ出ていた。自分自身のトグルは通す
+        if (shortcutsBlocked(els, "quickOpen")) return;
         // **編集中でも開ける。** 未保存の確認は navigateTo が持っているので、ここで
         // 止める必要がない。⋮ メニューからの導線とも挙動が揃う (片方だけ禁止すると
         // 「PC では開けないのにスマホでは開ける」という食い違いになる)。

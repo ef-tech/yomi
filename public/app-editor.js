@@ -12,6 +12,7 @@
  */
 
 import { errorText, fetchJson, sanitize } from "./app-context.js";
+import { isTopOverlay } from "./app-overlays.js";
 import { collapseUnchanged, diffLines } from "./diff.js";
 import { t } from "./i18n.js";
 
@@ -308,7 +309,9 @@ export function createEditor(ctx) {
     document.addEventListener(
       "keydown",
       (ev) => {
-        if (els.conflictDiff.hidden) return;
+        // **最前面のときだけ扱う (Issue #112)。** `hidden` だけを門番にしていたので、
+        // クイックオープンと重なると Esc 1 回で両方閉じていた
+        if (!isTopOverlay("conflictDiff", els)) return;
         handleConflictDiffKeydown(ev);
       },
       true,
@@ -323,8 +326,10 @@ export function createEditor(ctx) {
     if (ev.isComposing) return;
 
     if (ev.key === "Escape") {
-      // **バブルさせない。** 最前面 (z-index 70) なので、1 回の Esc で背後の
-      // sidebar や外部リンクバナーまで閉じてはいけない
+      // **バブルさせない。** ここへ来た時点で最前面なので、1 回の Esc で背後の
+      // sidebar や外部リンクバナーまで閉じてはいけない。
+      // **`document` の同じノードに付いた他の capture リスナーは止まらない**ので、
+      // 重なりの制御は `stopPropagation` ではなく上の `isTopOverlay` が担う
       ev.preventDefault();
       ev.stopPropagation();
       closeConflictDiff();

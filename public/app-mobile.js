@@ -12,6 +12,8 @@
  * **overflow メニューは操作の入口が増えただけ**で、挙動を二重に持たせない。
  */
 
+import { isTopOverlay } from "./app-overlays.js";
+
 const TOPBAR_HIDE_THRESHOLD = 5; // この px 以上下スクロールで hide
 const TOPBAR_TOP_GUARD = 30; // 上端 30px 以内では常に show
 
@@ -58,9 +60,10 @@ export function createMobileUi(ctx) {
     els.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
-      if (!els.sidebar.classList.contains("is-open")) return;
-      // 外部 URL バナーが開いている時は banner 側の Esc ハンドラを優先
-      if (!els.externalLinkBanner.hidden) return;
+      // **最前面のときだけ閉じる (Issue #112)。** 以前は「外部 URL バナーが開いていたら
+      // 譲る」を各所に個別に書いていたので、オーバーレイが増えるたびに条件が増え、
+      // しかも書き忘れても片方だけ使う限り気づけなかった
+      if (!isTopOverlay("sidebar", els)) return;
       setSidebarOpen(false);
     });
     // viewport がデスクトップ幅に戻ったら自動で閉じる (overlay 状態が残ると視覚的に変)
@@ -87,11 +90,10 @@ export function createMobileUi(ctx) {
       if (els.overflowBtn.contains(target)) return;
       setOverflowOpen(false);
     });
-    // Esc で閉じる (外部 URL バナー優先は既存 keydown リスナーと衝突しないよう個別判定)
+    // Esc で閉じる。優先順位の判定は `app-overlays.js` に一本化してある (Issue #112)
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
-      if (els.overflowMenu.hidden) return;
-      if (!els.externalLinkBanner.hidden) return;
+      if (!isTopOverlay("overflowMenu", els)) return;
       setOverflowOpen(false);
     });
 
