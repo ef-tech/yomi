@@ -49,22 +49,43 @@ export function createWebSocketClient(ctx) {
     // 作り直していた。10,000 ファイルで **1 イベントあたり 216ms + 724 KiB** の無駄
     // （実測は `docs/bench/tree-baseline.md`）。**構造が変わるのは `rename` 由来の
     // `tree` だけ**で、サーバはそれを型で区別して送っている (`src/server.ts`)。
-    if (msg.type === "tree") {
-      try {
-        const tree = await fetchJson("/api/tree");
-        ctx.tree.renderTree(tree);
-        if (state.currentPath) {
-          if (state.fileButtons.has(state.currentPath)) {
-            ctx.tree.highlightSelected(state.currentPath);
-          } else {
-            ctx.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
-          }
+    if (msg.type === "tree") await refreshTree();
+  }
+
+  /**
+   * ツリーを取り直して描き直す。
+   *
+   * @returns {Promise<void>}
+   */
+  async function refreshTree() {
+    const { state } = ctx;
+    try {
+      /** @type {import("./api-types.js").TreeNode} */
+      const tree = await fetchJson("/api/tree");
+      ctx.tree.renderTree(tree);
+      if (state.currentPath) {
+        if (state.fileButtons.has(state.currentPath)) {
+          ctx.tree.highlightSelected(state.currentPath);
+        } else {
+          ctx.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
         }
-      } catch (err) {
-        ctx.setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
       }
+    } catch (err) {
+      ctx.setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
     }
   }
+
+  /**
+   * **再接続したら 1 回だけツリーを取り直す (Issue #84)。**
+   *
+   * `changed` で毎回取り直すのをやめたぶん、**取りこぼしの自動復旧が無くなった** ——
+   * 以前は誰かがファイルを保存するたびに全量を取り直しており、それが事実上の
+   * 再同期になっていた。切れている間の追加・削除は誰も拾わないし、
+   * chokidar 自体も取りこぼす (`src/watcher.ts` / Issue #119)。
+   *
+   * 初回の取得は `app.js` の init が行うので、**2 回目以降の `open` でだけ**動かす。
+   */
+  let connectedOnce = false;
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -73,6 +94,8 @@ export function createWebSocketClient(ctx) {
 
     ws.addEventListener("open", () => {
       retryDelay = WS_RETRY_INITIAL;
+      if (connectedOnce) void refreshTree();
+      connectedOnce = true;
     });
 
     ws.addEventListener("message", (ev) => {
@@ -95,5 +118,5 @@ export function createWebSocketClient(ctx) {
     });
   }
 
-  return { connect, handleLiveEvent };
+  return { connect, handleLiveEvent, refreshTree };
 }

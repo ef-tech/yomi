@@ -19,7 +19,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { renderTreeInto } from "../scripts/bench-tree.ts";
+import { createCarry, renderTreeInto } from "../scripts/bench-tree.ts";
 import type { TreeNode } from "../src/scanner.ts";
 import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
 
@@ -50,6 +50,24 @@ const TREE: TreeNode = {
   ],
 };
 
+/** 追加が 1 件入ったツリー（2 回目の描画 = 差分更新の経路を通すため）。 */
+const TREE_PLUS: TreeNode = {
+  ...TREE,
+  children: [
+    ...(TREE.children ?? []).map((c) =>
+      c.path === "docs"
+        ? {
+            ...c,
+            children: [
+              ...(c.children ?? []),
+              { name: "c.md", path: "docs/c.md", type: "file" as const },
+            ],
+          }
+        : c,
+    ),
+  ],
+};
+
 /** DOM の骨格を「タグ + class」の出現回数で表す (文言は含めない = i18n 非依存)。 */
 function skeleton(root: Element): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -76,4 +94,84 @@ test("ベンチの DOM 構築が app.js の renderTree と同じ骨格を作る"
   dom.window.close();
 
   expect(copy).toEqual(real);
+});
+
+/** ノードの並びを `data-node-key` で表す（順序のずれを拾う。骨格の数だけでは見えない）。 */
+function keys(root: Element): string[] {
+  return [...root.querySelectorAll("li[data-node-key]")].map(
+    (el) => (el as HTMLElement).dataset.nodeKey ?? "",
+  );
+}
+
+/**
+ * **2 回目の描画（差分更新）も突き合わせる (Issue #84)。**
+ *
+ * 1 回目だけだと `reconcileChildren` / `refreshNode` / `dropSubtree` が**一度も走らない**ので、
+ * 差分更新の写しがずれても気づけない。#84 のベンチはこの経路を測っているのだから、
+ * ここが一致していないと前後比較が別物同士の比較になる。
+ */
+test("ベンチの差分更新が app.js の renderTree と同じ結果になる", async () => {
+  // 実物: 起動してから `tree` 通知でファイルを 1 件足す
+  h = await bootApp({
+    tree: TREE,
+    files: { "README.md": { raw: "x", html: "<p>x</p>", sha: "s" } },
+  });
+  h.tree = TREE_PLUS;
+  h.ws.emit({ type: "tree", path: "docs/c.md" });
+  await h.flush(6);
+  const real = skeleton(h.el("tree"));
+  const realKeys = keys(h.el("tree"));
+
+  // 写し: 同じ carry を使って 2 回描く（1 回目 = 初回、2 回目 = 差分更新）
+  const dom = new JSDOM("<!doctype html><div id='tree'></div>");
+  const host = dom.window.document.getElementById("tree") as unknown as HTMLElement;
+  const carry = createCarry();
+  const doc = dom.window.document as unknown as Document;
+  renderTreeInto(doc, host, TREE, carry);
+  renderTreeInto(doc, host, TREE_PLUS, carry);
+  const copy = skeleton(host as unknown as Element);
+  const copyKeys = keys(host as unknown as Element);
+  dom.window.close();
+
+  expect(copy).toEqual(real);
+  expect(copyKeys).toEqual(realKeys);
+});
+
+/**
+ * **両方が「ノードを再利用している」ことを突き合わせる (Issue #84)。**
+ *
+ * 上のテストは**結果の DOM** しか比べられない。作り直しても差分更新しても最終形は同じなので、
+ * 写しが再利用をやめても気づけない —— ベンチが実物より遅い実装を測っていることになる。
+ *
+ * **限界: 操作回数までは比べられない。** 「消えたノードを先に捨てるか（`skipDead`）」の
+ * ような違いは、要素の同一性にも最終形にも出ず、`insertBefore` を何回呼んだかにしか出ない。
+ * そこがずれていないかは `bun run bench` の「末尾 / 先頭」の差で見る（差が出たら崖がある）。
+ */
+test("ベンチも実物もノードを再利用する", async () => {
+  const stableFile = ".tree-item[title='README.md']";
+
+  h = await bootApp({
+    tree: TREE,
+    files: { "README.md": { raw: "x", html: "<p>x</p>", sha: "s" } },
+  });
+  const realBefore = h.el("tree").querySelector(stableFile);
+  h.tree = TREE_PLUS;
+  h.ws.emit({ type: "tree", path: "docs/c.md" });
+  await h.flush(6);
+  const realAfter = h.el("tree").querySelector(stableFile);
+
+  const dom = new JSDOM("<!doctype html><div id='tree'></div>");
+  const host = dom.window.document.getElementById("tree") as unknown as HTMLElement;
+  const carry = createCarry();
+  const doc = dom.window.document as unknown as Document;
+  renderTreeInto(doc, host, TREE, carry);
+  const copyBefore = (host as unknown as Element).querySelector(stableFile);
+  renderTreeInto(doc, host, TREE_PLUS, carry);
+  const copyAfter = (host as unknown as Element).querySelector(stableFile);
+  const copyReused = copyBefore !== null && copyBefore === copyAfter;
+  dom.window.close();
+
+  expect(realBefore).not.toBeNull();
+  expect(realAfter).toBe(realBefore);
+  expect(copyReused).toBe(true);
 });

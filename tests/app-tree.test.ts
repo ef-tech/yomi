@@ -382,6 +382,66 @@ describe("ツリーの差分更新 (Issue #84)", () => {
     expect(isDirOpen(h, "docs")).toBe(true);
   });
 
+  test("ファイル → ディレクトリに変わっても、新しいノードがマップに残る", async () => {
+    // **DOM だけ見ていると素通りする。** `dropSubtree` がパスだけで消していたころは、
+    // 先に登録された新ノードの登録まで落としており、「すべて開く」で開かなかった
+    h = await bootApp();
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).map((c) =>
+      c.path === "README.md"
+        ? {
+            name: "README.md",
+            path: "README.md",
+            type: "dir" as const,
+            children: [{ name: "in.md", path: "README.md/in.md", type: "file" as const }],
+          }
+        : c,
+    );
+    await pushTree(h, next);
+
+    h.click(h.el("tree-expand-all"));
+    await h.flush();
+    // `state.dirNodes` に残っていないと開かない
+    expect(h.treeItem("README.md").classList.contains("is-open")).toBe(true);
+  });
+
+  test("ディレクトリ → ファイルに変わっても、新しいノードがマップに残る", async () => {
+    h = await bootApp();
+
+    // 開ける中身を用意しておく（無いと遷移そのものが失敗して判定にならない）
+    h.files.docs = { raw: "# docs\n", html: "<h1>docs</h1>", sha: "sha-docs" };
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).map((c) =>
+      c.path === "docs" ? { name: "docs", path: "docs", type: "file" as const } : c,
+    );
+    await pushTree(h, next);
+
+    h.click(h.treeItem("docs"));
+    await h.flush(6);
+    expect(h.el("current-path").textContent).toBe("docs");
+    // `state.fileButtons` に残っていないと `highlightSelected` が当たらない
+    expect(h.treeItem("docs").classList.contains("is-selected")).toBe(true);
+  });
+
+  test("先頭のファイルを消しても、後続のノードは作り直されない", async () => {
+    // **付け替えを起こさないこと。** 素朴な実装だと、消えたカーソルを飛ばせずに
+    // 後続の兄弟を全部 `insertBefore` で前へ寄せる（2,000 件で 75ms 掛かった）
+    h = await bootApp();
+    // 先頭は README.md（file）、その後ろに docs（dir）が並ぶ
+    const survivor = h.treeItem("docs");
+
+    const next = structuredClone(h.tree);
+    next.children = (next.children ?? []).filter((c) => c.path !== "README.md");
+    await pushTree(h, next);
+
+    expect(h.document.querySelector("#tree .tree-item[title='README.md']")).toBeNull();
+    // **後続が作り直されていないこと。** 付け替えでも同一インスタンスは保たれるので、
+    // これは「消えていない」ことの確認。付け替え回数そのものはベンチが見る
+    expect(h.treeItem("docs")).toBe(survivor);
+  });
+
   test("同じパスがファイルからディレクトリに変わったら作り直す", async () => {
     h = await bootApp();
     const before = h.treeItem("README.md");

@@ -158,16 +158,35 @@ export function createTree(ctx) {
    * @returns {void}
    */
   function reconcileChildren(ul, children) {
-    const keep = new Set();
+    // **鍵の集合は必要になってから作る。** カーソルが「消えたノード」に当たったときに
+    // 要る（これが無いと**以降の兄弟を全部 `insertBefore` で前へ寄せる**ことになり、
+    // 先頭の 1 件を消すだけで 2,000 兄弟が動く）。ただし**大半のディレクトリでは
+    // 何も消えない**ので、毎回作ると 10,000 ノードぶんの Set 挿入が丸ごと無駄になる
+    /** @type {Set<string> | null} */
+    let next = null;
+    const keySet = () => {
+      if (!next) {
+        next = new Set();
+        for (const child of children) next.add(nodeKey(child));
+      }
+      return next;
+    };
+
     // **`children` を前から順に、`ul` の子と突き合わせる。** 一致していれば何もしない
     let cursor = ul.firstElementChild;
     for (const child of children) {
       const key = nodeKey(child);
-      keep.add(key);
       const known = rendered.get(key);
 
       if (known && known.li === cursor) {
         // 位置も一致。**DOM を一切触らない**（ここが最頻ケース）
+        refreshNode(known, child);
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      // ここへ来たということは何かがずれている。消えたノードを先に捨ててから見直す
+      cursor = skipDead(cursor, keySet());
+      if (known && known.li === cursor) {
         refreshNode(known, child);
         cursor = cursor.nextElementSibling;
         continue;
@@ -180,15 +199,49 @@ export function createTree(ctx) {
       ul.insertBefore(renderNode(child), cursor);
     }
 
-    // 残った要素は消えたノード。**マップからも外す** —— 残すと、消えたファイルを
-    // 選択中とみなしてハイライトしたり、クイックオープンから開けたりする
+    // 末尾に残ったものも消えたノード
     while (cursor) {
-      const next = cursor.nextElementSibling;
-      dropSubtree(/** @type {HTMLElement} */ (cursor));
-      cursor.remove();
-      cursor = next;
+      const dead = cursor;
+      cursor = cursor.nextElementSibling;
+      if (isDisposable(dead, keySet())) {
+        dropSubtree(dead);
+        dead.remove();
+      }
     }
-    void keep;
+  }
+
+  /**
+   * 新しいリストに無いカーソルを捨てながら進める。
+   *
+   * @param {Element | null} cursor
+   * @param {Set<string>} next
+   * @returns {Element | null}
+   */
+  function skipDead(cursor, next) {
+    let at = cursor;
+    while (at && isDisposable(/** @type {HTMLElement} */ (at), next)) {
+      const dead = at;
+      at = at.nextElementSibling;
+      dropSubtree(/** @type {HTMLElement} */ (dead));
+      dead.remove();
+    }
+    return at;
+  }
+
+  /**
+   * その `<li>` を捨ててよいか。
+   *
+   * **鍵を持たない `<li>` は残す。** 新規ファイル名のインライン入力欄 (`tree-new-li`) が
+   * これに当たる。捨てると、利用者が名前を打っている最中に入力欄が消える
+   * （しかも `state.newFileInput` は外れた要素を指したまま残る）。
+   *
+   * @param {HTMLElement} li
+   * @param {Set<string>} next
+   * @returns {boolean}
+   */
+  function isDisposable(li, next) {
+    const key = li.dataset.nodeKey;
+    return Boolean(key) && !next.has(/** @type {string} */ (key));
   }
 
   /**
@@ -210,10 +263,16 @@ export function createTree(ctx) {
     const key = li.dataset.nodeKey;
     if (!key) return;
     const path = key.slice(key.indexOf(":") + 1);
+    // **`delete` より先に取る。** 後から引くと必ず undefined になる
+    const known = rendered.get(key);
     rendered.delete(key);
-    state.fileButtons.delete(path);
-    state.dirNodes.delete(path);
-    const ul = rendered.get(key)?.ul ?? li.lastElementChild;
+    // **自分の登録だけを消す。** 同じパスがファイル ⇄ ディレクトリで入れ替わると、
+    // 先に新ノードが登録されている。パスだけ見て消すと**新しいほうの登録を潰す**
+    // （選択ハイライトが付かない・「すべて開く」で開かない、という形で出る）
+    if (known && state.fileButtons.get(path) === known.button) state.fileButtons.delete(path);
+    if (known && state.dirNodes.get(path)?.button === known.button) state.dirNodes.delete(path);
+
+    const ul = known?.ul ?? li.lastElementChild;
     if (ul && ul.tagName === "UL") {
       for (const child of Array.from(ul.children)) dropSubtree(/** @type {HTMLElement} */ (child));
     }
@@ -230,12 +289,8 @@ export function createTree(ctx) {
    * @returns {void}
    */
   function refreshNode(known, node) {
-    // **控えてある文字列と比べる。** `textContent` を読むのも DOM 操作なので、
-    // 変わっていないときに触らないほうが速い
-    if (known.name !== node.name) {
-      known.nameEl.textContent = node.name;
-      known.name = node.name;
-    }
+    // **名前は更新しない。** 鍵にパスが入っており、`name` はパスの basename
+    // (`src/scanner.ts`) なので、同じ鍵なら名前も必ず同じ
     if (node.type !== "dir") {
       state.fileButtons.set(node.path, known.button);
       return;

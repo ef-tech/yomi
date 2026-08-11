@@ -1436,3 +1436,114 @@ describe("server - --depth 超過は読み取りを塞がない (Issue #65)", ()
     expect(res.status).toBe(200);
   });
 });
+
+// **`/api/tree` のキャッシュ (Issue #84)。**
+//
+// 応答の 9 割が `scanMarkdownTree` だったので、構造が変わるまで使い回す。
+// **速さのためのキャッシュは、古い答えを返した瞬間に価値が反転する**ので、
+// 「捨てるべきときに捨てているか」を重点的に固定する。
+describe("server - /api/tree のキャッシュ (Issue #84)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  const tree = async () =>
+    (await (await fetch(`${url}/api/tree`)).json()) as { children?: unknown[] };
+  const names = async () =>
+    ((await tree()).children ?? []).map((c) => (c as { name: string }).name);
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-treecache-"));
+    await writeFile(join(root, "a.md"), "# a\n");
+    // **watcher を切って測る。** 付けたままだと、キャッシュを捨てているのが
+    // 明示的な無効化なのか watcher 由来なのか区別できない
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: false });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("同じ内容なら 2 回目も同じ結果を返す", async () => {
+    expect(await names()).toEqual(["a.md"]);
+    expect(await names()).toEqual(["a.md"]);
+  });
+
+  test("watcher 無しでファイルを足しただけでは、キャッシュが効いて増えない", async () => {
+    await writeFile(join(root, "b.md"), "# b\n");
+    // **これは仕様。** ツリーが変わったことを知る手段が無い状態では使い回す
+    expect(await names()).toEqual(["a.md"]);
+  });
+
+  test("作成 API を通すとキャッシュが捨てられ、新しいファイルが出る", async () => {
+    const res = await fetch(`${url}/api/file/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "c.md" }),
+    });
+    expect(res.status).toBe(200);
+    // b.md も一緒に見えるようになる（捨てたので再スキャンされる）
+    expect(await names()).toEqual(["a.md", "b.md", "c.md"]);
+  });
+
+  test("保存 API を通してもキャッシュが捨てられる", async () => {
+    // **保存でも新しいパスができうる** (`writeFileAtomic` は存在しないパスにも書ける)。
+    // watcher の到着を待つと、できたはずのファイルが出ないツリーを返す
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "d.md", body: "# d\n" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await names()).toEqual(["a.md", "b.md", "c.md", "d.md"]);
+  });
+});
+
+// **watcher 経由のキャッシュ無効化 (Issue #84)。**
+//
+// 上の describe は `watch: false` で「API を通した書き込み」だけを見ている。
+// **外部エディタがファイルを足した場合**は API を通らないので、watcher が
+// キャッシュを捨てないと、そのファイルはツリーに出てこない。
+describe("server - watcher が /api/tree のキャッシュを捨てる (Issue #84)", () => {
+  let root: string;
+  let handle: ServerHandle;
+  let url: string;
+
+  const names = async () => {
+    const tree = (await (await fetch(`${url}/api/tree`)).json()) as { children?: unknown[] };
+    return (tree.children ?? []).map((c) => (c as { name: string }).name);
+  };
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-treecache-watch-"));
+    await writeFile(join(root, "a.md"), "# a\n");
+    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: true });
+    url = `http://127.0.0.1:${handle.server.port}`;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("外部でファイルを足すと、watcher がキャッシュを捨ててツリーに出る", async () => {
+    // 先にキャッシュを載せる
+    expect(await names()).toEqual(["a.md"]);
+
+    // **API を通さずに**直接置く（外部エディタや別プロセスの動きを模す）
+    await writeFile(join(root, "b.md"), "# b\n");
+
+    // watcher の debounce ぶん待つ。**固定 sleep にしない** —— 遅いマシンで足りずに
+    // flaky になる（Issue #45）
+    const deadline = Date.now() + 3000;
+    let seen: string[] = [];
+    while (Date.now() < deadline) {
+      seen = await names();
+      if (seen.includes("b.md")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(seen).toContain("b.md");
+  });
+});
