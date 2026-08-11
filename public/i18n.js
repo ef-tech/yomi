@@ -313,12 +313,29 @@ const MESSAGES = {
   },
 };
 
-/** 内部で利用するため公開 (テストの ja/en キー一致検証に使う)。 */
+/**
+ * @typedef {"ja" | "en"} Lang 実効言語
+ * @typedef {"auto" | Lang} LangMode 利用者が選べる設定値
+ * @typedef {keyof typeof MESSAGES.ja} MessageKey
+ */
+
+/**
+ * 内部で利用するため公開 (テストの ja/en キー一致検証に使う)。
+ *
+ * @param {Lang} lang
+ * @returns {Record<string, string>}
+ */
 export function messagesFor(lang) {
   return MESSAGES[lang] ?? MESSAGES.ja;
 }
 
-/** "auto" | "ja" | "en" と navigator の言語から実効言語 ("ja" | "en") を決める。 */
+/**
+ * "auto" | "ja" | "en" と navigator の言語から実効言語 ("ja" | "en") を決める。
+ *
+ * @param {LangMode | string | null | undefined} mode
+ * @param {string | null | undefined} navLang
+ * @returns {Lang}
+ */
 export function resolveLang(mode, navLang) {
   if (mode === "ja" || mode === "en") return mode;
   return String(navLang ?? "")
@@ -328,20 +345,33 @@ export function resolveLang(mode, navLang) {
     : "ja";
 }
 
+/** @type {Lang} */
 let currentLang = "ja";
+/** @type {Set<(lang: Lang) => void>} */
 const listeners = new Set();
 
+/** @returns {Lang} */
 export function getLang() {
   return currentLang;
 }
 
-/** 実効言語をセットし、リスナーに通知する。 */
+/**
+ * 実効言語をセットし、リスナーに通知する。
+ *
+ * @param {string | null | undefined} lang
+ * @returns {void}
+ */
 export function setLang(lang) {
   currentLang = lang === "en" ? "en" : "ja";
   for (const fn of listeners) fn(currentLang);
 }
 
-/** 言語変更の購読 (UI 再適用に使う)。 */
+/**
+ * 言語変更の購読 (UI 再適用に使う)。
+ *
+ * @param {(lang: Lang) => void} fn
+ * @returns {() => boolean} 解除する関数
+ */
 export function onLangChange(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -360,35 +390,63 @@ export function __resetLangListenersForTest() {
   listeners.clear();
 }
 
-/** キーを引いてプレースホルダ {name} を params で置換する。未翻訳は ja→キーにフォールバック。 */
+/**
+ * キーを引いてプレースホルダ {name} を params で置換する。未翻訳は ja→キーにフォールバック。
+ *
+ * @param {MessageKey | string | null | undefined} key
+ * @param {Record<string, unknown>} [params]
+ * @returns {string}
+ */
 export function t(key, params) {
+  /** @type {Record<string, string | undefined>} */
   const table = MESSAGES[currentLang] ?? MESSAGES.ja;
+  if (typeof key !== "string") return "";
   let msg = table[key];
-  if (msg === undefined) msg = MESSAGES.ja[key];
+  if (msg === undefined) msg = /** @type {Record<string, string | undefined>} */ (MESSAGES.ja)[key];
   if (msg === undefined) return key;
   if (params) {
     // テンプレートを 1 パスで走査し、各 {name} をその場で params から置換する。
     // 逐次 replaceAll だと、置換後の値に別の {name} が含まれる場合 (例: パスに
     // "{state}" を含むファイル名) に二重置換される。単一パスならその事故を防げる。
-    msg = msg.replace(/\{(\w+)\}/g, (match, name) =>
+    msg = msg.replace(/\{(\w+)\}/g, (/** @type {string} */ match, /** @type {string} */ name) =>
       name in params ? String(params[name]) : match,
     );
   }
   return msg;
 }
 
-/** data-i18n* 属性を持つ要素に現在言語のテキスト/属性を流し込む。 */
+/**
+ * data-i18n* 属性を持つ要素に現在言語のテキスト/属性を流し込む。
+ *
+ * **型アサーションで絞る。`instanceof` は使わない。** `querySelectorAll` は `Element` を返すが
+ * `dataset` / `title` は `HTMLElement`、`placeholder` は input / textarea にしかない。
+ * ただし `instanceof` は**実行時チェックを足すことになり、この Issue の前提（外部挙動を
+ * 変えない）を破る**。元のコードは無条件に参照しており、絞り込みに漏れた要素は
+ * 従来「例外になる」ではなく「そのまま処理される」。
+ *
+ * 加えて**特性テストのハーネスに無いコンストラクタがある**。`tests/helpers/app-harness.ts` は
+ * `Node` と `HTMLElement` はグローバルに置くが、**`HTMLInputElement` /
+ * `HTMLTextAreaElement` は置いていない** —— ここを `instanceof HTMLInputElement` で
+ * 書いて `ReferenceError` になり、179 テストが落ちた。
+ *
+ * @param {Document | HTMLElement} [root]
+ * @returns {void}
+ */
 export function applyI18n(root = document) {
   for (const el of root.querySelectorAll("[data-i18n]")) {
-    el.textContent = t(el.dataset.i18n);
+    const target = /** @type {HTMLElement} */ (el);
+    target.textContent = t(target.dataset.i18n);
   }
   for (const el of root.querySelectorAll("[data-i18n-title]")) {
-    el.title = t(el.dataset.i18nTitle);
+    const target = /** @type {HTMLElement} */ (el);
+    target.title = t(target.dataset.i18nTitle);
   }
   for (const el of root.querySelectorAll("[data-i18n-aria-label]")) {
-    el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel));
+    const target = /** @type {HTMLElement} */ (el);
+    target.setAttribute("aria-label", t(target.dataset.i18nAriaLabel));
   }
   for (const el of root.querySelectorAll("[data-i18n-placeholder]")) {
-    el.placeholder = t(el.dataset.i18nPlaceholder);
+    const target = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (el);
+    target.placeholder = t(target.dataset.i18nPlaceholder);
   }
 }

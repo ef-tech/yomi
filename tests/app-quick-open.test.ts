@@ -617,4 +617,32 @@ describe("クイックオープン", () => {
     expect(items()[0]?.querySelector(".qo-dir")?.textContent).toBe("a");
     expect(items()[1]?.querySelector(".qo-dir")?.textContent).toBe("b");
   });
+  // **`errorText` の import 漏れの回帰テスト (Issue #79)。**
+  //
+  // `navigateTo` が reject したときに status へ出そうとするが、`app-quick-open.js` は
+  // `errorText` を import しておらず `ReferenceError` になっていた。型チェックを
+  // 入れたことで見つかったので、実行時にも固定しておく。
+  //
+  // reject 経路は狭い（`navigateTo` は読み込み失敗を自分で握り潰す）ので、
+  // **`history.pushState` を 1 回だけ落とす**ことで到達させる。
+  test("遷移が失敗したらエラーを status に出す（例外で握り潰さない）", async () => {
+    h = await bootApp();
+    await open();
+    h.keydown(input(), { key: "ArrowDown" });
+
+    const original = h.window.history.pushState;
+    h.window.history.pushState = () => {
+      throw new Error("pushState が落ちた");
+    };
+    try {
+      h.keydown(input(), { key: "Enter" });
+      await h.flush();
+    } finally {
+      h.window.history.pushState = original;
+    }
+
+    // **握り潰さず、利用者に見える形で出ている。** import が無いと `errorText` の
+    // 解決に失敗してこの catch 自体が落ち、status が更新されない
+    expect(h.el("status").textContent).toContain("pushState が落ちた");
+  });
 });

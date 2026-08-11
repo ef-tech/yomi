@@ -14,19 +14,26 @@ import { t } from "./i18n.js";
 const WS_RETRY_INITIAL = 500;
 const WS_RETRY_MAX = 5000;
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createWebSocketClient(ctx) {
   let retryDelay = WS_RETRY_INITIAL;
 
+  /**
+   * @param {{ type?: string, path?: string } | null | undefined} msg
+   * @returns {Promise<void>}
+   */
   async function handleLiveEvent(msg) {
     if (!msg || typeof msg !== "object") return;
     const { state } = ctx;
 
-    if (msg.type === "changed" && msg.path && msg.path === state.currentPath) {
+    const changedPath = msg.path;
+    if (msg.type === "changed" && changedPath && changedPath === state.currentPath) {
       if (state.editing) {
         // 編集中にライブリロードが来た = 外部で書き換えられた可能性。
         // 編集内容を保護するため、サーバの最新を取得して競合バナーを出す。
         try {
-          const latest = await fetchJson(`/api/file?path=${encodeURIComponent(state.currentPath)}`);
+          /** @type {import("./api-types.js").ConflictPayload} */
+          const latest = await fetchJson(`/api/file?path=${encodeURIComponent(changedPath)}`);
           ctx.editor.showConflict(latest, ctx.els.editor.value);
           ctx.setStatus("error", t("status.fileUpdatedElsewhere"));
         } catch (err) {

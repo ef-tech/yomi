@@ -14,7 +14,7 @@
  * `ctx.preview`、ツリーの選択表示は `ctx.tree`** に委ねる。
  */
 
-import { errorText, fetchJson, sanitize } from "./app-context.js";
+import { errorText, fetchJson, messageOf, sanitize } from "./app-context.js";
 import { t } from "./i18n.js";
 import {
   isAnchor,
@@ -34,6 +34,7 @@ import {
 
 const COPY_FEEDBACK_MS = 1500;
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createDocument(ctx) {
   const { els, state } = ctx;
 
@@ -42,21 +43,33 @@ export function createDocument(ctx) {
    * `history.go` が発火させる popstate を 1 回だけ無視して二重 confirm を防ぐ。
    */
   let pendingCancelRestore = false;
+  /** @type {string | null} */
   let pendingExternalUrl = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let copyResetTimer = null;
 
   /* ===== 読み込みと反映 ===== */
 
+  /**
+   * @typedef {import("./api-types.js").TreeNode} TreeNode
+   * @param {TreeNode} node
+   * @returns {string | null}
+   */
   function findFirstFile(node) {
     if (node.type === "file") return node.path;
     for (const child of node.children ?? []) {
+      /** @type {string | null} */
       const found = findFirstFile(child);
       if (found) return found;
     }
     return null;
   }
 
-  /** URL の `?path=` が実在すればそれを、無ければツリー最初のファイルを開く。 */
+  /**
+   * URL の `?path=` が実在すればそれを、無ければツリー最初のファイルを開く。
+   * @param {TreeNode} tree
+   * @returns {string | null}
+   */
   function chooseInitialFile(tree) {
     const fromUrl = getPathFromUrl();
     if (fromUrl && state.fileButtons.has(fromUrl)) {
@@ -65,10 +78,20 @@ export function createDocument(ctx) {
     return findFirstFile(tree);
   }
 
+  /**
+   * @param {string} path
+   * @returns {Promise<import("./api-types.js").FileResponse>}
+   */
   async function loadFile(path) {
-    return await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+    /** @type {import("./api-types.js").FileResponse} */
+    const data = await fetchJson(`/api/file?path=${encodeURIComponent(path)}`);
+    return data;
   }
 
+  /**
+   * @param {{ path: string, raw: string, html: string, sha?: string | null }} data
+   * @returns {void}
+   */
   function applyFile(data) {
     state.currentPath = data.path;
     state.currentRaw = data.raw;
@@ -99,6 +122,10 @@ export function createDocument(ctx) {
    *   「一瞬先頭が見えてから見出しまで滑る」という 2 段階の挙動になり違和感が出る。
    *   即時ジャンプなら初期位置の見え時間が最小化される。
    */
+  /**
+   * @param {string | null} hash
+   * @returns {void}
+   */
   function scrollIntoHash(hash) {
     if (!hash || state.editing) return;
     requestAnimationFrame(() => {
@@ -122,6 +149,11 @@ export function createDocument(ctx) {
    *
    * 戻り値: 実際にファイルへ遷移/表示できたら true、編集中の破棄キャンセルや
    * 読み込み失敗で遷移しなかったら false (呼び出し側はこれを見て後続処理を分岐できる)。
+   */
+  /**
+   * @param {string} path
+   * @param {{ history?: "push" | "replace" | "none", hash?: string | null }} [options]
+   * @returns {Promise<boolean>}
    */
   async function navigateTo(path, { history: mode = "push", hash = null } = {}) {
     if (mode === "push" && !ctx.editor.confirmLeaveEdit()) return false;
@@ -215,6 +247,10 @@ export function createDocument(ctx) {
 
   /* ===== リンクナビゲーション ===== */
 
+  /**
+   * @param {string} url
+   * @returns {void}
+   */
   function showExternalLinkBanner(url) {
     pendingExternalUrl = url;
     els.externalLinkUrl.textContent = url;
@@ -230,6 +266,10 @@ export function createDocument(ctx) {
     els.externalLinkUrl.textContent = "";
   }
 
+  /**
+   * @param {string} href
+   * @returns {void}
+   */
   function navigateInternal(href) {
     if (!state.currentPath) return;
 
@@ -259,7 +299,9 @@ export function createDocument(ctx) {
 
   function wireLinkNavigation() {
     els.preview.addEventListener("click", (ev) => {
-      const a = ev.target.closest("a");
+      // `EventTarget` は `Element` とは限らないが、preview 内の click は常に要素。
+      // **`instanceof` で絞らない** (実行時チェックを足すと挙動が変わる。理由は i18n.js)
+      const a = /** @type {Element} */ (ev.target).closest("a");
       if (!a || !els.preview.contains(a)) return;
       const href = a.getAttribute("href");
       if (!href) return;
@@ -314,6 +356,10 @@ export function createDocument(ctx) {
    * 主要ブラウザで動作する (HTTP context でも OK)。将来 execCommand が消えた
    * 場合は、別途 modal でテキスト選択 UI を提供する形に切り替える。
    */
+  /**
+   * @param {string} text
+   * @returns {Promise<void>}
+   */
   async function copyTextToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -355,7 +401,7 @@ export function createDocument(ctx) {
         flashCopied();
         ctx.setStatus("ok", t("status.pathCopied", { path: state.currentPath }));
       } catch (err) {
-        ctx.setStatus("error", t("status.copyFailed", { msg: err.message }));
+        ctx.setStatus("error", t("status.copyFailed", { msg: messageOf(err) }));
       }
     });
   }

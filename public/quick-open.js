@@ -19,15 +19,25 @@
  */
 
 /**
+ * @typedef {import("./api-types.js").TreeNodeLike} QuickOpenTreeNode
+ *   走査に要る最小の形（型の正本は `api-types.js`）。`name` は読まないので要求しない
+ * @typedef {{ path: string, positions: number[] }} QuickOpenHit
+ *   `path` はルートからの相対パス、`positions` はクエリ文字が一致したコードポイント位置
+ *   （クエリが空なら空配列）
+ */
+
+/**
  * ツリーからファイルの相対パスを document order で集める。
  *
  * ディレクトリは候補にしない (開く対象ではないため)。
  *
- * @param {{ type: string, path: string, children?: unknown[] }} node
+ * @param {QuickOpenTreeNode} node
  * @returns {string[]}
  */
 export function collectFilePaths(node) {
+  /** @type {string[]} */
   const out = [];
+  /** @param {QuickOpenTreeNode | null | undefined} n */
   const walk = (n) => {
     if (!n) return;
     if (n.type === "file") {
@@ -40,7 +50,11 @@ export function collectFilePaths(node) {
   return out;
 }
 
-/** パスからファイル名部分を取り出す。 */
+/**
+ * パスからファイル名部分を取り出す。
+ * @param {string} path
+ * @returns {string}
+ */
 function baseName(path) {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? path : path.slice(slash + 1);
@@ -74,7 +88,7 @@ function subsequenceMatch(text, query) {
   for (const ch of query) {
     let found = -1;
     for (let i = at; i < chars.length; i++) {
-      if (chars[i].toLowerCase() === ch) {
+      if (chars[i]?.toLowerCase() === ch) {
         found = i;
         break;
       }
@@ -147,7 +161,7 @@ function score(path, positions, namePositions) {
  * @param {string[]} paths 母集団 (ツリーのファイル相対パス)
  * @param {string} query 入力文字列
  * @param {number} [limit] 返す最大件数 (既定 `QUICK_OPEN_LIMIT`)
- * @returns {{ path: string, positions: number[] }[]} positions はパス全体での
+ * @returns {QuickOpenHit[]} positions はパス全体での
  *   マッチ位置 (**コードポイント index**。ハイライト用)。query が空なら空配列
  */
 export function searchPaths(paths, query, limit = QUICK_OPEN_LIMIT) {

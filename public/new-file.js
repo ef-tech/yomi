@@ -8,6 +8,7 @@
  */
 
 /** クライアント側で受け入れる Markdown 拡張子 (サーバの MD_EXTENSIONS と同値) */
+/** @type {ReadonlySet<string>} */
 export const MD_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
 
 /**

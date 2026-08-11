@@ -19,6 +19,7 @@ import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
 import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
 
+/** @param {import("./app-context.js").Ctx} ctx */
 export function createTree(ctx) {
   const { els, state } = ctx;
 
@@ -26,6 +27,12 @@ export function createTree(ctx) {
     prefs.openDirs.save([...state.openDirs]);
   }
 
+  /**
+   * @param {HTMLElement} button
+   * @param {HTMLElement} ul
+   * @param {boolean} open
+   * @returns {void}
+   */
   function setDirOpen(button, ul, open) {
     button.classList.toggle("is-open", open);
     ul.style.display = open ? "" : "none";
@@ -44,6 +51,11 @@ export function createTree(ctx) {
     els.treeNewFile.disabled = false;
   }
 
+  /**
+   * @typedef {import("./api-types.js").TreeNode} TreeNode
+   * @param {TreeNode} node
+   * @returns {HTMLLIElement}
+   */
   function renderNode(node) {
     const li = document.createElement("li");
     // 差分更新の鍵 (Issue #84)。**種類も含める** —— 同じパスがファイルとディレクトリで
@@ -136,7 +148,7 @@ export function createTree(ctx) {
   /** @type {Map<string, RenderedNode>} 鍵は `${type}:${path}` */
   const rendered = new Map();
 
-  /** @param {import("./api-types.js").TreeNode} node @returns {string} */
+  /** @param {TreeNode} node @returns {string} */
   const nodeKey = (node) => `${node.type}:${node.path}`;
 
   /**
@@ -154,7 +166,7 @@ export function createTree(ctx) {
    * 再利用すると開閉状態・フォーカス・スクロール位置がそのまま残るという利点もある。
    *
    * @param {HTMLUListElement} ul
-   * @param {import("./api-types.js").TreeNode[]} children
+   * @param {TreeNode[]} children
    * @returns {void}
    */
   function reconcileChildren(ul, children) {
@@ -201,7 +213,7 @@ export function createTree(ctx) {
 
     // 末尾に残ったものも消えたノード
     while (cursor) {
-      const dead = cursor;
+      const dead = /** @type {HTMLElement} */ (cursor);
       cursor = cursor.nextElementSibling;
       if (isDisposable(dead, keySet())) {
         dropSubtree(dead);
@@ -285,7 +297,7 @@ export function createTree(ctx) {
    * 同じパスのときだけ** —— 張り直す必要はない。
    *
    * @param {RenderedNode} known
-   * @param {import("./api-types.js").TreeNode} node
+   * @param {TreeNode} node
    * @returns {void}
    */
   function refreshNode(known, node) {
@@ -309,7 +321,7 @@ export function createTree(ctx) {
   }
 
   /**
-   * @param {import("./api-types.js").TreeNode} root
+   * @param {TreeNode} root
    * @returns {void}
    */
   function renderTree(root) {
@@ -371,6 +383,11 @@ export function createTree(ctx) {
    * trigger は呼び出し元のボタン (ツールバー / ディレクトリの「＋」)。入力欄を
    * 閉じたときにフォーカスをここへ戻し、キーボード利用者がツリー内の位置を失わないようにする。
    */
+  /**
+   * @param {string} dirPath
+   * @param {HTMLElement | null} [trigger]
+   * @returns {void}
+   */
   function openNewFileInput(dirPath, trigger = null) {
     closeNewFileInput();
 
@@ -428,6 +445,11 @@ export function createTree(ctx) {
    * 入力名を補完して POST /api/file/create → ツリー再取得 → 新規ファイルを
    * 編集モードで開く。失敗 (409 / 400) は status にエラー表示する。
    */
+  /**
+   * @param {string} rawName
+   * @param {string} dirPath
+   * @returns {Promise<void>}
+   */
   async function submitNewFile(rawName, dirPath) {
     const name = completeMarkdownFileName(rawName);
     if (name === null) {
@@ -438,12 +460,14 @@ export function createTree(ctx) {
     closeNewFileInput();
 
     try {
+      /** @type {import("./api-types.js").FileResponse} */
       const created = await fetchJson("/api/file/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
       // 自己保存マークで watcher は発火しないため、自分でツリーを更新する
+      /** @type {import("./api-types.js").TreeNode} */
       const tree = await fetchJson("/api/tree");
       renderTree(tree);
       const moved = await ctx.document.navigateTo(created.path, { history: "push" });
@@ -463,6 +487,10 @@ export function createTree(ctx) {
 
   /* ===== 選択状態 ===== */
 
+  /**
+   * @param {string | null} path
+   * @returns {void}
+   */
   function highlightSelected(path) {
     for (const [p, btn] of state.fileButtons) {
       btn.classList.toggle("is-selected", p === path);
@@ -470,6 +498,10 @@ export function createTree(ctx) {
   }
 
   /** 選択したファイルの祖先ディレクトリをすべて開く (deep-link からの復元用)。 */
+  /**
+   * @param {string} path
+   * @returns {void}
+   */
   function expandAncestors(path) {
     const segments = path.split("/");
     segments.pop();
