@@ -163,7 +163,7 @@ describe("`..` で始まるだけの名前 (Issue #118)", () => {
     ["..link/new.md"],
     ["..link/sub/new.md"],
   ])("存在しないファイルでも、symlink で root の外へは出られない (`%s`)", async (requested) => {
-    await expect(resolveSafe(dotRoot, requested)).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(resolveSafe(dotRoot, requested)).rejects.toThrow(/ルートディレクトリの外/);
   });
 
   test("root 内なら、存在しないファイルも解決できる（新規作成の経路）", async () => {
