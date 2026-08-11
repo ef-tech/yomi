@@ -4,14 +4,41 @@ import { chmod, rename as fsRename, open, rm, stat } from "node:fs/promises";
 /**
  * 一時ファイルの作成から `rename` までに空ける間隔 (Issue #119)。
  *
- * **実測の境界は 1ms と 2ms のあいだ**（`scripts/probe-watcher-atomic.ts`）。
- * 境界ぎりぎりに置くと、負荷や FS が変わったときに黙って取りこぼしへ戻るので
- * **余裕を持たせて 5ms** にしてある。
+ * **実測の境界は 1ms と 2ms のあいだ**（`scripts/probe-watcher-atomic.ts`。
+ * Linux / tmpfs / **Bun 1.3.12**）。境界ぎりぎりに置くと、負荷や FS が変わったときに
+ * 黙って取りこぼしへ戻るので **余裕を持たせて 5ms** にしてある。
  *
- * **この値は chokidar の実装依存**で、版が変われば変わりうる。
+ * ## 依存しているのは Bun の版（chokidar ではない）
+ *
+ * chokidar を通さず素の `node:fs` の `watch` だけで測ると:
+ *
+ * | 間隔 | Bun 1.3.12 | Node 25.6.1 |
+ * |---|---|---|
+ * | **0ms** | **0/10** | **10/10** |
+ * | 1ms | 8/10 | 10/10 |
+ * | 2ms 以上 | 10/10 | 10/10 |
+ *
+ * **Bun の `fs.watch` が `rename` の通知を落としている。** `package.json` の
+ * `engines.bun` は幅を持たせてあるので、**`bun upgrade` のあとにこの値を疑うこと**
+ * （chokidar の版ではない）。上流への報告と、直ったら外す話は **#138**。
+ *
  * `tests/watcher.test.ts` の発火率テストが、変わったときに落ちる。
  */
 export const WATCH_GAP_MS = 5;
+
+/** {@link writeFileAtomic} の注入点。**どちらもテスト用**で、本番は既定のまま使う。 */
+export interface WriteFileAtomicOptions {
+  /**
+   * `fs.rename` 相当。**差し替えて EXDEV / EACCES を再現する**ための注入点
+   * (`src/network.ts` の `readInterfaces` と同じ作法)。
+   */
+  rename?: typeof fsRename;
+  /**
+   * rename の直前に空ける間隔。**0 にして取りこぼしを再現する**ための注入点で、
+   * 既定は {@link WATCH_GAP_MS}。
+   */
+  gapMs?: number;
+}
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -55,10 +82,14 @@ const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : 
  * 自分の保存は `saveMark` が抑止するので実害はないが、**同じディレクトリを開いた
  * 別インスタンス**には届かず、編集が反映されないままになる。
  *
- * **{@link WATCH_GAP_MS} だけ待って解消した。** watcher 側で直そうとすると
- * `usePolling` しかなく（`atomic: false` / `alwaysStat` / `awaitWriteFinish` は
- * いずれも改善しないことを実測）、ポーリングは**アイドル時の CPU が 5,000 ファイルで
- * 7 倍**になる。**保存 1 回あたり数 ms** のほうが安い。
+ * **{@link WATCH_GAP_MS} だけ待って解消した。** watcher 側では直せない ——
+ * **落としているのは chokidar より下の Bun の `fs.watch`** なので、
+ * `atomic: false` / `alwaysStat` / `awaitWriteFinish` は**イベントが届いて初めて動く**
+ * 分岐であり触れる余地がない（実測でも改善しない）。効くのは `usePolling` だけで、
+ * それは `fs.watchFile` に分岐して **`fs.watch` を経路から外す**から。
+ *
+ * ポーリングは**アイドル時の CPU が 5,000 ファイルで 7 倍**になり、ファイル数に比例する
+ * （計測は `scripts/probe-watcher-poll-cost.ts`）。**保存 1 回あたり数 ms** のほうが安い。
  *
  * **計測の正本は `scripts/probe-watcher-atomic.ts`。** 条件つきの表はそこの出力と
  * Issue #119 にあり、ここには載せない（3 か所に置くと必ず片方が古くなる ——
@@ -72,17 +103,15 @@ const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : 
  *
  * @param target 書き込み先
  * @param data 書き込む内容
- * @param rename `fs.rename` 相当。**テストから差し替えて EXDEV / EACCES を再現する**ための
- *   注入点で、既定は本番実装そのもの (`src/network.ts` の `readInterfaces` と同じ作法)
- * @param gapMs rename の直前に空ける間隔。**テストから 0 にして取りこぼしを再現する**ための
- *   注入点で、既定は {@link WATCH_GAP_MS}
+ * @param options テストからの注入点。**位置引数を増やさない** —— 増やすと
+ *   「片方だけ差し替えたい」ときに `undefined` を埋めることになる
  */
 export async function writeFileAtomic(
   target: string,
   data: Buffer | string,
-  rename: typeof fsRename = fsRename,
-  gapMs: number = WATCH_GAP_MS,
+  options: WriteFileAtomicOptions = {},
 ): Promise<void> {
+  const { rename = fsRename, gapMs = WATCH_GAP_MS } = options;
   // **同じディレクトリに置く。** `rename` が原子的なのは同一ファイルシステム内だけで、
   // `/tmp` に置くとマウントが分かれている環境で EXDEV になる。
   // **拡張子は `.tmp`** —— yomi 側が Markdown 拡張子で絞る (`src/watcher.ts` の `emit`) ので、

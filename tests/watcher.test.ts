@@ -442,8 +442,9 @@ describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
  *
  * ## ここが落ちたら
  *
- * `WATCH_GAP_MS` は **chokidar の実装依存**の値。版を上げて落ちたら、
- * `scripts/probe-watcher-atomic.ts` を回して境界を測り直すこと
+ * `WATCH_GAP_MS` は **Bun の実装依存**の値（落としているのは chokidar より下の
+ * `fs.watch`。Node では同条件で取りこぼさない → #138）。**`bun upgrade` のあとに
+ * 落ちたら**、`scripts/probe-watcher-atomic.ts` を回して境界を測り直すこと
  * （`docs/` の表と CHANGELOG の数字もそこの出力が正本）。
  */
 describe("writeFileAtomic の上書きを取りこぼさない (Issue #119)", () => {
@@ -457,7 +458,14 @@ describe("writeFileAtomic の上書きを取りこぼさない (Issue #119)", ()
     await rm(root, { recursive: true, force: true });
   });
 
-  /** 実 chokidar を通して N 回上書きし、届いた回数を数える */
+  /**
+   * 実 chokidar を通して N 回上書きし、届いた回数を数える。
+   *
+   * **「別インスタンス」(DoD 2) の代理。** 取りこぼしは**カーネルからランタイムへの
+   * 配送段**で起きるのでプロセス境界に依存しない（別プロセスで 10/10 になることは
+   * `.ef/verify/issue-119/REPORT.md` に記録）。テストを別プロセス化すると起動コストと
+   * flaky のリスクだけが増えるので、ここは同一プロセスで見る。
+   */
   async function detectionRate(name: string, gapMs: number | undefined, trials: number) {
     const target = join(root, name);
     await writeFile(target, "# 初期\n");
@@ -469,7 +477,7 @@ describe("writeFileAtomic の上書きを取りこぼさない (Issue #119)", ()
       let hit = 0;
       for (let i = 0; i < trials; i++) {
         calls.length = 0;
-        await writeFileAtomic(target, Buffer.from(`# ${i}\n`, "utf-8"), undefined, gapMs);
+        await writeFileAtomic(target, Buffer.from(`# ${i}\n`, "utf-8"), { gapMs });
         // debounce(80ms) + 配送を超える猶予。届かない試行はここを使い切る
         await wait(DEBOUNCE_MARGIN_MS);
         if (calls.includes(name)) hit++;
@@ -499,18 +507,21 @@ describe("writeFileAtomic の上書きを取りこぼさない (Issue #119)", ()
     const target = join(root, "gap.md");
     await writeFile(target, "# 初期\n");
 
+    const gapMs = 200;
     const t0 = Date.now();
-    await writeFileAtomic(target, Buffer.from("# 待つ\n", "utf-8"), undefined, 120);
+    await writeFileAtomic(target, Buffer.from("# 待つ\n", "utf-8"), { gapMs });
     const waited = Date.now() - t0;
 
-    // 待っていなければ数 ms で終わる。**下限だけを見る**（上限を見ると負荷で落ちる）
-    expect(waited).toBeGreaterThanOrEqual(120);
+    // 待っていなければ数 ms で終わる。**下限だけを見る**（上限を見ると負荷で落ちる）。
+    // **閾値ちょうどにしない** —— タイマが 1ms 早発する実装でも落ちないよう 1 割引く
+    expect(waited).toBeGreaterThanOrEqual(gapMs * 0.9);
     expect(await readFile(target, "utf8")).toBe("# 待つ\n");
   });
 
-  test("WATCH_GAP_MS は実測の境界 (2ms) より余裕がある", () => {
-    // 境界ぎりぎりだと、負荷や FS が変わったときに黙って取りこぼしへ戻る
-    expect(WATCH_GAP_MS).toBeGreaterThanOrEqual(2);
+  test("WATCH_GAP_MS は実測の境界 (2ms) の 2 倍以上ある", () => {
+    // **境界ちょうど (2) を通してはいけない。** ぎりぎりだと、負荷や FS が変わったときに
+    // 黙って取りこぼしへ戻る。2 倍を下限にする
+    expect(WATCH_GAP_MS).toBeGreaterThanOrEqual(4);
   });
 });
 

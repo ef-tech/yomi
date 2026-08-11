@@ -60,9 +60,13 @@ export function toChokidarDepth(treeDepth: number | undefined): number | undefin
  * ディレクトリの作成・リネーム・削除、エディタのアトミック保存 (swap+rename) も
  * chokidar 側が扱う（外部エディタの保存は未測定）。
  *
- * **別の話として、書き込みと rename が近すぎると chokidar が取りこぼす。**
- * `writeFileAtomic` (Issue #101) の上書きは 5 回に 4 回ほど届かない (Issue #119)。
- * 計測は `scripts/probe-watcher-atomic.ts`。
+ * **別の話として、書き込みと rename が近すぎると Bun の `fs.watch` が取りこぼす。**
+ * `writeFileAtomic` (Issue #101) の上書きが 5 回に 4 回ほど届かなかった ——
+ * **rename の直前に待つことで解消済み** (Issue #119 の `WATCH_GAP_MS`)。
+ *
+ * **yomi 以外が同じ速さで temp + rename すると、依然として取りこぼす。**
+ * 原因は chokidar ではなく Bun（Node の `fs.watch` は同条件で取りこぼさない）。
+ * 上流への報告は #138。計測は `scripts/probe-watcher-atomic.ts`。
  *
  * onChange の kind:
  * - "rename": ファイルの追加/削除 (ツリー構造が変化) → クライアントはツリーを再取得
