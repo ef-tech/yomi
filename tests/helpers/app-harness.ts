@@ -448,7 +448,7 @@ async function bindDomPurifyOnce() {
   purifyWindow = new JSDOM("");
   defineGlobal("window", purifyWindow.window);
   defineGlobal("document", purifyWindow.window.document);
-  // @ts-expect-error vendor bundle は `bun run build` の生成物で型宣言を持たない
+  // 型は `public/vendor/dompurify.d.ts` が本体パッケージから再輸出する (Issue #79)
   await import("../../public/vendor/dompurify.js");
 }
 

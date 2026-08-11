@@ -5,9 +5,19 @@
  * - 値の妥当性チェック (例: enum 範囲) は呼び出し側で行う
  */
 
+/**
+ * 1 つの pref に対する load / save を作る。
+ *
+ * `T` は保存する値の型。`parse` / `stringify` を渡さなければ文字列のまま扱う。
+ *
+ * @template T
+ * @param {string} key localStorage のキー
+ * @param {{ parse?: (raw: string) => T | null, stringify?: (value: T) => string }} [opts]
+ * @returns {{ key: string, load: () => T | null, save: (value: T | null | undefined) => void }}
+ */
 function makePref(key, opts = {}) {
-  const parse = opts.parse ?? ((s) => s);
-  const stringify = opts.stringify ?? ((v) => v);
+  const parse = opts.parse ?? /** @type {(raw: string) => T | null} */ ((s) => s);
+  const stringify = opts.stringify ?? /** @type {(value: T) => string} */ ((v) => String(v));
   return {
     key,
     load() {

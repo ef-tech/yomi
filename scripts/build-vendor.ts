@@ -32,7 +32,12 @@ const banner = [
   " */",
 ].join("\n");
 
-await rm(OUT_DIR, { recursive: true, force: true });
+// **生成物 (`*.js`) だけを消す。** ディレクトリごと消すと、手で置いた型定義 (`*.d.ts`) まで
+// 巻き添えになる —— それらは bundle の型を `tsc` へ渡すために必要で (Issue #79)、
+// `bun run build` のたびに消えると CI の `git diff --exit-code -- public/vendor` が落ちる。
+for (const name of await readdir(OUT_DIR).catch(() => [] as string[])) {
+  if (name.endsWith(".js")) await rm(join(OUT_DIR, name), { force: true });
+}
 
 const result = await Bun.build({
   entrypoints: ["scripts/vendor/dompurify.js", "scripts/vendor/mermaid.js"],
@@ -55,7 +60,9 @@ if (!result.success) {
 // 含まれるが、それらは fetch ではない。ここでは「URL からのモジュール読み込み」と
 // 「既知 JS CDN ホスト」だけを検出する (これが Issue #52 の狙い = jsDelivr 依存の排除)。
 // 実行時は CSP `script-src 'self'` が最終防壁として外部 script を遮断する。
-const files = await readdir(OUT_DIR);
+// **生成物 (`*.js`) だけを検査対象にする。** 同じディレクトリに手書きの型定義 (`*.d.ts`) が
+// 同居しているが (Issue #79)、それは bundle ではないので鮮度検証にも想定外判定にも掛けない。
+const files = (await readdir(OUT_DIR)).filter((f) => f.endsWith(".js"));
 const CDN_HOSTS = /\b(jsdelivr\.net|unpkg\.com|esm\.sh|esm\.run|cdnjs\.cloudflare|skypack\.dev)/;
 const URL_MODULE_LOAD = /(?:\bimport\s*\(\s*|\bfrom\s*)["'`]https?:\/\//;
 const offenders: string[] = [];

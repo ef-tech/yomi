@@ -27,20 +27,26 @@
  * @returns {string[]}
  */
 export function collectFilePaths(node) {
+  /** @type {string[]} */
   const out = [];
+  /** @param {{ type?: string, path?: string, children?: unknown[] } | null | undefined} n */
   const walk = (n) => {
     if (!n) return;
     if (n.type === "file") {
-      out.push(n.path);
+      if (n.path) out.push(n.path);
       return;
     }
-    for (const child of n.children ?? []) walk(child);
+    for (const child of n.children ?? []) walk(/** @type {typeof n} */ (child));
   };
   walk(node);
   return out;
 }
 
-/** パスからファイル名部分を取り出す。 */
+/**
+ * パスからファイル名部分を取り出す。
+ * @param {string} path
+ * @returns {string}
+ */
 function baseName(path) {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? path : path.slice(slash + 1);
@@ -74,7 +80,7 @@ function subsequenceMatch(text, query) {
   for (const ch of query) {
     let found = -1;
     for (let i = at; i < chars.length; i++) {
-      if (chars[i].toLowerCase() === ch) {
+      if (chars[i]?.toLowerCase() === ch) {
         found = i;
         break;
       }
