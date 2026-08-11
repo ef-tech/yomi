@@ -365,7 +365,7 @@ export function createQuickOpen(ctx) {
     refreshQuickOpen,
     /**
      * ツリー再描画のたびに母集団を張り直す (app-tree.js から呼ぶ)。
-     * @param {{ type?: string, path?: string, children?: unknown[] }} root
+     * @param {import("./quick-open.js").QuickOpenTreeNode} root
      * @returns {void}
      */
     syncPaths(root) {

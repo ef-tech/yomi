@@ -21,9 +21,9 @@
 /**
  * @typedef {{ type: "file" | "dir", path: string, children?: QuickOpenTreeNode[] }} QuickOpenTreeNode
  *   `/api/tree` が返すノード
- * @typedef {{ path: string, positions: number[], inName: boolean }} QuickOpenHit
+ * @typedef {{ path: string, positions: number[] }} QuickOpenHit
  *   `path` はルートからの相対パス、`positions` はクエリ文字が一致したコードポイント位置
- *   （クエリが空なら空配列）、`inName` はファイル名部分に当たったか
+ *   （クエリが空なら空配列）
  */
 
 /**
@@ -161,7 +161,7 @@ function score(path, positions, namePositions) {
  * @param {string[]} paths 母集団 (ツリーのファイル相対パス)
  * @param {string} query 入力文字列
  * @param {number} [limit] 返す最大件数 (既定 `QUICK_OPEN_LIMIT`)
- * @returns {{ path: string, positions: number[] }[]} positions はパス全体での
+ * @returns {QuickOpenHit[]} positions はパス全体での
  *   マッチ位置 (**コードポイント index**。ハイライト用)。query が空なら空配列
  */
 export function searchPaths(paths, query, limit = QUICK_OPEN_LIMIT) {

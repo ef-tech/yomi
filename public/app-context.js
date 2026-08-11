@@ -94,7 +94,9 @@ export async function fetchJson(url, options) {
  */
 export function errorText(err) {
   const e = /** @type {ApiError | null | undefined} */ (err);
-  const key = e?.code ? ERROR_CODE_KEYS[e.code] : undefined;
+  /** @type {Record<string, string | undefined>} */
+  const codeKeys = ERROR_CODE_KEYS;
+  const key = e?.code ? codeKeys[e.code] : undefined;
   return key ? t(key) : (e?.message ?? String(err));
 }
 
@@ -250,7 +252,7 @@ export function createState() {
 
     /** @type {string[]} Issue #54: クイックオープンの母集団 (ツリー再描画のたびに張り直す) */
     quickOpenPaths: [],
-    /** @type {{ path: string, positions: number[], inName: boolean }[]} Issue #54: いま表示している候補 */
+    /** @type {import("./quick-open.js").QuickOpenHit[]} Issue #54: いま表示している候補 */
     quickOpenHits: [],
     /** Issue #54: 候補内の選択位置 (候補が無ければ -1) */
     quickOpenIndex: -1,

@@ -9,7 +9,7 @@
   "scripts": {
     "start": "bun run bin/yomi.ts",
     "build": "bun run scripts/build-vendor.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.public.json",
     "test": "bun test",
     "lint": "biome check",
     "format": "biome format --write",
