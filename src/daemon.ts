@@ -129,20 +129,41 @@ export async function assertPortIsFree(
   port: number,
   paths: RegistryPaths,
 ): Promise<void> {
-  const existing = (await readInstances(paths)).find((r) => r.port === port);
-  if (existing && isAlive(existing.pid)) {
-    throw new Error(
-      `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
-        `停止するには yomi down --port ${port}`,
-    );
-  }
-  if (!(await isPortAvailable(host, port))) {
-    throw new Error(`ポート ${port} は既に使用されています。別のポートを指定してください`);
-  }
+  const reason = await describePortInUse(host, port, paths);
+  if (reason !== null) throw new Error(reason);
 }
 
 /**
- * `Bun.serve` の EADDRINUSE を、{@link assertPortIsFree} と同じ文面へ変換する (Issue #107)。
+ * **そのポートが使えない理由を 1 行で返す。使えるなら `null`** (Issue #107)。
+ *
+ * 文面の正本。{@link assertPortIsFree} は「非 null なら throw」するだけの薄い皮で、
+ * {@link describeServeFailure} はこれをそのまま返す。
+ *
+ * **例外ではなく値で返す形にしてある。** 以前は `describeServeFailure` が
+ * `assertPortIsFree` を呼び直して**「throw されること」に依存**していた。判定に
+ * 非 throw の分岐が 1 本増えるだけで（#108 が触る予定の場所がまさにここ）、
+ * 黙って「確保できませんでした」に落ちる —— 例外も出ずテストも落ちない壊れ方をする。
+ */
+export async function describePortInUse(
+  host: string,
+  port: number,
+  paths: RegistryPaths,
+): Promise<string | null> {
+  const existing = (await readInstances(paths)).find((r) => r.port === port);
+  if (existing && isAlive(existing.pid)) {
+    return (
+      `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
+      `停止するには yomi down --port ${port}`
+    );
+  }
+  if (!(await isPortAvailable(host, port))) {
+    return `ポート ${port} は既に使用されています。別のポートを指定してください`;
+  }
+  return null;
+}
+
+/**
+ * `Bun.serve` の失敗を、{@link describePortInUse} と同じ文面へ変換する (Issue #107)。
  *
  * ## なぜ要るか
  *
@@ -153,39 +174,44 @@ export async function assertPortIsFree(
  *
  * 事前検査は「レジストリ由来の案内を先出しする」役割に純化し、**最後の砦はここ**にする。
  *
+ * **レジストリ読み込みと bind 試行を行う**（名前から想像するより重い）。
+ *
  * @returns 利用者向けの 1 行。**ポート衝突でなければ `null`**（呼び出し元はそのまま
  *   投げ直すこと —— 別の原因を「ポートが使われています」に化けさせない）
  */
-export async function describePortConflict(
+export async function describeServeFailure(
   err: unknown,
   host: string,
   port: number,
   paths: RegistryPaths,
 ): Promise<string | null> {
   if (!isAddrInUse(err)) return null;
-  try {
-    // **文面の正本は assertPortIsFree。** 相手が yomi かどうかの出し分けも含めて、
-    // ここで書き写すと 2 か所に散って必ずずれる
-    await assertPortIsFree(host, port, paths);
-  } catch (converted) {
-    return (converted as Error).message;
-  }
-  // **検査が通ってしまった** = EADDRINUSE を受けてから調べるまでの間に相手が消えた。
+  const reason = await describePortInUse(host, port, paths);
+  if (reason !== null) return reason;
+  // **調べたら空いていた** = EADDRINUSE を受けてから相手が消えた。
   // もう「使用中」とは言えないので、そう書かずに再試行を促す
   return `ポート ${port} を確保できませんでした。もう一度お試しください`;
 }
 
 /**
- * ポートが埋まっていることを示すエラーか。
+ * bind に失敗したことを示すエラーか。
  *
- * `code` を第一の根拠にし、**メッセージも見る** —— ランタイムが `code` を載せない形に
- * 変わると、黙ってスタックトレースに戻る（この Issue が直したかったもの）。
+ * **「ポートが埋まっている」とまでは言えない。** Bun は EADDRNOTAVAIL
+ * （その `--host` が自分のアドレスでない）も `EADDRINUSE` に寄せてくるので、
+ * ここが true でも原因がポートとは限らない。文面の精度は
+ * {@link describePortInUse} 側の判定に依存する。
+ *
+ * `code` を第一の根拠にしつつ、**メッセージも見る** —— ランタイムが `code` を
+ * 載せない形に変わると、黙ってスタックトレースに戻る（この Issue が直したかったもの）。
+ * **Bun の現行メッセージに `EADDRINUSE` の文字列は入っていない**（実測:
+ * `Failed to start server. Is port 39777 in use?`）ので、その言い回しも拾う。
  */
 function isAddrInUse(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   if ((err as { code?: unknown }).code === "EADDRINUSE") return true;
   const message = (err as { message?: unknown }).message;
-  return typeof message === "string" && message.includes("EADDRINUSE");
+  if (typeof message !== "string") return false;
+  return message.includes("EADDRINUSE") || /is port \d+ in use/i.test(message);
 }
 
 function childArgs(opts: StartDetachedOptions): string[] {

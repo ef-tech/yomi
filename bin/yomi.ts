@@ -12,7 +12,7 @@ import {
   assertPortIsFree,
   DETACHED_ENV,
   describeNoStopTarget,
-  describePortConflict,
+  describeServeFailure,
   describeStop,
   selectStopTargets,
   servingInstances,
@@ -123,10 +123,15 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
       maxDepth: options.depth ?? undefined,
     });
   } catch (err) {
-    const message = await describePortConflict(err, options.host, port, resolvePaths());
-    // **ポート衝突でなければ投げ直す。** 別の原因を「ポートが使われています」に化けさせない
+    const message = await describeServeFailure(err, options.host, port, resolvePaths());
+    // **ポート衝突でなければ投げ直す。** 別の原因を「ポートが使われています」に化けさせない。
+    // **この分岐は自動テストで踏めていない** —— `createServer` を bind 以外で
+    // 失敗させる移植性のある手段が無い（`--port 80` の EACCES は root だと通る）
     if (message === null) throw err;
     console.error(`エラー: ${message}`);
+    // **原因を隠すので逃げ道を用意する。** Bun は EADDRNOTAVAIL も EADDRINUSE に
+    // 寄せてくるので、誤診したときに辿れる手段が無いと詰む
+    if (process.env.YOMI_DEBUG === "1") console.error(err);
     process.exit(1);
   }
 
