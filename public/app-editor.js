@@ -312,6 +312,8 @@ export function createEditor(ctx) {
         // **最前面のときだけ扱う (Issue #112)。** `hidden` だけを門番にしていたので、
         // クイックオープンと重なると Esc 1 回で両方閉じていた
         if (!isTopOverlay("conflictDiff", els)) return;
+        // もう誰かが Esc を消費していたら譲る (Issue #112)
+        if (ev.key === "Escape" && ev.defaultPrevented) return;
         handleConflictDiffKeydown(ev);
       },
       true,

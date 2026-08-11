@@ -37,6 +37,9 @@ export function createQuickOpen(ctx) {
         // **最前面のときだけ扱う (Issue #112)。** `hidden` だけを門番にしていたので、
         // 競合ダイアログと重なると Esc 1 回で両方閉じていた
         if (!isTopOverlay("quickOpen", els)) return;
+        // **もう誰かが Esc を消費していたら譲る (Issue #112)。** 判定だけでは足りない
+        // —— 先に走ったハンドラが自分を閉じると、後続からは自分が最前面に見える
+        if (ev.key === "Escape" && ev.defaultPrevented) return;
         handleQuickOpenKeydown(ev);
       },
       true,
@@ -61,6 +64,11 @@ export function createQuickOpen(ctx) {
     // **開いてから閉じる。** 逆にすると `openQuickOpen` が戻り先を覚える時点で ⋮ メニューが
     // 既に `hidden` になっており、閉じたときの `focus()` が非表示要素相手で空振りして
     // フォーカスが `<body>` に落ちる。
+    //
+    // **ここには `shortcutsBlocked` を掛けていない (Issue #112)。** ⋮ メニュー (55) は
+    // 競合ダイアログのスクリム (70) の下にあり、`handleConflictDiffKeydown` の
+    // フォーカストラップで Tab でも辿り着けないので、**押せる状況がない**。
+    // 押せるようになったら（例: ⋮ をより手前へ動かす）ここにも門番が要る。
     els.overflowQuickOpen.addEventListener("click", () => {
       openQuickOpen();
       ctx.mobile.setOverflowOpen(false);
@@ -80,6 +88,9 @@ export function createQuickOpen(ctx) {
         const isKey = ev.code === "KeyP" || ev.key === "p" || ev.key === "P";
         const isModifier = ev.metaKey || ev.ctrlKey;
         if (!isModifier || !isKey || ev.altKey || ev.shiftKey) return;
+        // **先にキーを奪う。** 抑止するときも奪わないと、ブラウザの印刷ダイアログへ抜ける
+        ev.preventDefault();
+        ev.stopPropagation();
         // **手前に別のモーダルがあるなら開かない (Issue #112)。** 見ていなかったので、
         // 競合ダイアログ (z-index 70) のスクリムの下にパネル (60) が開き、
         // フォーカスだけがトラップの外へ出ていた。自分自身のトグルは通す
@@ -87,8 +98,6 @@ export function createQuickOpen(ctx) {
         // **編集中でも開ける。** 未保存の確認は navigateTo が持っているので、ここで
         // 止める必要がない。⋮ メニューからの導線とも挙動が揃う (片方だけ禁止すると
         // 「PC では開けないのにスマホでは開ける」という食い違いになる)。
-        ev.preventDefault();
-        ev.stopPropagation();
         if (els.quickOpen.hidden) openQuickOpen();
         else closeQuickOpen();
       },

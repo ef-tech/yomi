@@ -40,7 +40,7 @@ describe("重なり順の判定 (Issue #112)", () => {
   });
 
   // **登録順ではなく宣言された重なり順で決まる。** `wireX()` を並べ替えても変わらない
-  test("重なったら layer が大きいほうが勝つ", () => {
+  test("重なったら priority が大きいほうが勝つ", () => {
     expect(topOverlay(fakeEls("quickOpen", "conflictDiff"))).toBe("conflictDiff");
     expect(topOverlay(fakeEls("sidebar", "quickOpen"))).toBe("quickOpen");
     expect(topOverlay(fakeEls("sidebar", "overflowMenu"))).toBe("overflowMenu");
@@ -66,8 +66,8 @@ describe("重なり順の判定 (Issue #112)", () => {
     expect(isTopOverlay("sidebar", els)).toBe(false);
   });
 
-  test("layer が重複していない（最前面がただ 1 つに決まる）", () => {
-    const layers = OVERLAY_LAYERS.map((e) => e.layer);
+  test("priority が重複していない（最前面がただ 1 つに決まる）", () => {
+    const layers = OVERLAY_LAYERS.map((e) => e.priority);
     expect(new Set(layers).size).toBe(layers.length);
   });
 });
@@ -96,13 +96,27 @@ describe("ショートカットの抑止 (Issue #112)", () => {
     expect(shortcutsBlocked(fakeEls("quickOpen", "conflictDiff"), "quickOpen")).toBe(true);
   });
 
-  test("判定に使うのは最前面だけ（背後の重なりは見ない）", () => {
-    // conflictDiff が最前面で、それは modal なので抑止される
+  /**
+   * **「最前面が塞ぐ層か」で判定してはいけない。**
+   *
+   * それだと**塞がない層をより手前に 1 つ足しただけで抑止が外れる** ——
+   * 競合ダイアログの上にトーストを足した瞬間に #112 が復活する。
+   * 「表に 1 行足すだけで済む」(DoD 3) はそこまで含めて成り立たせる。
+   */
+  test("塞ぐ層が開いていれば、より手前に塞がない層があっても抑止する", () => {
     expect(shortcutsBlocked(fakeEls("quickOpen", "conflictDiff"))).toBe(true);
-    // バナーが最前面なら、背後に sidebar が居ても抑止しない
-    expect(shortcutsBlocked(fakeEls("sidebar", "externalLinkBanner"))).toBe(false);
-    // **バナーは全画面モーダルより下。** `position: static` のインラインバナーなので、
-    // クイックオープンのスクリムの下に隠れる（元の実装でも capture の quickOpen が勝っていた）
+    // バナー (57) はクイックオープン (60) より下だが、仮に上に来ても抑止は外れない
     expect(shortcutsBlocked(fakeEls("externalLinkBanner", "quickOpen"))).toBe(true);
+    // 塞ぐ層が 1 つも開いていなければ抑止しない
+    expect(shortcutsBlocked(fakeEls("sidebar", "externalLinkBanner", "overflowMenu"))).toBe(false);
+  });
+
+  test("exceptFor は「塞ぐ層のうち最前面」と比べる", () => {
+    // quickOpen だけなら自分のトグルなので通す
+    expect(shortcutsBlocked(fakeEls("sidebar", "quickOpen"), "quickOpen")).toBe(false);
+    // 手前にもう 1 つ塞ぐ層があるなら通さない
+    expect(shortcutsBlocked(fakeEls("quickOpen", "conflictDiff"), "quickOpen")).toBe(true);
+    // 自分より下にある塞ぐ層は、自分のトグルを妨げない
+    expect(shortcutsBlocked(fakeEls("quickOpen", "conflictDiff"), "conflictDiff")).toBe(false);
   });
 });

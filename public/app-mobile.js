@@ -64,6 +64,11 @@ export function createMobileUi(ctx) {
       // 譲る」を各所に個別に書いていたので、オーバーレイが増えるたびに条件が増え、
       // しかも書き忘れても片方だけ使う限り気づけなかった
       if (!isTopOverlay("sidebar", els)) return;
+      // もう誰かが Esc を消費していたら譲る (Issue #112)
+      if (ev.defaultPrevented) return;
+      // **必ず奪う。** 奪わないと、後続のハンドラが「まだ誰も処理していない」と見て
+      // 同じ Esc でもう 1 枚閉じる
+      ev.preventDefault();
       setSidebarOpen(false);
     });
     // viewport がデスクトップ幅に戻ったら自動で閉じる (overlay 状態が残ると視覚的に変)
@@ -94,6 +99,8 @@ export function createMobileUi(ctx) {
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
       if (!isTopOverlay("overflowMenu", els)) return;
+      if (ev.defaultPrevented) return;
+      ev.preventDefault();
       setOverflowOpen(false);
     });
 

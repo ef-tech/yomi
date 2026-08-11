@@ -86,9 +86,10 @@ ctx.preview.wireThemeToggle();
 wireLangToggle();
 ctx.editor.wireEditActions();
 ctx.document.wireCopyPath();
-// **登録順に依存しない (Issue #112)。** どのオーバーレイが最前面かは
-// `app-overlays.js` が宣言された重なり順で決めるので、ここを並べ替えても
-// Esc とショートカットの優先順位は変わらない。
+// **登録順に依存しない (Issue #112)。** 最前面の判定は `app-overlays.js` が
+// 宣言された重なり順で行い、Esc は「誰かが消費済みなら譲る」(`defaultPrevented`)
+// で 1 回 1 枚に絞る。どちらも登録順を見ないので、ここを並べ替えても優先順位は
+// 変わらない（3 通りに並べ替えて既存テストが green のままであることを実測した）。
 ctx.mobile.wireSidebar();
 ctx.tree.wireTreeToolbar();
 ctx.mobile.wireOverflowMenu();
@@ -220,11 +221,12 @@ function wireKeyboard() {
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isSaveKey || ev.altKey || ev.shiftKey) return;
       if (!state.editing) return;
+      // **先にキーを奪う。** 抑止するときも奪わないと「名前を付けてページを保存」へ抜ける
+      ev.preventDefault();
+      ev.stopPropagation();
       // **全画面モーダルの裏で走らせない (Issue #112)。** 競合ダイアログは
       // 「保存が失敗した」直後に出るものなので、その上から保存が走るのは筋が通らない
       if (shortcutsBlocked(els)) return;
-      ev.preventDefault();
-      ev.stopPropagation();
       ctx.editor
         .saveEdit()
         .catch((err) => setStatus("error", t("status.saveFailed", { msg: errorText(err) })));
@@ -240,10 +242,11 @@ function wireKeyboard() {
       const isModifier = ev.metaKey || ev.ctrlKey;
       if (!isModifier || !isTocKey || !ev.shiftKey || ev.altKey) return;
       if (!state.currentPath || state.editing) return;
-      // 全画面モーダルの裏で TOC を開かない (Issue #112)
-      if (shortcutsBlocked(els)) return;
+      // 先にキーを奪う（抑止するときも同じ。理由は Ctrl/Cmd+S と同じ）
       ev.preventDefault();
       ev.stopPropagation();
+      // 全画面モーダルの裏で TOC を開かない (Issue #112)
+      if (shortcutsBlocked(els)) return;
       ctx.preview.toggleToc();
     },
     { capture: true },
@@ -253,6 +256,8 @@ function wireKeyboard() {
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
     if (!isTopOverlay("externalLinkBanner", els)) return;
+    // もう誰かが Esc を消費していたら譲る (Issue #112)
+    if (ev.defaultPrevented) return;
     ev.preventDefault();
     ctx.document.hideExternalLinkBanner();
   });
