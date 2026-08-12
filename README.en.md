@@ -234,6 +234,34 @@ Supported extensions: `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.
 
 Clicking an image in the preview opens that image URL in a new tab (the `<img>` is wrapped in `<a target="_blank" rel="noopener noreferrer">`). The browser's native image view provides full-size / zoom / save. A `cursor: zoom-in` shows on hover. An image wrapped in a link in markdown like `[![](foo.png)](url)` prioritizes the link target and does not trigger the image jump.
 
+### Save an article's images as a zip (Issue #140)
+
+Download every image referenced by the Markdown you are viewing **as a single zip**. Use the **"Images zip"** button at the top right (on phones, "🗜️ Save images as zip" in the ⋮ menu).
+
+The zip contains **only the images that article references**. Even when they are scattered across `img/` and `../shared/`, they keep **their original directory layout**, so extracting the zip next to the Markdown keeps every relative link working.
+
+| Reference | In the zip? |
+|---|---|
+| Relative image `![X](img/a.png)` | **Yes** (as `docs/img/a.png`) |
+| Parent traversal `![X](../shared/b.png)` | **Yes** (as `shared/b.png`) |
+| External URL `![X](https://…)` / `data:` | **No** (see below) |
+| Under an exclusion (`.yomiignore` / defaults) | **No** |
+| A symlink pointing outside the root | **No** |
+| Referenced but missing on disk | **No** |
+| Referenced but not an image | **No** |
+
+**Anything left out is recorded with a reason in `SKIPPED.txt` inside the zip.** One excluded image never fails the whole zip, so whatever did make it in is still usable.
+
+**External URLs are never fetched.** yomi binds to `127.0.0.1` by default and has no outbound requests by design. Fetching them would make the server connect to arbitrary URLs written in the Markdown (SSRF) and would tell those hosts that you are reading the document. The URLs stay in `SKIPPED.txt` so you can fetch them yourself if you want.
+
+You can call the API directly:
+
+```bash
+curl -OJ 'http://127.0.0.1:3939/api/images.zip?path=docs%2Fguide.md'
+```
+
+The zip is assembled in memory with a 200 MB cap; anything beyond it is listed in `SKIPPED.txt` instead. Only one zip is built at a time — concurrent requests get `503` with `Retry-After`.
+
 ### Attachment downloads (Issue #64)
 
 Data files linked from Markdown (e.g. `[Sales](data/sales.csv)`) are served from `/api/asset?path=...` with `Content-Disposition: attachment`, so a click saves them directly.

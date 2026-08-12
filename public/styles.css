@@ -299,7 +299,8 @@ body {
 }
 
 .edit-btn,
-.discard-btn {
+.discard-btn,
+.download-images-btn {
   appearance: none;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -312,7 +313,8 @@ body {
 }
 
 .edit-btn:hover,
-.discard-btn:hover {
+.discard-btn:hover,
+.download-images-btn:hover:not(:disabled) {
   background: var(--bg-emphasis);
 }
 
@@ -334,6 +336,19 @@ body {
 
 .discard-btn[hidden] {
   display: none;
+}
+
+/* 画像 zip (Issue #140)。ファイルを開くまでは押せない */
+.download-images-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* **スマホでは隠す。** 同じ導線が ⋮ メニューにあり、狭い幅ではボタンが溢れる */
+@media (max-width: 767px) {
+  .download-images-btn {
+    display: none;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

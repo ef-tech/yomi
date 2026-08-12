@@ -2,6 +2,7 @@ import type { FileHandle } from "node:fs/promises";
 import { open, readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectArticleImages } from "./article-images.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
@@ -12,7 +13,8 @@ import { buildContentDisposition } from "./util/content-disposition.ts";
 import type { ErrorCode } from "./util/error-codes.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
-import { IMAGE_CONTENT_TYPES } from "./util/image-ext.ts";
+import { IMAGE_CONTENT_TYPES, isImageExtension } from "./util/image-ext.ts";
+import { createZip, type ZipEntry } from "./util/zip.ts";
 import { createWatcher, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
@@ -33,6 +35,41 @@ const ASSET_TYPES: Record<string, string> = {
 /** 書き込み API の body サイズ上限 (bytes) */
 export const MAX_WRITE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * `/api/images.zip` が返す zip の上限 (Issue #140)。
+ *
+ * **zip はメモリ上で組み立てる**ので、上限が無いと画像の多い記事でサーバが詰まる。
+ * 超えたぶんは**入れずに一覧へ記録**し、応答自体は成功させる —— 1 枚のせいで
+ * まるごと失敗するより、入った画像を渡して「入らなかったもの」を伝えるほうが使える。
+ */
+export const MAX_ZIP_BYTES = 200 * 1024 * 1024;
+
+/** zip に入れなかった参照を記録するファイルの名前。 */
+export const ZIP_SKIPPED_ENTRY = "SKIPPED.txt";
+
+/**
+ * `SKIPPED.txt` の 1 行に載せる参照の最大長。
+ *
+ * `data:image/png;base64,…` は数 MB になりうるので、切らないと**一覧だけが
+ * 際限なく膨らむ**（zip 本体の上限は画像しか数えていない）。
+ */
+const SKIP_FIELD_MAX = 300;
+
+/** `SKIPPED.txt` に載せる最大行数。超えた分は件数だけ書く。 */
+const SKIP_MAX_LINES = 1000;
+
+/**
+ * 同時に走らせる zip 生成の本数 (Issue #140)。
+ *
+ * **zip はメモリ上で組み立てる**ので、並べられるとその本数ぶん積み上がる。
+ * クライアントは 1 タブ内で二重送信を防いでいるが、**別タブや curl からは何本でも
+ * 並べられる**。ローカルで読むための道具なので、直列でも実用上困らない。
+ */
+const ZIP_CONCURRENCY = 1;
+
+/** いま走っている zip 生成の本数。 */
+let zipInFlight = 0;
+
 export interface ServerConfig {
   rootDir: string;
   hostname: string;
@@ -42,6 +79,13 @@ export interface ServerConfig {
   excludes?: ReadonlySet<string>;
   /** 走査/監視する階層の上限 (Issue #44, tree -L 相当)。省略時は無制限。 */
   maxDepth?: number;
+  /**
+   * `/api/images.zip` が返す zip の上限 (Issue #140)。省略時は {@link MAX_ZIP_BYTES}。
+   *
+   * **テストから小さい値を入れて上限の分岐を踏む**ための注入点
+   * （200MB ぶんの画像を fixture に置くわけにいかない）。
+   */
+  maxZipBytes?: number;
 }
 
 export interface ServerHandle {
@@ -150,6 +194,22 @@ export function createServer(config: ServerConfig): ServerHandle {
         return new Response("Method Not Allowed", {
           status: 405,
           headers: { Allow: "POST" },
+        });
+      }
+
+      if (url.pathname === "/api/images.zip") {
+        if (req.method === "GET" || req.method === "HEAD") {
+          return handleArticleImagesZip(
+            config.rootDir,
+            url.searchParams.get("path"),
+            excludes,
+            req.method === "HEAD",
+            config.maxZipBytes ?? MAX_ZIP_BYTES,
+          );
+        }
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, HEAD" },
         });
       }
 
@@ -722,6 +782,304 @@ async function handleFileCreate(
   saveMark.set(safe.rel, sha256(Buffer.from("")));
 
   return Response.json({ path: safe.rel });
+}
+
+/**
+ * `SKIPPED.txt` の 1 フィールドとして安全な文字列にする (Issue #140)。
+ *
+ * パスは Markdown の href 由来で、**改行やタブを含みうる**（POSIX では合法な
+ * ファイル名文字で、`resolveSafe` も通す）。そのまま「参照\t理由」の行に連結すると
+ * **偽の行を作れる** —— `![](nope%0A%2Fetc%2Fpasswd.png)` で
+ * 「yomi が `/etc/passwd.png` を見に行った」ように見せられる（実測）。
+ *
+ * `Content-Disposition` 側は同じ理由で既に落としている（`util/content-disposition.ts`）。
+ */
+function skipField(value: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を落とすのが目的
+  const oneLine = value.replace(/[\x00-\x1f\x7f]/g, "\ufffd");
+  // **長すぎるものは切る。** `data:image/png;base64,…` は数 MB になりうるので、
+  // 一覧だけが際限なく膨らむ
+  return oneLine.length <= SKIP_FIELD_MAX ? oneLine : `${oneLine.slice(0, SKIP_FIELD_MAX)}…`;
+}
+
+/**
+ * 記事が参照する画像を zip にまとめて返す (Issue #140)。
+ *
+ * ## 何を入れるか
+ *
+ * **表示中の Markdown 1 本が参照するローカル画像だけ。** 集めるのは
+ * {@link collectArticleImages}（プレビューと同じ判定を使う）で、外部 URL・`data:` URI は
+ * 取りに行かない —— yomi は既定で 127.0.0.1 にバインドし、**サーバから外へ出ていく通信を
+ * 持たない**設計。取得を足すと Markdown に書かれた任意の URL へサーバが接続することになる。
+ *
+ * ## 1 枚ずつ `/api/asset` と同じ関門を通す
+ *
+ * 除外設定（`.yomiignore` / 既定除外）配下と root 外は**入れずに飛ばす**。ここを緩めると、
+ * **zip が `/api/asset` の迂回路**になる（Issue #65 が塞いだ穴を開け直す）。
+ *
+ * **飛ばしてもエラーにしない。** 1 枚の除外で zip 全体が失敗すると使えないので、
+ * 入らなかったものは {@link ZIP_SKIPPED_ENTRY} に理由つきで残す。
+ *
+ * ## zip のエントリ名は「Markdown が参照しているパス」
+ *
+ * `resolveSafe` が返す実体のパス（realpath 済み）**ではなく**、Markdown の href を
+ * root 起点に解決したパスを使う。**展開して Markdown の隣に置いたときにリンクが通る**のが
+ * この機能の目的だから。
+ *
+ * 違いが出るのは symlink のとき。`docs/alias.png -> shared/b.png` を
+ * `![](alias.png)` と書いている場合、
+ *
+ * | 名前に使うもの | 展開後 | `![](alias.png)` は |
+ * |---|---|---|
+ * | 参照パス `docs/alias.png` | `docs/alias.png` に実体ができる | **通る** |
+ * | 実体パス `shared/b.png` | `docs/alias.png` が無い | 壊れる |
+ *
+ * `resolveRelativePath` は `..` を root で打ち切る（`../../x.png` → `x.png`）ので、
+ * **参照パスに `..` は残らない**（実測）。それでも {@link createZip} が名前を検証する。
+ */
+async function handleArticleImagesZip(
+  rootDir: string,
+  requested: string | null,
+  excludes: ReadonlySet<string>,
+  headOnly: boolean,
+  maxZipBytes: number,
+): Promise<Response> {
+  if (!requested) {
+    return Response.json(
+      { error: "path クエリが必要です", code: "path_required" },
+      { status: 400 },
+    );
+  }
+  if (!isMarkdownPath(requested)) {
+    return Response.json(
+      { error: "Markdown ファイル以外は指定できません", code: "not_markdown" },
+      { status: 400 },
+    );
+  }
+  // 解決前に字句で弾く（`handleFileRead` と同じ順序）
+  if (isRequestExcluded(requested, excludes)) {
+    return excludedPathResponse(requested);
+  }
+
+  let safe: Awaited<ReturnType<typeof resolveSafe>>;
+  let markdown: string;
+  try {
+    safe = await resolveSafe(rootDir, requested);
+    if (isExcludedPath(safe.rel, excludes)) {
+      return excludedPathResponse(requested);
+    }
+    markdown = (await readFile(safe.abs)).toString("utf-8");
+  } catch (err) {
+    if (err instanceof UnsafePathError) {
+      return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
+    }
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return Response.json(
+        { error: `ファイルが見つかりません: ${requested}`, code: "not_found" },
+        { status: 404 },
+      );
+    }
+    console.error("記事の読み取りに失敗しました:", {
+      path: requested,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json(
+      { error: "ファイルの読み取りに失敗しました", code: "read_failed" },
+      { status: 500 },
+    );
+  }
+
+  // **同時に走らせない。** 並べられると zip のぶんだけメモリが積み上がる
+  if (zipInFlight >= ZIP_CONCURRENCY) {
+    return Response.json(
+      {
+        error: "zip の作成が混み合っています。少し待ってからもう一度お試しください",
+        code: "zip_busy",
+      },
+      { status: 503, headers: { "Retry-After": "2" } },
+    );
+  }
+
+  // **HEAD で zip を組み立てない。** 全画像を読んで捨てるだけになり、
+  // 帯域ゼロでサーバ側の全コストを引ける（`handleAssetRead` も HEAD を短絡している）
+  if (headOnly) {
+    return new Response(null, {
+      headers: {
+        "Content-Type": "application/zip",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  zipInFlight++;
+  try {
+    return await buildImagesZip(rootDir, safe, markdown, excludes, maxZipBytes);
+  } finally {
+    zipInFlight--;
+  }
+}
+
+/** {@link handleArticleImagesZip} の本体。同時実行の数え上げから切り離すために分けてある。 */
+async function buildImagesZip(
+  rootDir: string,
+  safe: Awaited<ReturnType<typeof resolveSafe>>,
+  markdown: string,
+  excludes: ReadonlySet<string>,
+  maxZipBytes: number,
+): Promise<Response> {
+  let found: ReturnType<typeof collectArticleImages>;
+  try {
+    found = collectArticleImages(markdown, safe.rel);
+  } catch (err) {
+    // **marked が落ちうる。** 深くネストした構造で再帰上限に達する（#99 が同じ形を潰した）。
+    // 捕まえないと未捕捉ハンドラへ落ち、`internal_error` と巨大なスタックが出る
+    console.error("記事の解析に失敗しました:", {
+      path: safe.rel,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json(
+      { error: "ファイルの読み取りに失敗しました", code: "read_failed" },
+      { status: 500 },
+    );
+  }
+  const entries: ZipEntry[] = [];
+  /** 入らなかった参照とその理由。zip の中に置く */
+  const skipped: string[] = [
+    ...found.external.map((url) => `${skipField(url)}\t外部の参照は取得しない`),
+    ...found.notImage.map((ref) => `${skipField(ref)}\t画像ではない`),
+  ];
+  let totalBytes = 0;
+
+  for (const rel of found.local) {
+    // **`/api/asset` と同じ関門。** 順序も揃える（拡張子 → 字句 → 解決 → 解決後の除外）。
+    //
+    // **拡張子をここでも見る。** `collectArticleImages` が既に見ているが、`/api/asset` が
+    // `isAssetExtension(requested)` を独立に掛けているのと同じ理由で二重に持つ ——
+    // ここが唯一の関門だと、集める側の判定が緩んだ瞬間に**任意ファイルの吸い出し**になる
+    // （実際、解決前の href だけを見ていたときは `![](.env%23a.png)` で `.env` が入った）
+    if (!isImageExtension(rel)) {
+      skipped.push(`${skipField(rel)}\t画像ではない`);
+      continue;
+    }
+    // **`SKIPPED.txt` と衝突する名前は入れない。** `createZip` が重複で投げ、
+    // zip 全体が 500 になる（「1 枚のせいで全部失敗させない」に反する）
+    if (rel === ZIP_SKIPPED_ENTRY) {
+      skipped.push(`${skipField(rel)}\t一覧ファイルと名前が衝突する`);
+      continue;
+    }
+    // **zip の名前にできないものは飛ばす。** `createZip` は投げるので、通すと
+    // 1 枚のせいで zip 全体が 500 になる（`C:\x.png` は POSIX では合法なファイル名）
+    if (rel.includes("\\") || /^[A-Za-z]:/.test(rel)) {
+      skipped.push(`${skipField(rel)}\tzip のエントリ名にできない`);
+      continue;
+    }
+    if (isRequestExcluded(rel, excludes)) {
+      skipped.push(`${skipField(rel)}\t除外設定の配下`);
+      continue;
+    }
+    try {
+      const image = await resolveSafe(rootDir, rel);
+      if (isExcludedPath(image.rel, excludes)) {
+        skipped.push(`${skipField(rel)}\t除外設定の配下`);
+        continue;
+      }
+      // **`handleAssetRead` と同じく fd 経由で stat してから読む。** 直に `readFile`
+      // すると、ディレクトリは EISDIR で「読み取りに失敗」になり（本当は「ファイルではない」）、
+      // FIFO は**永久にブロックして zip 全体が返らなくなる**
+      const fh = await open(image.abs, "r");
+      let data: Buffer;
+      try {
+        const st = await fh.stat();
+        if (!st.isFile()) {
+          skipped.push(`${skipField(rel)}\tファイルではない`);
+          continue;
+        }
+        if (st.size > MAX_ASSET_BYTES) {
+          skipped.push(`${skipField(rel)}\t1 枚あたりの上限 ${MAX_ASSET_BYTES} バイトを超える`);
+          continue;
+        }
+        if (totalBytes + st.size > maxZipBytes) {
+          skipped.push(`${skipField(rel)}\t上限 ${maxZipBytes} バイトを超えるため`);
+          continue;
+        }
+        data = await fh.readFile();
+      } finally {
+        await fh.close().catch(() => {});
+      }
+      totalBytes += data.length;
+      // **`image.rel`（realpath 済み）ではなく `rel`（参照どおり）を名前にする。**
+      // 理由は上の表。除外と root 外の判定には `image.rel` を使うので、
+      // 名前の選択で関門が緩むことはない
+      entries.push({ name: rel, data: new Uint8Array(data) });
+    } catch (err) {
+      if (err instanceof UnsafePathError) {
+        skipped.push(`${skipField(rel)}\tルートディレクトリの外`);
+        continue;
+      }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        skipped.push(`${skipField(rel)}\tファイルが見つからない`);
+        continue;
+      }
+      // **1 枚の失敗で zip 全体を諦めない。** 理由だけ残して次へ
+      console.error("画像の読み取りに失敗しました:", {
+        path: rel,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      skipped.push(`${skipField(rel)}\t読み取りに失敗`);
+    }
+  }
+
+  if (skipped.length > 0) {
+    const header = [
+      "# zip に入らなかった参照 (yomi)",
+      `# 元のファイル: ${safe.rel}`,
+      "# 1 行につき「参照\t理由」",
+      "",
+    ].join("\n");
+    // **バイト数で切らない。** 途中で切ると理由が読めなくなり、この一覧の意味が消える。
+    // **行数と 1 行の長さで抑える**（`skipField` が 1 行を切る）
+    const shown = skipped.slice(0, SKIP_MAX_LINES);
+    const rest = skipped.length - shown.length;
+    if (rest > 0) shown.push(`… 他 ${rest} 件（多すぎるため省略）`);
+    entries.push({
+      name: ZIP_SKIPPED_ENTRY,
+      data: new TextEncoder().encode(`${header}${shown.join("\n")}\n`),
+    });
+  }
+
+  let zip: Uint8Array;
+  try {
+    zip = createZip(entries);
+  } catch (err) {
+    console.error("zip の組み立てに失敗しました:", {
+      path: safe.rel,
+      entries: entries.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json(
+      { error: "zip の作成に失敗しました", code: "zip_failed" },
+      { status: 500 },
+    );
+  }
+
+  // 元のファイル名から `.md` を外して `<名前>-images.zip` にする
+  const stem = basename(safe.rel).replace(/\.[^.]*$/, "");
+  // **コピーしない。** `createZip` はちょうどのサイズのバッファを専有して返すので、
+  // `slice` すると zip のサイズぶん無駄に積む（上限 200MB のとき丸ごと 1 本ぶん）
+  return new Response(zip.buffer as ArrayBuffer, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Length": String(zip.length),
+      "Content-Disposition": buildContentDisposition("attachment", `${stem}-images.zip`),
+      // **キャッシュさせない。** 画像が差し替わっても古い zip が返ると混乱する
+      "Cache-Control": "no-store",
+      // 入った枚数と入らなかった件数を、展開せずに読めるようにする。
+      // **クライアントが zip を解析しなくて済む** —— EOCD を読ませると
+      // `createZip` の実装詳細に結合し、形式を変えたときに無言で壊れる
+      "X-Yomi-Images": String(entries.length - (skipped.length > 0 ? 1 : 0)),
+      "X-Yomi-Skipped": String(skipped.length),
+    },
+  });
 }
 
 /** /api/asset 配信サイズ上限 (50 MB)。DoS / 誤配信抑制のため。 */
