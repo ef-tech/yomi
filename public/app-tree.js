@@ -384,12 +384,15 @@ export function createTree(ctx) {
       dirtyPath === ""
         ? /** @type {HTMLUListElement | null} */ (els.tree.querySelector(":scope > ul"))
         : (state.dirNodes.get(dirtyPath)?.ul ?? null);
-    // **描かれていないディレクトリは差分で直せない。** データだけ進めて DOM が
-    // 追随しないと、以後ずっと食い違う。ここは素直に全量へ逃げる
-    if (!ul) return false;
-
     const dirtyNode = dirtyPath === "" ? root : findNode(root, dirtyPath);
-    if (!dirtyNode) return false;
+    // **描かれていないディレクトリは差分で直せない。** ここまで来ると `root` は
+    // **もう書き換わっている**ので、DOM だけ追随しないと以後ずっと食い違う。
+    // **土台ごと捨てて**、全量を取り直すまで差分を当てないようにする
+    // （`renderTree` が入れ直すまで、次以降の差分もここで `false` になる）
+    if (!ul || !dirtyNode) {
+      state.treeData = null;
+      return false;
+    }
     reconcileChildren(ul, dirtyNode.children ?? []);
 
     updateTreeToolbarState();

@@ -22,6 +22,7 @@
  * 参照する。app.js が全モジュールを生成してから `ctx` に差し込むので、生成順に依存しない。
  */
 
+import { TREE_GEN_HEADER } from "./api-headers.js";
 import { ERROR_CODE_KEYS, t } from "./i18n.js";
 import { prefs } from "./prefs.js";
 import { SANITIZE_CONFIG } from "./sanitize-config.js";
@@ -86,9 +87,6 @@ export async function fetchJson(url, options) {
   }
   return data;
 }
-
-/** `/api/tree` の版を伝えるヘッダ名。**`src/server.ts` の `TREE_GEN_HEADER` と揃える。** */
-const TREE_GEN_HEADER = "X-Yomi-Tree-Gen";
 
 /**
  * ツリーを版つきで取得する (Issue #126)。

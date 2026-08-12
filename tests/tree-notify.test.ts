@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TREE_GEN_HEADER as CLIENT_TREE_GEN_HEADER } from "../public/api-headers.js";
 import { createServer, type ServerHandle, TREE_GEN_HEADER } from "../src/server.ts";
 
 let dir: string;
@@ -256,4 +257,15 @@ describe("tree 通知の差分", () => {
       sock.close();
     }
   });
+});
+
+/**
+ * **ヘッダ名はサーバとクライアントで二重定義になっている。**
+ *
+ * `src/` は TypeScript、`public/` はブラウザに配る JS で、片方から他方を import できない。
+ * ずれると**クライアントが版を読めず、差分を 1 件も当てなくなる** —— 表示は正しいまま
+ * 遅くなるだけなので、テストが無いと気づけない。
+ */
+test("版ヘッダ名がサーバとクライアントで一致している", () => {
+  expect(CLIENT_TREE_GEN_HEADER).toBe(TREE_GEN_HEADER);
 });
