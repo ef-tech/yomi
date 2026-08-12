@@ -17,16 +17,27 @@ import {
 
 type Name = (typeof OVERLAY_LAYERS)[number]["name"];
 
-/** 開いているものだけを渡して、`els` の必要な部分だけを作る。 */
+/**
+ * 開いているものだけを渡して、`els` の必要な部分だけを作る。
+ *
+ * **層の名前をベタ書きしない (Issue #135)。** 以前はここに 1 行ずつ並べていたので、
+ * `OVERLAY_LAYERS` に 1 行足すと**このテストが `undefined.hidden` で落ちた** ——
+ * 「新しいオーバーレイは表に 1 行足すだけ」という、このテストが守っているはずの契約を
+ * テスト自身が破っていた。表から導出すれば足すだけで済む。
+ *
+ * `sidebar` だけ `hidden` ではなく class で開閉するので、そこだけ別に作る
+ * （`app-overlays.js` の `isOpen` に合わせる）。
+ */
 function fakeEls(...open: Name[]) {
   const isOpen = (name: Name) => open.includes(name);
-  const els = {
-    sidebar: { classList: { contains: (c: string) => c === "is-open" && isOpen("sidebar") } },
-    overflowMenu: { hidden: !isOpen("overflowMenu") },
-    quickOpen: { hidden: !isOpen("quickOpen") },
-    externalLinkBanner: { hidden: !isOpen("externalLinkBanner") },
-    conflictDiff: { hidden: !isOpen("conflictDiff") },
-  };
+  /** @type {Record<string, unknown>} */
+  const els: Record<string, unknown> = {};
+  for (const { name } of OVERLAY_LAYERS) {
+    els[name] =
+      name === "sidebar"
+        ? { classList: { contains: (c: string) => c === "is-open" && isOpen("sidebar") } }
+        : { hidden: !isOpen(name) };
+  }
   return els as unknown as import("../public/app-context.js").Elements;
 }
 

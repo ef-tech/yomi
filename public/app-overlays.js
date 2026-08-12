@@ -51,13 +51,14 @@
  *
  * 比較に使うのはここの大小だけで、CSS は読みに行かない（正本を 1 か所にする）。
  *
- * ## `toc-panel` を入れていない
+ * ## `tocPanel` の `blocksShortcuts` が `false` な理由
  *
- * スマホ幅では `z-index: 60` の全画面パネルになる（PC ではフローティングで 10）。
- * ただし**`Esc` で閉じる導線が無い**ので、ここに載せると「最前面なのに誰も閉じない」
- * 状態を作り、**背後の sidebar まで Esc で閉じられなくなる**。閉じる導線を足すのは
- * パネルの機能の話（#112 の対象外）なので **#135** に分けた。
+ * **スマホ幅では `z-index: 60` の全画面パネルだが、PC 幅ではフローティング（10）**
+ * （`styles.css` の `@media (max-width: 767px)`）。この表は**ビューポート幅を持たない**
+ * ので、`true` にすると**PC 幅で TOC を開いている間ずっと `Ctrl/Cmd+S` が塞がれる**。
+ * 全画面でないパネルのために保存を止めるのは筋が通らないので `false` にする。
  *
+ * 幅で優先順位を変えたいなら、表に「幅の条件」を持たせる設計変更が要る（#135）。
  */
 export const OVERLAY_LAYERS = /** @type {const} */ ([
   // モバイルの引き出し。全画面ではないのでショートカットは止めない
@@ -66,6 +67,11 @@ export const OVERLAY_LAYERS = /** @type {const} */ ([
   { name: "overflowMenu", priority: 55, blocksShortcuts: false },
   // CSS に z-index は無い。sidebar / ⋮ より優先という元の設計を数値にしたもの
   { name: "externalLinkBanner", priority: 57, blocksShortcuts: false },
+  // スマホ幅で全画面 (z-index: 60)。**クイックオープンと同じ値だが、`index.html` で
+  // 先に置かれているぶん下に描かれる**（実測）。優先順位もそれに合わせて 58 にする ——
+  // 60 にすると同着になり、`topOverlay` が先勝ちで TOC を返すので、**上に開いた
+  // クイックオープンが Esc で閉じられなくなる** (Issue #135)
+  { name: "tocPanel", priority: 58, blocksShortcuts: false },
   { name: "quickOpen", priority: 60, blocksShortcuts: true },
   { name: "conflictDiff", priority: 70, blocksShortcuts: true },
 ]);
