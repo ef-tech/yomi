@@ -67,11 +67,30 @@ async function readLinux(pid: number): Promise<string | null> {
     .split(/\s+/);
   const startTicks = fields[19];
   if (!startTicks || !/^\d+$/.test(startTicks)) return null;
-  return format("linux", startTicks);
+  // **boot_id を混ぜる。** `starttime` は boot からの tick 数なので、**再起動すると
+  // 値域が先頭から走り直す** —— レジストリは再起動で消えないので、同じ `pid + tick` を
+  // 持つ別プロセスを「本人」と誤認しうる。$HOME を複数ホストで共有している場合も同じ。
+  const bootId = await readBootId();
+  return format("linux", bootId ? `${bootId}:${startTicks}` : startTicks);
+}
+
+/** この boot を識別する UUID。読めなければ null（値から落とす）。 */
+async function readBootId(): Promise<string | null> {
+  try {
+    return (await readFile("/proc/sys/kernel/random/boot_id", "utf-8")).trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * macOS: `ps -p <pid> -o lstart=`。
+ *
+ * **`TZ` と `LC_ALL` を固定する。** `lstart` は**ローカル時刻の文字列**なので、
+ * 記録したときと読み直すときで時間帯や言語が違うと、同じプロセスでも文字列が一致しない
+ * （`水  8月 12 12:53:46 2026` と `Wed Aug 12 03:53:46 2026`）。macOS では GUI 起動と
+ * ターミナルで `LANG` が違う・移動で時間帯が変わる・DST を跨ぐ、が普通に起きる。
+ * 一致しないと**生きている本物を止められなくなる**（安全側だが `down` が壊れる）。
  *
  * **精度は 1 秒**なので、同じ秒のうちに pid が再利用されると見分けられない。
  * `/proc` が無いので他に安定して取れる手が無く、ここは限界として受け入れる
@@ -81,6 +100,7 @@ async function readDarwin(pid: number): Promise<string | null> {
   const proc = Bun.spawn(["ps", "-p", String(pid), "-o", "lstart="], {
     stdout: "pipe",
     stderr: "ignore",
+    env: { ...process.env, TZ: "UTC", LC_ALL: "C" },
   });
   const out = (await new Response(proc.stdout).text()).trim();
   if ((await proc.exited) !== 0 || !out) return null;
@@ -89,4 +109,55 @@ async function readDarwin(pid: number): Promise<string | null> {
 
 function format(platform: Platform, value: string): string {
   return `${platform}:${value}`;
+}
+
+/**
+ * そのプロセスが **yomi かどうか**を、コマンドラインから見る (Issue #132)。
+ *
+ * ## 何に使うか
+ *
+ * {@link processStartedAt} で同定できないとき（**v0.21.0 以前の記録**・未対応 OS）の
+ * 最後の関門。起動時刻が無くても、**「そもそも yomi ですらない」ものは弾ける**。
+ *
+ * これが無いと、古い記録に対して #132 の穴がそのまま残る —— しかも
+ * 「pid が再利用されて生きている ＋ 第三者がポートを掴んでいる」という危険な配置では
+ * **記録が掃除されないので窓が閉じない**（`liveInstances` は pid が死んだものだけ、
+ * `servingInstances` は疎通しないものだけを消す）。
+ *
+ * ## 限界
+ *
+ * **「yomi である」までしか言えない。** 再利用された pid が偶然また別の yomi だった場合は
+ * 見分けられない。それでも「無関係なプロセスを殺す」という #132 の被害は防げる
+ * （報告された事例の犠牲者も yomi ではなかった）。
+ *
+ * @returns yomi らしければ `true`。**読めない・判定できないときは `null`**
+ *   （呼び出し側が「分からない」を区別できるように、`false` と分ける）
+ */
+export async function looksLikeYomi(pid: number): Promise<boolean | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const cmdline = await readCmdline(pid);
+  if (cmdline === null) return null;
+  // 実物: `bun /…/bin/yomi.ts --port N --no-open` / `/…/bun /…/yomi.ts up --port N …`
+  return /(^|[/\s])yomi(\.ts)?([/\s]|$)/.test(cmdline);
+}
+
+async function readCmdline(pid: number): Promise<string | null> {
+  if (process.platform === "linux") {
+    try {
+      // NUL 区切り。空白に均してから見る
+      return (await readFile(`/proc/${pid}/cmdline`, "utf-8")).replace(/\0/g, " ").trim() || null;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "darwin") {
+    const proc = Bun.spawn(["ps", "-p", String(pid), "-o", "command="], {
+      stdout: "pipe",
+      stderr: "ignore",
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    const out = (await new Response(proc.stdout).text()).trim();
+    return (await proc.exited) === 0 && out ? out : null;
+  }
+  return null;
 }

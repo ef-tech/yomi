@@ -8,7 +8,25 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { chmod, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { processStartedAt } from "../src/util/proc-start.ts";
+
+/**
+ * `/proc/<pid>/stat` から starttime（22 番目）を、実装とは**独立に**取り出す。
+ *
+ * 実装と同じ関数を使うと「同じ間違いで書いて読む」ことになるので、ここは
+ * `stat` の仕様どおりに素直に書く。
+ */
+function starttimeOf(stat: string): string {
+  const after = stat
+    .slice(stat.lastIndexOf(")") + 2)
+    .trim()
+    .split(/\s+/);
+  // `)` の次が state（3 番目）。22 番目はそこから 19 個先
+  return after[19] as string;
+}
 
 /** この OS で読み取りに対応しているか。未対応なら常に null が正しい挙動 */
 const SUPPORTED = process.platform === "linux" || process.platform === "darwin";
@@ -75,21 +93,49 @@ describe("processStartedAt", () => {
     expect(await processStartedAt(proc.pid)).toBeNull();
   });
 
+  /**
+   * **`/proc/<pid>/stat` の 2 番目 (comm) は括弧で囲まれ、中に括弧や空白が入りうる。**
+   *
+   * 単純な `split(" ")` や `indexOf(")")` では位置がずれるので、実装は**最後の `)`**
+   * から数えている。**実際にそういう名前のプロセスを起こして確かめる** ——
+   * `sleep` のような普通の名前だけで試すと、この堅牢化を何も守れない。
+   */
   test.skipIf(process.platform !== "linux")(
     "名前に空白や括弧を含むプロセスでも読める",
     async () => {
-      // `/proc/<pid>/stat` の 2 番目 (comm) は括弧で囲まれ、**中に括弧や空白が入りうる**。
-      // 単純な split では位置がずれるので、最後の `)` から数える実装になっている
-      const dir = await Bun.file("/proc/self/stat").text();
-      expect(dir).toContain("(");
-
-      const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" });
-      await new Promise((r) => setTimeout(r, 200));
+      // comm は実行ファイル名から取られる。**Linux では括弧も空白も合法なファイル名**
+      const dir = await mkdtemp(join(tmpdir(), "yomi-comm-"));
+      const weird = join(dir, "ev ) il (x");
+      // **`sh` を使う。** `sleep` は uutils の multicall（argv[0] で動きを決める）で、
+      // 名前を変えると起動に失敗する環境がある（実際に踏んだ）
+      const shBin = Bun.which("sh");
+      expect(shBin).not.toBeNull();
+      await copyFile(shBin as string, weird);
+      // `copyFile` がモードを引き継がない環境があるので実行権を明示する
+      await chmod(weird, 0o755);
+      // `read` で標準入力を待たせる。**`exec` で別コマンドに変えない** ——
+      // comm がそちらの名前になってしまい、狙った名前で試せなくなる
+      const proc = Bun.spawn([weird, "-c", "read x"], {
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
       try {
-        expect(await processStartedAt(proc.pid)).toMatch(/^linux:\d+$/);
+        await new Promise((r) => setTimeout(r, 300));
+        // 前提: 狙った comm になっていること（なっていなければこのテストは無意味）
+        const stat = await readFile(`/proc/${proc.pid}/stat`, "utf-8");
+        expect(stat).toContain(") il (x)");
+
+        // **値そのものを独立に検算する。** 「数値が入っている」だけだと、
+        // 読み取り位置がずれていても通ってしまう（別のフィールドも数値なので）
+        const expected = starttimeOf(stat);
+        const got = await processStartedAt(proc.pid);
+        expect(got).not.toBeNull();
+        expect((got as string).endsWith(`:${expected}`)).toBe(true);
       } finally {
         proc.kill(9);
         await proc.exited;
+        await rm(dir, { recursive: true, force: true });
       }
     },
   );
