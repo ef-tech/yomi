@@ -4,6 +4,7 @@ import {
   createStatus,
   errorText,
   fetchJson,
+  fetchTree,
   LANG_MODES,
   MOBILE_MEDIA_QUERY,
   restorePreferences,
@@ -118,9 +119,10 @@ async function init() {
   seedNavCounter(window.history.state?.navIndex);
 
   try {
-    /** @type {import("./api-types.js").TreeNode} */
-    const tree = await fetchJson("/api/tree");
-    ctx.tree.renderTree(tree);
+    // **版も受け取る (Issue #126)。** これが初期値になり、以降の `tree` 通知を
+    // 差分で当てられるかどうかの基準になる
+    const { root: tree, gen } = await fetchTree();
+    ctx.tree.renderTree(tree, gen);
     setStatus("ok", t("status.fileCount", { count: state.fileButtons.size }));
 
     const initial = ctx.document.chooseInitialFile(tree);

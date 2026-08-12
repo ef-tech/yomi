@@ -34,6 +34,7 @@ import { mkdir, readdir } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
+import { applyTreeDiff } from "../public/tree-diff.js";
 import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
 import { createServer } from "../src/server.ts";
 import { BENCH_ROOT } from "./bench-fixture.ts";
@@ -166,6 +167,14 @@ export function renderTreeInto(
    * 初回描画しか測れない。
    */
   carry: TreeCarry = createCarry(),
+  /**
+   * 描き直す起点のディレクトリ path (Issue #126)。**`null` はルートから全部**。
+   *
+   * 差分更新は「変わったディレクトリの `<ul>` だけ」を突き合わせる。ルートから
+   * 回すと 10,500 ノードを見ることになり、**差分の効きが測れない**
+   * （それが計測したい差そのもの）。
+   */
+  fromPath: string | null = null,
 ): void {
   const { fileButtons, dirNodes, openDirs, rendered } = carry;
   const nodeKey = (node: TreeNode) => `${node.type}:${node.path}`;
@@ -331,6 +340,14 @@ export function renderTreeInto(
     ul = document.createElement("ul");
     host.appendChild(ul);
   }
+
+  if (fromPath !== null && fromPath !== "") {
+    const target = dirNodes.get(fromPath)?.ul;
+    const node = findByPath(tree, fromPath);
+    if (!target || !node) throw new Error(`描き直す起点が見つかりません: ${fromPath}`);
+    reconcileChildren(target, node.children ?? []);
+    return;
+  }
   reconcileChildren(ul, tree.children ?? []);
 }
 
@@ -379,22 +396,23 @@ function measureDom(tree: TreeNode): number[] {
 }
 
 /**
- * 4) **watcher イベント 1 回あたりの反映コスト** (Issue #84)。
+ * 4) **watcher イベント 1 回あたりの反映コスト** (Issue #84 → #126)。
  *
- * `#83` のベースラインが「測っていないもの」に挙げていた区間。クライアントは
- * `tree` を受けると `/api/tree` を取り直してツリーへ反映する
- * (`public/app-websocket.js`)。
+ * `#83` のベースラインが「測っていないもの」に挙げていた区間。
+ *
+ * **#126 で経路そのものが変わった。** 以前はクライアントが `tree` を受けるたびに
+ * `/api/tree` を取り直し、ツリー全体を突き合わせていた。いまはサーバが
+ * 「どこがどう変わったか」を送り、**手元のツリーへ 1 件当てて、その
+ * ディレクトリだけを描き直す**（`public/tree-diff.js`）。したがってこの計測にも
+ * **`/api/tree` の取得が入らない** —— 入れると、無くしたはずのコストを測り続ける
+ * ことになる。
  *
  * **毎回きちんと 1 件変える。** 同じツリーを流すと 2 周目以降は DOM 書き込みが 0 件になり、
  * 「何も変わらなかったときの走査コスト」を測ることになる（実際それで
- * 33ms という誤った数値を出した）。`tree` イベントの定義は追加・削除なので、
- * **追加と削除を交互に起こす**。
+ * 33ms という誤った数値を出した）。**追加と削除を交互に起こす**。
  *
- * **削除位置で大きく変わる**ので、位置ごとに測って最悪値も出す ——
+ * **変更位置で大きく変わる**ので、位置ごとに測って最悪値も出す ——
  * 先頭を消すと、素朴な実装では後続の兄弟をすべて付け替えることになる。
- *
- * **サーバとクライアントが同一プロセスなので、実運用の転送時間は含まれない**
- * (`measureApi` と同じ制約)。
  */
 async function measureWatcherRefresh(dir: string, where: "末尾" | "先頭"): Promise<number[]> {
   const handle = createServer({ rootDir: dir, hostname: "127.0.0.1", port: 0, watch: false });
@@ -406,29 +424,28 @@ async function measureWatcherRefresh(dir: string, where: "末尾" | "先頭"): P
   // 差分更新 (Issue #84) の効きを測るにはここを引き継ぐ必要がある
   const carry = createCarry();
 
-  const base = (await (await fetch(url)).json()) as TreeNode;
-  // **サーバは同じ JSON を返す**ので、追加・削除はここで作る（fixture を書き換えない）。
-  // 変えるのは**いちばん深い実在ディレクトリの中**で、実際のファイル追加に近づける
-  const target = deepestDir(base);
-  const extra: TreeNode = {
-    name: "zzz-bench.md",
-    path: `${target.path ? `${target.path}/` : ""}zzz-bench.md`,
-    type: "file",
-  };
+  // **初回描画は計測の外。** 実運用でも起動時に 1 度引くだけで、`tree` 通知のたびには引かない
+  const tree = (await (await fetch(url)).json()) as TreeNode;
+  renderTreeInto(document as unknown as Document, host, tree, carry);
 
-  let toggle = false;
+  // 変えるのは**いちばん深い実在ディレクトリの中**で、実際のファイル追加に近づける
+  const target = deepestDir(tree);
+  const dirPath = target.path ? `${target.path}/` : "";
+  // **先頭 / 末尾に落ちる名前を選ぶ。** `applyTreeDiff` は名前順の位置へ入れるので、
+  // 位置は名前で決まる（`splice` の添字では決められない）
+  const extraPath = `${dirPath}${where === "先頭" ? "0000-bench.md" : "zzz-bench.md"}`;
+
+  // **add から始める。** まだ無いファイルの削除は「何もしない」で成功扱いになるので、
+  // remove から始めると 1 周目が空振りして「何も変わらないときのコスト」を測ってしまう
+  let toggle = true;
   try {
-    return await bench(async () => {
-      const tree = structuredClone((await (await fetch(url)).json()) as TreeNode);
-      const dirNode = findByPath(tree, target.path);
-      if (dirNode) {
-        const kids = dirNode.children ?? [];
-        // **交互に足したり消したりする。** 毎イテレーションで必ず 1 件動く
-        if (toggle) kids.splice(where === "先頭" ? 0 : kids.length, 0, extra);
-        dirNode.children = kids;
-      }
+    return await bench(() => {
+      // **交互に足したり消したりする。** 毎イテレーションで必ず 1 件動く
+      const op = toggle ? "add" : "remove";
       toggle = !toggle;
-      renderTreeInto(document as unknown as Document, host, tree, carry);
+      const { ok, dirtyPath } = applyTreeDiff(tree, op, extraPath);
+      if (!ok || dirtyPath === null) throw new Error(`差分を当てられません: ${op} ${extraPath}`);
+      renderTreeInto(document as unknown as Document, host, tree, carry, dirtyPath);
     });
   } finally {
     dom.window.close();
@@ -553,7 +570,10 @@ async function main() {
   );
   console.log("");
   console.log(
-    "**`watcher 1 回` は `tree` 通知 1 通あたりの反映コスト** (`/api/tree` の取得 + ツリーへの反映)。" +
+    "**`watcher 1 回` は `tree` 通知 1 通あたりの反映コスト**。" +
+      "**Issue #126 で `/api/tree` の取得が経路から外れた** —— サーバが差分を送るようになり、" +
+      "手元のツリーへ 1 件当てて**そのディレクトリだけ**を描き直す。したがってこの列に" +
+      "取得時間は含まれない (含めると、無くしたコストを測り続けることになる)。" +
       "**毎回きちんと 1 件追加・削除している** —— 同じツリーを流すと DOM 書き込みが 0 件になり、" +
       "「何も変わらなかったときの走査コスト」を測ることになる。" +
       "`末尾` / `先頭` は変更を起こす位置で、素朴な差分更新では先頭のほうが高くつく。",
