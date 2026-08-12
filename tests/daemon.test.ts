@@ -25,6 +25,7 @@ import {
   saveInstance,
 } from "../src/instances.ts";
 import { DEFAULT_START_PORT, findAvailablePort } from "../src/port.ts";
+import { processStartedAt } from "../src/util/proc-start.ts";
 
 const ENTRY = join(import.meta.dir, "..", "bin", "yomi.ts");
 
@@ -35,6 +36,8 @@ function record(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
     host: "127.0.0.1",
     rootDir: "/tmp/docs",
     startedAt: "2026-08-03T00:00:00.000Z",
+    // 既定は空 = 「起動時刻が読めなかった記録」。個別に必要なテストが上書きする
+    procStartedAt: "",
     logPath: "/tmp/state/yomi/logs/3939.log",
     version: "0.0.0-test",
     ...overrides,
@@ -928,7 +931,13 @@ describe("describeServeFailure (Issue #107)", () => {
     });
     try {
       await saveInstance(
-        record({ pid: process.pid, port, host: "127.0.0.1", rootDir: "/tmp/same-wording" }),
+        record({
+          pid: process.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: "/tmp/same-wording",
+          procStartedAt: (await processStartedAt(process.pid)) ?? "",
+        }),
         paths,
       );
       const reason = await describePortInUse("127.0.0.1", port, paths);
@@ -983,7 +992,15 @@ describe("describeServeFailure (Issue #107)", () => {
     });
     try {
       await saveInstance(
-        record({ pid: process.pid, port, host: "127.0.0.1", rootDir: "/tmp/some-docs" }),
+        record({
+          pid: process.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: "/tmp/some-docs",
+          // **同定を通す (Issue #132)。** 起動時刻が一致しないと「本人ではない」と
+          // 判定され、`yomi down` の案内が出なくなる
+          procStartedAt: (await processStartedAt(process.pid)) ?? "",
+        }),
         paths,
       );
       const message = await describeServeFailure(addrInUse(), "127.0.0.1", port, paths);
@@ -1003,4 +1020,454 @@ describe("describeServeFailure (Issue #107)", () => {
     // **「使用されています」と言わない。** 空いているので嘘になる
     expect(message).not.toContain("既に使用されています");
   });
+});
+
+/**
+ * **pid 再利用で無関係なプロセスを止めない (Issue #132)。**
+ *
+ * `isThisInstance` は pid の生存とポートの疎通を**独立に**見ていた。
+ *
+ * - 残骸記録の pid が別プロセスに再利用されて生きている
+ * - **無関係な第三者**がそのポートを掴んでいる
+ *
+ * が同時に成り立つと true になり、`yomi down` が無関係なプロセスへ SIGTERM を送って
+ * 「停止しました」と報告した（実測で再現済み）。
+ *
+ * **起動時刻を突き合わせて同定する**ようにしたのがこの Issue の修正。
+ */
+describe("pid 再利用で無関係なプロセスを止めない (Issue #132)", () => {
+  let workDir: string;
+  let stateDir: string;
+  let paths: RegistryPaths;
+  /** 後片付けで確実に殺す */
+  const spawned: ReturnType<typeof Bun.spawn>[] = [];
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "yomi-132-work-"));
+    stateDir = await mkdtemp(join(tmpdir(), "yomi-132-state-"));
+    paths = resolvePaths({ XDG_STATE_HOME: stateDir });
+    await writeFile(join(workDir, "README.md"), "# テスト\n", "utf8");
+  });
+
+  afterEach(async () => {
+    for (const p of spawned.splice(0)) {
+      try {
+        p.kill(9);
+        await p.exited;
+      } catch {
+        /* 既に終了している */
+      }
+    }
+    await rm(workDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  /** そのポートを掴む、yomi ではないプロセス */
+  async function portHolder(port: number) {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `Bun.listen({hostname:"127.0.0.1",port:${port},socket:{data(){},open(){},close(){}}});setInterval(()=>{},1000)`,
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    spawned.push(proc);
+    // listen が始まるまで待つ（固定 sleep にしない）
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        await Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {} } }).then((s) =>
+          s.end(),
+        );
+        return proc;
+      } catch {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    throw new Error(`ポート ${port} を掴めませんでした`);
+  }
+
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test(
+    "🚨 無関係なプロセスへシグナルを送らない（生き残ることを assert する）",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41500);
+      const victim = await portHolder(port);
+      const victimPid = victim.pid;
+
+      // **残骸記録の pid が、その無関係なプロセスに再利用された状態。**
+      // 記録の起動時刻は「死んだ yomi のもの」で、犠牲者のものとは一致しない
+      await saveInstance(
+        record({
+          pid: victimPid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: "linux:1",
+        }),
+        paths,
+      );
+
+      const down = await runCli(["down", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+
+      // **これが本体。** 以前はここで犠牲者が死に、「停止しました」と報告された
+      expect(alive(victimPid)).toBe(true);
+      expect(down.stdout + down.stderr).not.toContain("停止しました");
+      // 記録は「本人ではない」ので片付けられる
+      expect(await readInstances(paths)).toEqual([]);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "list にも並べない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41530);
+      const victim = await portHolder(port);
+      await saveInstance(
+        record({
+          pid: victim.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: "linux:1",
+        }),
+        paths,
+      );
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+
+      expect(listed.stdout).toContain("起動中の yomi はありません");
+      expect(listed.stdout).not.toContain(String(victim.pid));
+      expect(alive(victim.pid)).toBe(true);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "起動前検査が無関係なプロセスを yomi と名指ししない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41560);
+      const victim = await portHolder(port);
+      await saveInstance(
+        record({
+          pid: victim.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: "linux:1",
+        }),
+        paths,
+      );
+
+      const res = await runCli(["--port", String(port), "--no-open"], {
+        cwd: workDir,
+        state: stateDir,
+      });
+
+      expect(res.code).toBe(1);
+      // ポートは実際に埋まっているので「使用されています」が正しい。
+      // **「yomi が起動しています」と言ってはいけない**（無関係なプロセスなので）
+      expect(res.stderr).toContain(`ポート ${port} は既に使用されています`);
+      expect(res.stderr).not.toContain("既に yomi が起動しています");
+      expect(alive(victim.pid)).toBe(true);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  /**
+   * **応答しなくなった yomi は止められること。**
+   *
+   * 以前は疎通を同定の条件にしていたので、ハングして listen が落ちた yomi に対して
+   * 「既に終了していました」と**記録だけ消して本体を生き残らせて**いた。
+   * `down` が最も要るのはこの状況なので、同定から疎通を外した。
+   */
+  test(
+    "ポートを掴んでいない本物の yomi も止められる",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41590);
+      // listen していないプロセス = ハングした yomi の代理
+      const hung = Bun.spawn([process.execPath, "-e", "setInterval(()=>{},1000)"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      spawned.push(hung);
+      await new Promise((r) => setTimeout(r, 300));
+
+      await saveInstance(
+        record({
+          pid: hung.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          // **本人**の起動時刻
+          procStartedAt: (await processStartedAt(hung.pid)) ?? "",
+        }),
+        paths,
+      );
+
+      const down = await runCli(["down", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+
+      expect(down.stdout).toContain("停止しました");
+      const deadline = Date.now() + 5_000;
+      while (alive(hung.pid) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(alive(hung.pid)).toBe(false);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  /**
+   * **v0.21.0 以前の記録には起動時刻が無い。**
+   *
+   * 同定できないので従来の判定（pid 生存 + 疎通）へ落ちる。落とさないと、上げた直後に
+   * 既存のインスタンスを `down` できなくなる。**記録は起動のたびに書き直される**ので、
+   * この縮退は次の再起動までの窓に限られる。
+   */
+  /**
+   * **記録に起動時刻が実際に入っていること。**
+   *
+   * 入っていないと `isThisInstance` が従来の判定へ落ちるので、**同定が黙って無効になる**
+   * （他のテストは古い記録の縮退経路を通って通ってしまう）。書き手は 2 つあるので両方見る。
+   */
+  test(
+    "起動した yomi の記録に、実際の起動時刻が入る（バックグラウンド）",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41650);
+      const up = await runCli(["up", "-d", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(up.code).toBe(0);
+
+      const records = await readInstances(paths);
+      expect(records).toHaveLength(1);
+      const rec = records[0] as InstanceRecord;
+      expect(rec.procStartedAt).not.toBe("");
+      // **実際にそのプロセスのものであること**（固定値を書いているだけではない）
+      expect(rec.procStartedAt).toBe((await processStartedAt(rec.pid)) as string);
+
+      await runCli(["down", "--port", String(port)], { cwd: workDir, state: stateDir });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "起動した yomi の記録に、実際の起動時刻が入る（フォアグラウンド）",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41680);
+      const proc = Bun.spawn([process.execPath, ENTRY, "--port", String(port), "--no-open"], {
+        cwd: workDir,
+        env: { ...process.env, XDG_STATE_HOME: stateDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      spawned.push(proc);
+      const deadline = Date.now() + 15_000;
+      let records: InstanceRecord[] = [];
+      while (Date.now() < deadline && records.length === 0) {
+        records = await readInstances(paths);
+        if (records.length === 0) await new Promise((r) => setTimeout(r, 100));
+      }
+
+      expect(records).toHaveLength(1);
+      const rec = records[0] as InstanceRecord;
+      expect(rec.procStartedAt).not.toBe("");
+      expect(rec.procStartedAt).toBe((await processStartedAt(rec.pid)) as string);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  /**
+   * **`list` は「応答しているもの」を出す (Issue #69)。**
+   *
+   * 同定（起動時刻の一致）だけで出すと、ハングして listen が落ちた yomi まで
+   * 「起動中」に見える。#69 が決めた「一覧に出したものは down で止められるべき」は
+   * 保ったまま、疎通も条件に残す。
+   */
+  test(
+    "同定できても応答していない記録は list に出ない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41710);
+      // listen していない = 応答しない。ただし記録の起動時刻は本人のもの
+      const quiet = Bun.spawn([process.execPath, "-e", "setInterval(()=>{},1000)"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      spawned.push(quiet);
+      await new Promise((r) => setTimeout(r, 300));
+      await saveInstance(
+        record({
+          pid: quiet.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: (await processStartedAt(quiet.pid)) ?? "",
+        }),
+        paths,
+      );
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+
+      expect(listed.stdout).toContain("起動中の yomi はありません");
+      expect(listed.stdout).not.toContain(String(quiet.pid));
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  /**
+   * **🚨 古い記録（v0.21.0 以前）でも無関係なプロセスを殺さない。**
+   *
+   * 起動時刻を持たない記録では同定できないので、以前は「pid 生存 + 疎通」へ落ちていた。
+   * **それだと #132 がそのまま残る** —— しかも危険な配置では記録が掃除されないので、
+   * 「次の再起動までの窓」ではなく無期限に残る。実際に古い形式の記録で
+   * 無関係なプロセスを殺せることを再現した。
+   *
+   * 縮退経路に「そもそも yomi か」を足して塞いだ。
+   */
+  /**
+   * **`yomi list` が生きた yomi を孤児にしない (Issue #132)。**
+   *
+   * ハングした yomi に対して利用者が最初にやることが `list` で、そこで記録を消していた。
+   * 消えると `down` から辿れなくなり、**生きたプロセスが恒久的に孤児**になる。
+   * 一覧には出さないが、記録は残す。
+   */
+  test(
+    "list は、同定できたが応答していない記録を消さない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41770);
+      const quiet = Bun.spawn([process.execPath, "-e", "setInterval(()=>{},1000)"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      spawned.push(quiet);
+      await new Promise((r) => setTimeout(r, 300));
+      await saveInstance(
+        record({
+          pid: quiet.pid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: (await processStartedAt(quiet.pid)) ?? "",
+        }),
+        paths,
+      );
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+      expect(listed.stdout).toContain("起動中の yomi はありません");
+
+      // **記録が残っていること。** 消えていると、このあと down できない
+      expect((await readInstances(paths)).map((r) => r.pid)).toEqual([quiet.pid]);
+
+      // 実際に down できる
+      const down = await runCli(["down", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(down.stdout).toContain("停止しました");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "起動時刻を持たない古い記録でも、yomi でないプロセスは止めない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41620);
+      const victim = await portHolder(port);
+      const victimPid = victim.pid;
+      await saveInstance(
+        record({
+          pid: victimPid,
+          port,
+          host: "127.0.0.1",
+          rootDir: workDir,
+          procStartedAt: "", // v0.21.0 以前の記録
+        }),
+        paths,
+      );
+
+      // **`list` を先に打たない。** `servingInstances` が記録を掃除するので、
+      // 先に打つと `down` に届く前に記録が消えて**この検証が空振りする**
+      // （実際に一度そう書いて、down 側のガードを外しても落ちないテストになっていた）
+      const down = await runCli(["down", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(down.stdout + down.stderr).not.toContain("停止しました");
+      expect(alive(victimPid)).toBe(true);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "起動時刻を持たない古い記録でも、list と起動検査が yomi と名指ししない",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41800);
+      const victim = await portHolder(port);
+      const victimPid = victim.pid;
+      await saveInstance(
+        record({ pid: victimPid, port, host: "127.0.0.1", rootDir: workDir, procStartedAt: "" }),
+        paths,
+      );
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+      expect(listed.stdout).not.toContain(String(victimPid));
+
+      const start = await runCli(["--port", String(port), "--no-open"], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(start.stderr).not.toContain("既に yomi が起動しています");
+      expect(alive(victimPid)).toBe(true);
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  /**
+   * **古い記録でも、本物の yomi なら従来どおり扱える。**
+   *
+   * 縮退を締めたことで「上げた直後に既存のインスタンスを down できない」を作っていないか。
+   */
+  test(
+    "起動時刻を持たない古い記録でも、本物の yomi は止められる",
+    async () => {
+      const port = await findAvailablePort("127.0.0.1", 41740);
+      const up = await runCli(["up", "-d", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(up.code).toBe(0);
+
+      // **記録を v0.21.0 以前の形式へ落とす**（起動時刻を消す）
+      const before = await readInstances(paths);
+      const rec = before[0] as InstanceRecord;
+      await saveInstance({ ...rec, procStartedAt: "" }, paths);
+
+      const listed = await runCli(["list"], { cwd: workDir, state: stateDir });
+      expect(listed.stdout).toContain(String(rec.pid));
+
+      const down = await runCli(["down", "--port", String(port)], {
+        cwd: workDir,
+        state: stateDir,
+      });
+      expect(down.stdout).toContain("停止しました");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 });

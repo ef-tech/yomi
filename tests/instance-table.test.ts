@@ -9,6 +9,8 @@ function record(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
     host: "127.0.0.1",
     rootDir: "/home/user/docs",
     startedAt: "2026-08-04T00:00:00.000Z",
+    // 既定は空 = 「起動時刻が読めなかった記録」。個別に必要なテストが上書きする
+    procStartedAt: "",
     logPath: "/state/yomi/logs/3939.log",
     version: "0.0.0-test",
     ...overrides,

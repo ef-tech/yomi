@@ -17,6 +17,7 @@ import {
 } from "./instances.ts";
 import { isWildcard } from "./network.ts";
 import { isPortAvailable } from "./port.ts";
+import { looksLikeYomi, processStartedAt } from "./util/proc-start.ts";
 
 /** 子プロセスが listen を始めるまで待つ既定の上限 */
 export const DEFAULT_READY_TIMEOUT_MS = 10_000;
@@ -79,6 +80,12 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
     throw new Error("バックグラウンドプロセスを起動できませんでした");
   }
 
+  // **spawn 直後に読む (Issue #132)。** `waitUntilReady` の後だと最大 10 秒の窓があり、
+  // その間に子が死んで pid が再利用されると、**無関係なプロセスの起動時刻を「本人の証明」
+  // として記録に焼き付ける**ことになる。未 reap の子は zombie として pid を保持し続けるので、
+  // ここでは再利用が起きない
+  const childStartedAt = (await processStartedAt(pid)) ?? "";
+
   let exited = false;
   child.once("exit", () => {
     exited = true;
@@ -94,7 +101,11 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
 
   // ready だけでは足りない: 事前チェックの直後に別プロセスがポートを奪うと、
   // 死んだ子のまま接続だけ成功しうる。最後に生存を見て取りこぼしを潰す。
-  if (!ready || !isAlive(pid)) {
+  // **起動時刻が変わっていたら、その pid はもう子ではない (Issue #132)。**
+  // `isAlive` だけでは pid 再利用を貫通する（コメントが認めている「死んだ子のまま接続だけ
+  // 成功しうる」の別の形）
+  const stillChild = childStartedAt === "" || (await processStartedAt(pid)) === childStartedAt;
+  if (!ready || !isAlive(pid) || !stillChild) {
     // 起動できなかったプロセスの記録は残さない (list に幽霊が並ぶ)
     killQuietly(pid, "SIGKILL");
     throw new Error(`バックグラウンド起動に失敗しました。${await describeLogTail(log)}`);
@@ -106,6 +117,9 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
     host: opts.host,
     rootDir: opts.rootDir,
     logPath: log,
+    // **子の起動時刻を記録する (Issue #132)。** これが無いと、あとで pid が再利用されたときに
+    // 別プロセスを「この記録の本人」と誤認して止めてしまう。**spawn 直後に読んである**
+    procStartedAt: childStartedAt,
   });
   await saveInstance(record, paths);
   return record;
@@ -173,7 +187,7 @@ export async function describePortInUse(
   //
   // その状態は「`yomi list` には出ないのに起動できない」という食い違いになる。
   // #94 が事前検査をフォアグラウンドからも呼ぶようにしたことで露出した。
-  if (existing && (await isThisInstance(existing))) {
+  if (existing && (await isServing(existing))) {
     return (
       `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
       `停止するには yomi down --port ${port}`
@@ -304,25 +318,109 @@ export async function servingInstances(
 ): Promise<InstanceRecord[]> {
   const serving: InstanceRecord[] = [];
   for (const record of await readInstances(paths)) {
-    if (await isThisInstance(record)) {
+    if (await isServing(record)) {
       serving.push(record);
-    } else {
-      await removeInstance(record.port, paths);
+      continue;
     }
+    // **同定できた記録は消さない (Issue #132)。** 応答していないだけで**本人は生きている**
+    // 可能性がある（ハングして listen が落ちた yomi）。ここで消すと `down` から辿れなくなり、
+    // **`yomi list` を打っただけで生きた yomi が孤児になる**。一覧には出さない
+    if ((await verifyIdentity(record)) === true) continue;
+    await removeInstance(record.port, paths);
   }
   return serving;
 }
 
 /**
- * 記録された pid が本当にこのインスタンスか。
+ * 記録された pid が**本当にその記録を書いたプロセスか** (Issue #132)。
+ *
+ * ## 見るのは起動時刻
  *
  * pid の生存だけを信じると、yomi が異常終了したあとに OS が pid を再利用した場合、
- * **無関係なプロセスへ SIGKILL を送ってしまう**（取り返しがつかない）。
- * 記録したポートで実際に listen していることを合わせて確認し、
- * どちらか一方でも満たさなければシグナルを送らずに記録だけ片付ける。
+ * **無関係なプロセスへシグナルを送ってしまう**（取り返しがつかない）。
+ * **同じ pid でも別プロセスなら起動時刻が違う**ので、これを突き合わせれば再利用を潰せる。
+ *
+ * ## 以前はポートの疎通で代用していた（それが #132 の穴）
+ *
+ * 「記録したポートで listen しているか」を条件にしていたが、**pid の生存とポートの疎通を
+ * 独立に見ている**ので、
+ *
+ * - 残骸記録の pid が再利用されて生きている
+ * - **無関係な第三者**がそのポートを掴んでいる
+ *
+ * が同時に成り立つと true になった。実際に `yomi down` が無関係なプロセスへ SIGTERM を送り、
+ * 「停止しました」と報告する事故が起きている。
+ *
+ * **疎通はここでは見ない。** `down` が最も要るのは**応答しなくなった yomi** で、疎通を
+ * 条件にすると「記録だけ消して本体は生き残る」ことになる。**「そのポートで応答しているか」が
+ * 要る呼び出し元は、自分で {@link canConnect} を足す**（`servingInstances` / `describePortInUse`）。
+ *
+ * ## 起動時刻が読めないとき
+ *
+ * **v0.21.0 以前の記録**（フィールドが無い）と、**`/proc` も `ps` も無い OS** では
+ * 同定できない。その場合だけ**従来の判定（pid 生存 + ポートの疎通）へ落ちる** ——
+ * 落とさないと、上げた直後に既存のインスタンスを `down` できなくなる。
+ * **記録は起動のたびに書き直される**ので、この縮退は次の再起動までの窓に限られる。
  */
 async function isThisInstance(record: InstanceRecord): Promise<boolean> {
+  const verified = await verifyIdentity(record);
+  if (verified !== null) return verified;
+  // 縮退（上記）。**疎通だけでは足りない** —— 第三者がポートを掴んでいれば通ってしまう。
+  // 「そもそも yomi か」を合わせて見る
+  return (await looksPlausible(record)) && connectToRecord(record);
+}
+
+/**
+ * 記録のインスタンスが**いま応答しているか**。同定 + 疎通。
+ *
+ * `list` と起動前検査が使う。**`isThisInstance` を呼んでから疎通を足す形にしない** ——
+ * 縮退したとき（古い記録）に `canConnect` が 2 回走る。
+ */
+async function isServing(record: InstanceRecord): Promise<boolean> {
+  const verified = await verifyIdentity(record);
+  if (verified === false) return false;
+  if (verified === null && !(await looksPlausible(record))) return false;
+  // 同定できた場合も、縮退した場合も、最後は疎通で決める
+  return connectToRecord(record);
+}
+
+/**
+ * 記録の pid が**本人か**を起動時刻で判定する。
+ *
+ * @returns `true` = 本人 / `false` = 別プロセスか、そもそも居ない /
+ *   **`null` = 同定できない**（起動時刻を持たない古い記録・未対応 OS）
+ */
+async function verifyIdentity(record: InstanceRecord): Promise<boolean | null> {
   if (!isAlive(record.pid)) return false;
+  if (!record.procStartedAt) return null;
+  const current = await processStartedAt(record.pid);
+  // **読めなければ false。** pid は生きているのに起動時刻が取れないのは想定外なので、
+  // 「たぶん本人」と倒さずシグナルを送らない側に倒す
+  return current !== null && current === record.procStartedAt;
+}
+
+/**
+ * 同定できなかった記録を、**せめて「yomi ですらないもの」だけは弾く** (Issue #132)。
+ *
+ * **これが無いと古い記録では #132 がそのまま残る。** しかも危険な配置
+ * （pid が再利用されて生きている ＋ 第三者がポートを掴んでいる）では**記録が掃除されない**
+ * ので、「次の再起動まで」ではなく無期限に残る（`liveInstances` は pid が死んだものだけ、
+ * `servingInstances` は疎通しないものだけを消すため）。実際に古い形式の記録で
+ * 無関係なプロセスを殺せることを再現した。
+ *
+ * **「yomi である」までしか言えない**が、報告された事例の犠牲者も yomi ではなかった。
+ * 起動し直せば `procStartedAt` が入り、この縮退自体を通らなくなる。
+ */
+async function looksPlausible(record: InstanceRecord): Promise<boolean> {
+  const yomi = await looksLikeYomi(record.pid);
+  // **読めなければ通す。** 未対応 OS で `down` が一切効かなくなるほうが困る
+  // （その場合は従来どおりの判定に戻るだけで、悪化はしない）
+  if (yomi === null) return true;
+  return yomi;
+}
+
+/** 記録が指すポートへ繋がるか。`0.0.0.0` などのワイルドカードはループバックで見る。 */
+function connectToRecord(record: InstanceRecord): Promise<boolean> {
   const target = isWildcard(record.host) ? "127.0.0.1" : record.host;
   return canConnect(target, record.port);
 }
