@@ -77,10 +77,23 @@ async function getTree(url: string): Promise<{ gen: string | null; paths: string
   return { gen: res.headers.get(TREE_GEN_HEADER), paths: paths.sort() };
 }
 
-/** 通知を溜める WebSocket。`close()` するまで受け取り続ける。 */
+/**
+ * 通知を溜める WebSocket。
+ *
+ * **「n 件目が来た」で待たない (macOS)。** FSEvents は**監視を始める前に起きた変更**を
+ * 遅れて配送することがあり（`beforeEach` が置いた `docs/guide.md` など）、`messages[0]` が
+ * 無関係な通知になる。**欲しい通知が来るまで待つ**形にして、順序と無関係な混入に
+ * 影響されないようにする。
+ */
 async function listen(url: string): Promise<{
   messages: Array<Record<string, unknown>>;
-  waitFor: (n: number) => Promise<void>;
+  /** 条件に合う通知が来るまで待って、それを返す。 */
+  await1: (
+    pred: (m: Record<string, unknown>) => boolean,
+    what: string,
+  ) => Promise<Record<string, unknown>>;
+  /** 条件に合う通知だけを取り出す。 */
+  filter: (pred: (m: Record<string, unknown>) => boolean) => Array<Record<string, unknown>>;
   close: () => void;
 }> {
   const ws = new WebSocket(`${url.replace("http", "ws")}/ws`);
@@ -106,22 +119,28 @@ async function listen(url: string): Promise<{
       reject(new Error("WebSocket でエラー"));
     });
   });
+  const filter = (pred: (m: Record<string, unknown>) => boolean) => messages.filter(pred);
   return {
     messages,
-    async waitFor(n) {
-      const deadline = Date.now() + 10_000;
-      while (messages.length < n && Date.now() < deadline) {
+    filter,
+    async await1(pred, what) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const hit = messages.find(pred);
+        if (hit) return hit;
+        if (Date.now() >= deadline) {
+          throw new Error(`${what} の通知が来ない: ${JSON.stringify(messages)}`);
+        }
         await new Promise((r) => setTimeout(r, 20));
-      }
-      if (messages.length < n) {
-        throw new Error(
-          `通知が ${n} 件来ない (${messages.length} 件): ${JSON.stringify(messages)}`,
-        );
       }
     },
     close: () => ws.close(),
   };
 }
+
+/** その path についての `tree` 通知か。 */
+const treeOf = (path: string) => (m: Record<string, unknown>) =>
+  m.type === "tree" && m.path === path;
 
 describe("/api/tree の版ヘッダ", () => {
   test("版を返し、構造が変わるまで同じ値のまま", async () => {
@@ -139,7 +158,9 @@ describe("/api/tree の版ヘッダ", () => {
     const sock = await listen(url);
     try {
       await writeFile(join(dir, "docs", "new.md"), "# new\n");
-      await sock.waitFor(1);
+      // **その追加の通知が来るまで待つ。** 件数で待つと、FSEvents が遅れて配送した
+      // 無関係な通知で先に抜けてしまう (macOS)
+      await sock.await1(treeOf("docs/new.md"), "docs/new.md の追加");
       const after = await getTree(url);
       expect(Number(after.gen)).toBeGreaterThan(Number(before.gen));
       expect(after.paths).toEqual(["docs/guide.md", "docs/new.md"]);
@@ -174,8 +195,8 @@ describe("tree 通知の差分", () => {
     const sock = await listen(url);
     try {
       await writeFile(join(dir, "docs", "added.md"), "# added\n");
-      await sock.waitFor(1);
-      expect(sock.messages[0]).toEqual({
+      const msg = await sock.await1(treeOf("docs/added.md"), "docs/added.md の追加");
+      expect(msg).toEqual({
         type: "tree",
         op: "add",
         path: "docs/added.md",
@@ -192,8 +213,8 @@ describe("tree 通知の差分", () => {
     const sock = await listen(url);
     try {
       await rm(join(dir, "docs", "guide.md"));
-      await sock.waitFor(1);
-      expect(sock.messages[0]).toMatchObject({
+      const msg = await sock.await1(treeOf("docs/guide.md"), "docs/guide.md の削除");
+      expect(msg).toMatchObject({
         type: "tree",
         op: "remove",
         path: "docs/guide.md",
@@ -215,9 +236,13 @@ describe("tree 通知の差分", () => {
       for (const name of ["a.md", "b.md", "c.md"]) {
         await writeFile(join(dir, "docs", name), `# ${name}\n`);
         // **1 件ずつ待つ。** まとめて書くと debounce (80ms) で畳まれうる
-        await sock.waitFor(sock.messages.length + 1);
+        await sock.await1(treeOf(`docs/${name}`), `docs/${name} の追加`);
       }
-      expect(sock.messages.map((m) => m.gen)).toEqual([before + 1, before + 2, before + 3]);
+      // **この 3 件だけを見る。** 無関係な通知が混ざっても順序判定が狂わない
+      const gens = sock
+        .filter((m) => ["docs/a.md", "docs/b.md", "docs/c.md"].includes(m.path as string))
+        .map((m) => m.gen);
+      expect(gens).toEqual([before + 1, before + 2, before + 3]);
       expect((await getTree(url)).gen).toBe(String(before + 3));
     } finally {
       sock.close();
@@ -230,8 +255,8 @@ describe("tree 通知の差分", () => {
     const sock = await listen(url);
     try {
       await writeFile(join(dir, "docs", "guide.md"), "# guide 2\n");
-      await sock.waitFor(1);
-      expect(sock.messages[0]).toEqual({ type: "changed", path: "docs/guide.md" });
+      const msg = await sock.await1((m) => m.path === "docs/guide.md", "docs/guide.md の内容変更");
+      expect(msg).toEqual({ type: "changed", path: "docs/guide.md" });
     } finally {
       sock.close();
     }
@@ -251,8 +276,9 @@ describe("tree 通知の差分", () => {
     const sock = await listen(url);
     try {
       await writeFile(join(dir, "docs", "shallow.md"), "# x\n");
-      await sock.waitFor(1);
-      expect(sock.messages[0]).toEqual({ type: "tree" });
+      // **`--depth` のときは path が載らない**ので、`tree` が来たことだけを待つ
+      const msg = await sock.await1((m) => m.type === "tree", "ツリーの変化");
+      expect(msg).toEqual({ type: "tree" });
     } finally {
       sock.close();
     }
