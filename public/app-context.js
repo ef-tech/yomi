@@ -87,6 +87,37 @@ export async function fetchJson(url, options) {
   return data;
 }
 
+/** `/api/tree` の版を伝えるヘッダ名。**`src/server.ts` の `TREE_GEN_HEADER` と揃える。** */
+const TREE_GEN_HEADER = "X-Yomi-Tree-Gen";
+
+/**
+ * ツリーを版つきで取得する (Issue #126)。
+ *
+ * **取得を 1 か所にまとめる。** `/api/tree` は初回起動・再接続・新規作成の 3 経路から
+ * 引かれる。どこか 1 つでも版を控え忘れると、**そこから先の差分がすべて捨てられる**
+ * （版が合わないので毎回全量へ逃げる）ことになり、しかも動きは正しいので気づけない。
+ *
+ * @returns {Promise<{ root: import("./api-types.js").TreeNode, gen: number | null }>}
+ */
+export async function fetchTree() {
+  const res = await fetch("/api/tree");
+  /** @type {any} */
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = /** @type {ApiError} */ (new Error(data.error ?? `HTTP ${res.status}`));
+    err.status = res.status;
+    err.code = data.code;
+    err.payload = data;
+    throw err;
+  }
+  const raw = res.headers.get(TREE_GEN_HEADER);
+  // **数値として読めないものは「版を知らない」に倒す。** ヘッダを返さない古いサーバや
+  // 途中の proxy が壊した場合で、`Number("")` の 0 を版と信じると差分を誤って適用する
+  const gen =
+    raw !== null && raw.trim() !== "" && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  return { root: data, gen };
+}
+
 /**
  * 例外から表示用の文字列を取り出す。
  *
@@ -239,6 +270,19 @@ export function createState() {
     dirNodes: new Map(),
     /** 開いているディレクトリ path のセット */
     openDirs: new Set([""]),
+    /**
+     * @type {import("./api-types.js").TreeNode | null}
+     * 直近に描いたツリーのデータ (Issue #126)。**差分更新の土台**で、`tree` 通知を
+     * 受けたらここへ 1 件だけ足し引きして、変わったディレクトリだけ描き直す。
+     */
+    treeData: null,
+    /**
+     * @type {number | null}
+     * `treeData` の版 (Issue #126)。`/api/tree` の `X-Yomi-Tree-Gen` ヘッダで受け取る。
+     * 差分通知の版が「これ + 1」でなければ**取りこぼしている**ので全量へ逃げる。
+     * `null` は版を知らない状態（ヘッダを返さない古いサーバ・取得前）。
+     */
+    treeGen: null,
     /** @type {string | null} 現在表示中のファイル path */
     currentPath: null,
     /** 現在のファイル内容 */

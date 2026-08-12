@@ -15,7 +15,7 @@ import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES, isImageExtension } from "./util/image-ext.ts";
 import { createZip, type ZipEntry } from "./util/zip.ts";
-import { createWatcher, type WatcherHandle } from "./watcher.ts";
+import { createWatcher, isStructuralChange, type WatcherHandle } from "./watcher.ts";
 
 const WS_TOPIC = "yomi:file-events";
 
@@ -75,6 +75,19 @@ export interface ServerConfig {
   hostname: string;
   port: number;
   watch?: boolean;
+  /**
+   * ファイル監視の初期スキャンが終わったときに呼ばれる。**テスト専用の注入口** (Issue #126)。
+   *
+   * chokidar は `ignoreInitial: true` で動いているので、**初期スキャンの最中に書いた
+   * ファイルは「最初からあった」とみなされて通知されない**。サーバを起動した直後に
+   * 書くテストは、この完了を待たないと**間欠的に通知が来ない**（実際に 3 回に 1 回
+   * 落ちた）。固定 sleep で待つと遅い環境で破れるので、ready を待つ。
+   *
+   * `WatcherOptions.onReady` (Issue #45) と同じ理由・同じ形。あちらは watcher を
+   * 直接組み立てるテスト用で、こちらは**サーバ越し**に同じことをするためのもの。
+   * 本番では未指定。
+   */
+  onWatcherReady?: () => void;
   /** 除外するディレクトリ/ファイル名 (省略時は DEFAULT_EXCLUDES) */
   excludes?: ReadonlySet<string>;
   /** 走査/監視する階層の上限 (Issue #44, tree -L 相当)。省略時は無制限。 */
@@ -112,9 +125,37 @@ export function createServer(config: ServerConfig): ServerHandle {
    * 常駐メモリは応答サイズぶん（10,000 ファイルで 724 KiB）。
    */
   let treeCache: string | null = null;
+
+  /**
+   * ツリーの版 (Issue #126)。**キャッシュを捨てるたびに 1 つ進める。**
+   *
+   * クライアントは差分 (`tree` 通知) を積んで手元のツリーを更新するので、
+   * **1 通でも落ちると以後ずっとずれる**。連番を振っておけば、受け取った側が
+   * 「自分の版 + 1 か」を見るだけで取りこぼしに気づけ、全量へ逃げられる
+   * (`public/app-websocket.js`)。
+   *
+   * **`invalidateTree` と同じ場所で進める。** 別々にすると「キャッシュは捨てたが
+   * 版は据え置き」という状態が生まれ、**クライアントが古いツリーを最新だと信じる**。
+   * 保存 (`/api/file`) のようにツリーの形が変わらない操作でも版が進むので、
+   * そのぶん**次の構造変化で 1 回だけ全量を取り直す**ことになる —— 取りこぼしを
+   * 見逃すより、余分に 1 回取り直すほうが安い。
+   */
+  let treeGen = 0;
   const invalidateTree = () => {
     treeCache = null;
+    treeGen++;
   };
+
+  /**
+   * 差分を送れるか (Issue #126)。
+   *
+   * **`--depth` を指定しているときは送らない。** 深さ境界のディレクトリは
+   * 「中を見ていないので空でも残す」という扱いで (`scanner.ts` の `truncatedDirs`)、
+   * **クライアントはそれを空ディレクトリと区別できない**。差分で最後のファイルを
+   * 消したときに、サーバは残すのにクライアントは畳む、というずれ方をする。
+   * 深さ制限つきのときは従来どおり全量を取り直させる。
+   */
+  const canSendTreeDiff = config.maxDepth === undefined;
   const saveMark = new SaveMark();
 
   const server = Bun.serve({
@@ -141,11 +182,25 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/tree") {
+        // **走査を待つ間に版が進みうる。** `serializeTree` は await を挟むので、
+        // その間に watcher の通知や保存が入ると、**走り終えたときには古い内容**に
+        // なっている。捕まえておいて、返す版・載せる版の両方に使う (Issue #126)
+        // キャッシュに当たったときは、載せた後に版が進んでいない（進めば捨てられる）
+        // ので、この値がそのままキャッシュの版になる
+        const genAtScan = treeGen;
         if (treeCache === null) {
           try {
             // **成功したときだけ載せる。** 失敗を載せると、次に構造が変わるまで
             // エラーを返し続ける（自力で復帰できない）
-            treeCache = await serializeTree(config.rootDir, excludes, config.maxDepth);
+            const serialized = await serializeTree(config.rootDir, excludes, config.maxDepth);
+            if (treeGen === genAtScan) {
+              treeCache = serialized;
+            } else {
+              // **追い越された。** キャッシュには載せず (次の要求で取り直す)、
+              // 走査した内容だけをこの応答に使う。版は走査時のものを名乗る ——
+              // **最新を名乗ると、クライアントが取りこぼした差分に気づけなくなる**
+              return new Response(serialized, { headers: treeHeaders(genAtScan) });
+            }
           } catch (err) {
             // **生のメッセージを返さない。** FS のエラーには絶対パスが載る (Issue #99)。
             //
@@ -159,7 +214,7 @@ export function createServer(config: ServerConfig): ServerHandle {
             );
           }
         }
-        return new Response(treeCache, { headers: JSON_HEADERS });
+        return new Response(treeCache, { headers: treeHeaders(genAtScan) });
       }
 
       if (url.pathname === "/api/file") {
@@ -258,13 +313,24 @@ export function createServer(config: ServerConfig): ServerHandle {
       (path, kind) => {
         // **構造が変わったときだけ捨てる (Issue #84)。** 内容の変更 (`change`) は
         // ツリーの形に影響しないので、キャッシュはそのまま使える
-        if (kind === "rename") invalidateTree();
+        if (!isStructuralChange(kind)) {
+          server.publish(WS_TOPIC, JSON.stringify({ type: "changed", path }));
+          return;
+        }
+        invalidateTree();
+        // **どこがどう変わったかを送る (Issue #126)。** これが無いと、受け取った側は
+        // `/api/tree` を全量取り直して 10,500 ノードを突き合わせるしかない
+        // （実測 18ms。`docs/bench/tree-diff-update.md`）
         server.publish(
           WS_TOPIC,
-          JSON.stringify({ type: kind === "rename" ? "tree" : "changed", path }),
+          JSON.stringify(
+            canSendTreeDiff
+              ? { type: "tree", op: kind === "add" ? "add" : "remove", path, gen: treeGen }
+              : { type: "tree" },
+          ),
         );
       },
-      { excludes, saveMark, depth: config.maxDepth },
+      { excludes, saveMark, depth: config.maxDepth, onReady: config.onWatcherReady },
     );
   }
 
@@ -390,6 +456,20 @@ async function serializeTree(
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json;charset=utf-8" } as const;
+
+/** `/api/tree` の版を伝えるヘッダ名 (Issue #126)。 */
+export const TREE_GEN_HEADER = "X-Yomi-Tree-Gen";
+
+/**
+ * `/api/tree` の応答ヘッダ。**版をボディに入れずヘッダで返す。**
+ *
+ * ボディを `{ gen, tree }` で包むと `TreeNode` の形が変わり、`public/api-types.js` との
+ * 一致 (`tests/api-types.test.ts` が型で検証している) と、既に配布した版のクライアントが
+ * 壊れる。ヘッダなら**読まない側は今までどおり**動く。
+ */
+function treeHeaders(gen: number): Record<string, string> {
+  return { ...JSON_HEADERS, [TREE_GEN_HEADER]: String(gen) };
+}
 
 /**
  * 除外配下へのアクセスを拒否するレスポンス (Issue #65)。

@@ -6,7 +6,20 @@ import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
 
-export type ChangeKind = "rename" | "change";
+/**
+ * 何が起きたか。
+ *
+ * **`add` と `unlink` を畳まない (Issue #126)。** 以前はどちらも `"rename"` の一語で、
+ * 受け取った側は「ツリーの形が変わった」ことしか分からず、**全量を取り直す以外に
+ * 手が無かった**。追加と削除を区別して初めて、サーバは「どこが」「どう」変わったかを
+ * 送れる（`src/server.ts` の `tree` 通知）。
+ */
+export type ChangeKind = "add" | "unlink" | "change";
+
+/** ツリーの形が変わる種類か（内容だけの変更と分ける）。 */
+export function isStructuralChange(kind: ChangeKind): boolean {
+  return kind === "add" || kind === "unlink";
+}
 
 export type ChangeListener = (path: string, kind: ChangeKind) => void;
 
@@ -68,8 +81,8 @@ export function toChokidarDepth(treeDepth: number | undefined): number | undefin
  * 原因は chokidar ではなく Bun（Node の `fs.watch` は同条件で取りこぼさない）。
  * 上流への報告は #138。計測は `scripts/probe-watcher-atomic.ts`。
  *
- * onChange の kind:
- * - "rename": ファイルの追加/削除 (ツリー構造が変化) → クライアントはツリーを再取得
+ * onChange の kind ({@link ChangeKind}):
+ * - "add" / "unlink": ファイルの追加/削除 (ツリー構造が変化) → サーバは差分を通知する
  * - "change": 既存ファイルの内容変更 → クライアントは表示中ファイルを再読込
  */
 export function createWatcher(
@@ -81,24 +94,45 @@ export function createWatcher(
   const saveMark = options.saveMark;
   // tree level の depth を chokidar の depth へ変換 (toChokidarDepth 参照)。
   const chokidarDepth = toChokidarDepth(options.depth);
-  const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
   let closed = false;
   let enospcWarned = false;
+
+  /**
+   * debounce 中に何が起きたかを覚えておく (Issue #126)。
+   *
+   * **最後の kind で上書きしてはいけない。** `writeFile` 1 回でも chokidar は
+   * `add` の直後に `change` を出すことがあり、上書きすると**「追加」が「内容変更」に
+   * 化ける**。受け取った側はツリーを更新しないので、**新しいファイルが一覧に出ない**
+   * （#84 で `changed` がツリーを取り直さなくなって以来の穴。実測で踏んだ）。
+   *
+   * 構造の変化（`add` / `unlink`）と内容の変化（`change`）は**別のことを伝える**ので、
+   * 片方でもう片方を消さず、両方あったら両方伝える。
+   */
+  interface Pending {
+    timer: ReturnType<typeof setTimeout>;
+    /** この窓で最後に起きた構造の変化。**後のものが勝つ**（add → unlink なら消えている） */
+    structural: ChangeKind | null;
+    /** この窓で内容の変化があったか */
+    changed: boolean;
+  }
+  const debounceMap = new Map<string, Pending>();
 
   const fire = (rel: string, kind: ChangeKind) => {
     if (closed) return;
     const existing = debounceMap.get(rel);
-    if (existing) clearTimeout(existing);
-    debounceMap.set(
-      rel,
-      setTimeout(async () => {
-        debounceMap.delete(rel);
-        if (closed) return;
-        if (saveMark && (await isOwnSave(rootDir, rel, saveMark))) return;
-        if (closed) return; // close() が isOwnSave の await 中に走った場合の保険
-        onChange(rel, kind);
-      }, DEBOUNCE_MS),
-    );
+    if (existing) clearTimeout(existing.timer);
+    const structural = isStructuralChange(kind) ? kind : (existing?.structural ?? null);
+    const changed = kind === "change" ? true : (existing?.changed ?? false);
+    const timer = setTimeout(async () => {
+      debounceMap.delete(rel);
+      if (closed) return;
+      if (saveMark && (await isOwnSave(rootDir, rel, saveMark))) return;
+      if (closed) return; // close() が isOwnSave の await 中に走った場合の保険
+      if (structural) onChange(rel, structural);
+      // **消えたファイルの再読込は促さない。** `unlink` で終わっているならもう無い
+      if (changed && structural !== "unlink") onChange(rel, "change");
+    }, DEBOUNCE_MS);
+    debounceMap.set(rel, { timer, structural, changed });
   };
 
   // 除外ディレクトリ配下は走査・監視しない (ENOSPC 回避の要)。
@@ -128,9 +162,9 @@ export function createWatcher(
   });
 
   watcher
-    .on("add", emit("rename"))
+    .on("add", emit("add"))
     .on("change", emit("change"))
-    .on("unlink", emit("rename"))
+    .on("unlink", emit("unlink"))
     // 初期スキャン完了。テストが固定 sleep でなく ready を待って書き込めるようにする (Issue #45)
     .on("ready", () => options.onReady?.())
     .on("error", (err) => {
@@ -153,7 +187,7 @@ export function createWatcher(
   return {
     close() {
       closed = true;
-      for (const t of debounceMap.values()) clearTimeout(t);
+      for (const p of debounceMap.values()) clearTimeout(p.timer);
       debounceMap.clear();
       void watcher.close();
     },
