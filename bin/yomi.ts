@@ -32,6 +32,7 @@ import { pickBrowserUrl } from "../src/network.ts";
 import { openBrowser } from "../src/open-browser.ts";
 import { findAvailablePort } from "../src/port.ts";
 import { createServer, type ServerHandle } from "../src/server.ts";
+import { processStartedAt } from "../src/util/proc-start.ts";
 import { startWatchdog, type WatchdogHandle } from "../src/watchdog.ts";
 import {
   describeInvalidLines,
@@ -162,7 +163,14 @@ async function runForeground(options: CliOptions, rootDir: string, port: number)
   if (!detachedChild) {
     try {
       await saveInstance(
-        buildInstanceRecord({ pid: process.pid, port, host: options.host, rootDir }),
+        buildInstanceRecord({
+          pid: process.pid,
+          port,
+          host: options.host,
+          rootDir,
+          // 自分の起動時刻を記録する (Issue #132)。pid 再利用の検出に使う
+          procStartedAt: (await processStartedAt(process.pid)) ?? "",
+        }),
       );
       registered = true;
     } catch (err) {

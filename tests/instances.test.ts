@@ -34,6 +34,8 @@ function record(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
     host: "127.0.0.1",
     rootDir: "/tmp/docs",
     startedAt: "2026-08-03T00:00:00.000Z",
+    // 既定は空 = 「起動時刻が読めなかった記録」。個別に必要なテストが上書きする
+    procStartedAt: "",
     logPath: "/tmp/state/yomi/logs/3939.log",
     version: "0.0.0-test",
     ...overrides,
@@ -134,6 +136,9 @@ describe("レジストリの読み書き", () => {
           host: "127.0.0.1",
           rootDir: "/x",
           startedAt: "",
+          // **v0.21.0 以前の記録にはこのフィールドが無い (Issue #132)。**
+          // 空で補うことで `isThisInstance` が従来の判定へ落ちる
+          procStartedAt: "",
           logPath: "",
           version: "",
         },
@@ -205,6 +210,7 @@ describe("buildInstanceRecord (Issue #90)", () => {
     expect(rec).toEqual({
       ...base,
       startedAt: "2026-08-06T00:00:00.000Z",
+      procStartedAt: "",
       logPath: "",
       version: pkg.version,
     });
@@ -212,6 +218,18 @@ describe("buildInstanceRecord (Issue #90)", () => {
 
   test("logPath 省略時は空文字 (フォアグラウンドは端末に出るのでログを持たない)", () => {
     expect(buildInstanceRecord(base).logPath).toBe("");
+  });
+
+  // **自分では読まない (Issue #132)。** この関数は同期で、起動時刻の読み取りは非同期。
+  // 呼び出し元が `processStartedAt(pid)` の結果を渡す
+  test("procStartedAt 省略時は空文字", () => {
+    expect(buildInstanceRecord(base).procStartedAt).toBe("");
+  });
+
+  test("procStartedAt を渡せばそのまま入る", () => {
+    expect(buildInstanceRecord({ ...base, procStartedAt: "linux:123" }).procStartedAt).toBe(
+      "linux:123",
+    );
   });
 
   test("logPath を渡せばそのまま入る (バックグラウンドはログファイルを持つ)", () => {

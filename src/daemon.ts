@@ -17,6 +17,7 @@ import {
 } from "./instances.ts";
 import { isWildcard } from "./network.ts";
 import { isPortAvailable } from "./port.ts";
+import { processStartedAt } from "./util/proc-start.ts";
 
 /** 子プロセスが listen を始めるまで待つ既定の上限 */
 export const DEFAULT_READY_TIMEOUT_MS = 10_000;
@@ -106,6 +107,9 @@ export async function startDetached(opts: StartDetachedOptions): Promise<Instanc
     host: opts.host,
     rootDir: opts.rootDir,
     logPath: log,
+    // **子の起動時刻を記録する (Issue #132)。** これが無いと、あとで pid が再利用されたときに
+    // 別プロセスを「この記録の本人」と誤認して止めてしまう
+    procStartedAt: (await processStartedAt(pid)) ?? "",
   });
   await saveInstance(record, paths);
   return record;
@@ -173,7 +177,7 @@ export async function describePortInUse(
   //
   // その状態は「`yomi list` には出ないのに起動できない」という食い違いになる。
   // #94 が事前検査をフォアグラウンドからも呼ぶようにしたことで露出した。
-  if (existing && (await isThisInstance(existing))) {
+  if (existing && (await isServing(existing))) {
     return (
       `ポート ${port} では既に yomi が起動しています (pid ${existing.pid}, ${existing.rootDir})。` +
       `停止するには yomi down --port ${port}`
@@ -304,7 +308,7 @@ export async function servingInstances(
 ): Promise<InstanceRecord[]> {
   const serving: InstanceRecord[] = [];
   for (const record of await readInstances(paths)) {
-    if (await isThisInstance(record)) {
+    if (await isServing(record)) {
       serving.push(record);
     } else {
       await removeInstance(record.port, paths);
@@ -314,15 +318,54 @@ export async function servingInstances(
 }
 
 /**
- * 記録された pid が本当にこのインスタンスか。
+ * 記録された pid が**本当にその記録を書いたプロセスか** (Issue #132)。
+ *
+ * ## 見るのは起動時刻
  *
  * pid の生存だけを信じると、yomi が異常終了したあとに OS が pid を再利用した場合、
- * **無関係なプロセスへ SIGKILL を送ってしまう**（取り返しがつかない）。
- * 記録したポートで実際に listen していることを合わせて確認し、
- * どちらか一方でも満たさなければシグナルを送らずに記録だけ片付ける。
+ * **無関係なプロセスへシグナルを送ってしまう**（取り返しがつかない）。
+ * **同じ pid でも別プロセスなら起動時刻が違う**ので、これを突き合わせれば再利用を潰せる。
+ *
+ * ## 以前はポートの疎通で代用していた（それが #132 の穴）
+ *
+ * 「記録したポートで listen しているか」を条件にしていたが、**pid の生存とポートの疎通を
+ * 独立に見ている**ので、
+ *
+ * - 残骸記録の pid が再利用されて生きている
+ * - **無関係な第三者**がそのポートを掴んでいる
+ *
+ * が同時に成り立つと true になった。実際に `yomi down` が無関係なプロセスへ SIGTERM を送り、
+ * 「停止しました」と報告する事故が起きている。
+ *
+ * **疎通はここでは見ない。** `down` が最も要るのは**応答しなくなった yomi** で、疎通を
+ * 条件にすると「記録だけ消して本体は生き残る」ことになる。**「そのポートで応答しているか」が
+ * 要る呼び出し元は、自分で {@link canConnect} を足す**（`servingInstances` / `describePortInUse`）。
+ *
+ * ## 起動時刻が読めないとき
+ *
+ * **v0.21.0 以前の記録**（フィールドが無い）と、**`/proc` も `ps` も無い OS** では
+ * 同定できない。その場合だけ**従来の判定（pid 生存 + ポートの疎通）へ落ちる** ——
+ * 落とさないと、上げた直後に既存のインスタンスを `down` できなくなる。
+ * **記録は起動のたびに書き直される**ので、この縮退は次の再起動までの窓に限られる。
  */
 async function isThisInstance(record: InstanceRecord): Promise<boolean> {
   if (!isAlive(record.pid)) return false;
+
+  if (record.procStartedAt) {
+    const current = await processStartedAt(record.pid);
+    // **読めなければ false。** pid は生きているのに起動時刻が取れないのは想定外なので、
+    // 「たぶん本人」と倒さずシグナルを送らない側に倒す
+    return current !== null && current === record.procStartedAt;
+  }
+
+  // 縮退（上記）。**同定できないので、せめて疎通を見る**
+  const target = isWildcard(record.host) ? "127.0.0.1" : record.host;
+  return canConnect(target, record.port);
+}
+
+/** 記録のインスタンスが**いま応答しているか**。同定 + 疎通。 */
+async function isServing(record: InstanceRecord): Promise<boolean> {
+  if (!(await isThisInstance(record))) return false;
   const target = isWildcard(record.host) ? "127.0.0.1" : record.host;
   return canConnect(target, record.port);
 }

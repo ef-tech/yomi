@@ -22,6 +22,17 @@ export interface InstanceRecord {
   rootDir: string;
   /** ISO8601。PID 再利用を疑うときの手がかりとして残す */
   startedAt: string;
+  /**
+   * **OS が持つプロセスの起動時刻** (Issue #132)。`src/util/proc-start.ts` の不透明な文字列。
+   *
+   * `startedAt`（記録を書いた時刻）とは別物。あちらは**手がかり**でしかなく、
+   * こちらは**同定に使う** —— 同じ pid でも別プロセスならこの値が違うので、
+   * pid 再利用を検出できる。
+   *
+   * **読めない OS では空文字**（`/proc` も `ps` も無い環境）。空のときは同定できないので、
+   * 呼び出し側は従来どおりの判定へ落ちる（`src/daemon.ts` の `isThisInstance`）。
+   */
+  procStartedAt: string;
   /** バックグラウンド起動のログ出力先。**フォアグラウンドは端末に出るので空文字** */
   logPath: string;
   version: string;
@@ -36,6 +47,13 @@ export interface BuildInstanceRecordInput {
   logPath?: string;
   /** 省略時は現在時刻。テストから固定するために開けてある */
   startedAt?: string;
+  /**
+   * OS が持つプロセスの起動時刻 (Issue #132)。省略時は空文字。
+   *
+   * **自分で読まない** —— この関数は同期で、読み取りは非同期だから。
+   * 呼び出し元が `processStartedAt(pid)` の結果を渡す（テストから固定するのにも使う）。
+   */
+  procStartedAt?: string;
 }
 
 /**
@@ -50,6 +68,7 @@ export function buildInstanceRecord(input: BuildInstanceRecordInput): InstanceRe
     host: input.host,
     rootDir: input.rootDir,
     startedAt: input.startedAt ?? new Date().toISOString(),
+    procStartedAt: input.procStartedAt ?? "",
     logPath: input.logPath ?? "",
     version: pkg.version,
   };
@@ -167,6 +186,9 @@ function parseRecord(value: unknown): InstanceRecord | null {
     host: r.host,
     rootDir: r.rootDir,
     startedAt: typeof r.startedAt === "string" ? r.startedAt : "",
+    // **v0.21.0 以前の記録にはこのフィールドが無い。** 空にしておけば
+    // `isThisInstance` が従来の判定へ落ちる（次の再起動で埋まる）
+    procStartedAt: typeof r.procStartedAt === "string" ? r.procStartedAt : "",
     logPath: typeof r.logPath === "string" ? r.logPath : "",
     version: typeof r.version === "string" ? r.version : "",
   };
