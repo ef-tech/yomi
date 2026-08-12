@@ -1529,8 +1529,26 @@ describe("server - watcher が /api/tree のキャッシュを捨てる (Issue #
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-treecache-watch-"));
     await writeFile(join(root, "a.md"), "# a\n");
-    handle = createServer({ rootDir: root, hostname: "127.0.0.1", port: 0, watch: true });
+    // **初期スキャンの完了を待つ (Issue #133)。** chokidar は `ignoreInitial: true` なので、
+    // **スキャン中に置いたファイルは「最初からあった」とみなされて通知されない**。
+    // 待たないと、下のポーリングが 3 秒空振りして間欠的に落ちる（実測で 10 回に 1 回）。
+    // 固定 sleep では遅い環境で破れるので ready を待つ（Issue #45 と同じ手）
+    let watcherReady = false;
+    handle = createServer({
+      rootDir: root,
+      hostname: "127.0.0.1",
+      port: 0,
+      watch: true,
+      onWatcherReady: () => {
+        watcherReady = true;
+      },
+    });
     url = `http://127.0.0.1:${handle.server.port}`;
+    const readyDeadline = Date.now() + 10_000;
+    while (!watcherReady && Date.now() < readyDeadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    if (!watcherReady) throw new Error("ファイル監視の初期スキャンが終わらない");
   });
 
   afterAll(async () => {
