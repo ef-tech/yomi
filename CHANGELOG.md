@@ -10,6 +10,12 @@ yomi の主要な変更点をこのファイルに記録します。
 
 ## [Unreleased]
 
+### Fixed (Issue #133)
+
+- **`bun test` がフル実行時に間欠的に落ちていたのを直した**（実測で 10 回に 3 回）。原因は 2 つあり、どちらもテスト側の問題（プロダクションコードは変えていない）:
+  - **`dompurify` の評価順**: npm の `dompurify` は**評価した瞬間の `globalThis.window`** で使えるかが決まり、無ければ `addHook` すら無い張りぼてを作る。それが**プロセス全体で共有**され、`mermaid` が掴むと `TypeError: DOMPurify.addHook is not a function` になる。**`bun test` はファイルを指定順に走らせない**ため、`dompurify` を静的 import しているテストが先に走るかどうかで結果が変わっていた。`bunfig.toml` の `[test] preload` で、順序に関わらず DOM 付きで 1 度だけ評価するようにした
+  - **watcher の初期スキャン待ち漏れ**: `chokidar` は `ignoreInitial: true` なので**スキャン中に置いたファイルは通知されない**。待たずに書いていたテストが 3 秒空振りして落ちていた
+
 ### Changed (Issue #126)
 
 - **ツリーの変更をサーバから差分で通知するようにした**: `tree` 通知に「どこが」「どう」変わったか (`op` / `path`) と**ツリーの版** (`gen`) を載せる。クライアントは `/api/tree` を取り直さず、手元のツリーへ 1 件当てて**変わったディレクトリだけ**を描き直す。10,000 ファイルで watcher イベント 1 回あたり **18.2ms → 0.0ms**（実測は `docs/bench/tree-diff-notify.md`）
