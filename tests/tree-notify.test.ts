@@ -238,9 +238,13 @@ describe("tree 通知の差分", () => {
         // **1 件ずつ待つ。** まとめて書くと debounce (80ms) で畳まれうる
         await sock.await1(treeOf(`docs/${name}`), `docs/${name} の追加`);
       }
-      // **この 3 件だけを見る。** 無関係な通知が混ざっても順序判定が狂わない
+      // **`tree` 通知だけを見る。** 追加は `add` と `change` の両方を生むことがあり
+      // (`src/watcher.ts`)、path だけで絞ると版を持たない `changed` が混ざる
       const gens = sock
-        .filter((m) => ["docs/a.md", "docs/b.md", "docs/c.md"].includes(m.path as string))
+        .filter(
+          (m) =>
+            m.type === "tree" && ["docs/a.md", "docs/b.md", "docs/c.md"].includes(m.path as string),
+        )
         .map((m) => m.gen);
       expect(gens).toEqual([before + 1, before + 2, before + 3]);
       expect((await getTree(url)).gen).toBe(String(before + 3));
