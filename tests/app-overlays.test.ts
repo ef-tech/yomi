@@ -340,11 +340,46 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
   });
 
   /**
-   * **TOC はショートカットを塞がない。**
+   * **これが `blocksShortcuts: false` の一番効く根拠。**
    *
-   * 表はビューポート幅を持たないので、`blocksShortcuts: true` にすると
-   * **PC 幅のフローティング TOC（全画面ではない）が開いている間まで**
-   * `Ctrl/Cmd+S` が止まる。
+   * `Ctrl/Cmd+Shift+O` は `shortcutsBlocked(els)` を `exceptFor` 無しで通すので、
+   * TOC が「塞ぐ層」になった瞬間に**開いた TOC を同じキーで閉じられなくなる**。
+   */
+  test("TOC が開いていても Ctrl/Cmd+Shift+O で閉じられる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+
+    // **本来の導線で開ける。** `hidden` を直接外すと `state.tocVisible` が立たず、
+    // トグルが「閉じる」ではなく「開く」に倒れて、この検証が成立しない
+    pressCtrlShiftO();
+    await h.flush();
+    expect(openState()).toMatchObject({ tocPanel: true });
+
+    pressCtrlShiftO();
+    await h.flush();
+    expect(openState()).toMatchObject({ tocPanel: false });
+  });
+
+  /**
+   * **TOC の上からクイックオープンを開ける。**
+   *
+   * `Ctrl/Cmd+P` も `shortcutsBlocked` を通るので、`true` にすると塞がれる。
+   */
+  test("TOC が開いていても Ctrl/Cmd+P でクイックオープンを開ける", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("tocPanel");
+
+    pressCtrlP();
+    await h.flush();
+
+    expect(openState()).toMatchObject({ quickOpen: true, tocPanel: true });
+  });
+
+  /**
+   * **`Ctrl/Cmd+S` は現状の UI では TOC と共存しない。**
+   *
+   * 編集モードに入ると TOC は自動で閉じる（`app-editor.js` の `tocSuspended`）ので、
+   * ここは**直接 `hidden` を外して**その状態を作っている。UI からは到達できないが、
+   * 表の値が変わったときに気づけるようにしておく。
    */
   test("TOC が開いていても Ctrl/Cmd+S で保存できる", async () => {
     h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
