@@ -8,7 +8,7 @@
  * 冒頭を参照)。
  */
 
-import { errorText, fetchJson } from "./app-context.js";
+import { errorText, fetchJson, fetchTree } from "./app-context.js";
 import { t } from "./i18n.js";
 
 const WS_RETRY_INITIAL = 500;
@@ -54,29 +54,65 @@ export function createWebSocketClient(ctx) {
     // **`changed` ではツリーを取り直さない (Issue #84)。** 内容が変わっただけで
     // 構造は変わっていないのに、ここまで来ると `/api/tree` を取り直してツリー全体を
     // 作り直していた。10,000 ファイルで **1 イベントあたり 216ms + 724 KiB** の無駄
-    // （実測は `docs/bench/tree-baseline.md`）。**構造が変わるのは `rename` 由来の
-    // `tree` だけ**で、サーバはそれを型で区別して送っている (`src/server.ts`)。
-    if (msg.type === "tree") await refreshTree();
+    // （実測は `docs/bench/tree-baseline.md`）。**構造が変わるのは追加・削除だけ**で、
+    // サーバはそれを型で区別して送っている (`src/server.ts`)。
+    if (msg.type !== "tree") return;
+    if (applyTreeDiffFromServer(msg)) {
+      afterTreeUpdate();
+      return;
+    }
+    await refreshTree();
   }
 
   /**
-   * ツリーを取り直して描き直す。
+   * `tree` 通知の差分を手元のツリーへ当てる (Issue #126)。
+   *
+   * **当てられる条件を厳しく取る。** ここで無理に当てると、以後ずっとサーバと違う
+   * ツリーを表示し続ける（しかも画面上は普通に見えるので気づけない）。少しでも
+   * 怪しければ `false` を返して全量取り直しへ倒す —— **余計に 1 回取り直すほうが安い**。
+   *
+   * @param {{ type?: string, path?: string, op?: string, gen?: unknown }} msg
+   * @returns {boolean} 当てられたか
+   */
+  function applyTreeDiffFromServer(msg) {
+    const { state } = ctx;
+    // 差分の付いていない `tree`（`--depth` 指定時のサーバ）は従来どおり全量
+    if (msg.op !== "add" && msg.op !== "remove") return false;
+    if (!msg.path) return false;
+    // **版が続いていなければ当てない。** 手元が `null`（版を知らない）ときも同じ
+    if (typeof msg.gen !== "number" || !Number.isFinite(msg.gen)) return false;
+    if (state.treeGen === null || msg.gen !== state.treeGen + 1) return false;
+
+    if (!ctx.tree.applyTreeChange(msg.op, msg.path)) return false;
+    state.treeGen = msg.gen;
+    return true;
+  }
+
+  /**
+   * ツリーが変わった後の後始末。**表示中のファイルが消えていないかを見る。**
+   *
+   * @returns {void}
+   */
+  function afterTreeUpdate() {
+    const { state } = ctx;
+    if (!state.currentPath) return;
+    if (state.fileButtons.has(state.currentPath)) {
+      ctx.tree.highlightSelected(state.currentPath);
+    } else {
+      ctx.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
+    }
+  }
+
+  /**
+   * ツリーを取り直して描き直す。**差分を当てられなかったときの逃げ道** (Issue #126)。
    *
    * @returns {Promise<void>}
    */
   async function refreshTree() {
-    const { state } = ctx;
     try {
-      /** @type {import("./api-types.js").TreeNode} */
-      const tree = await fetchJson("/api/tree");
-      ctx.tree.renderTree(tree);
-      if (state.currentPath) {
-        if (state.fileButtons.has(state.currentPath)) {
-          ctx.tree.highlightSelected(state.currentPath);
-        } else {
-          ctx.setStatus("error", t("status.fileDeleted", { path: state.currentPath }));
-        }
-      }
+      const { root, gen } = await fetchTree();
+      ctx.tree.renderTree(root, gen);
+      afterTreeUpdate();
     } catch (err) {
       ctx.setStatus("error", t("status.treeFetchFailed", { msg: errorText(err) }));
     }

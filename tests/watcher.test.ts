@@ -8,6 +8,7 @@ import { WATCH_GAP_MS, writeFileAtomic } from "../src/util/atomic-write.ts";
 import {
   type ChangeListener,
   createWatcher,
+  isStructuralChange,
   toChokidarDepth,
   type WatcherHandle,
   type WatcherOptions,
@@ -136,7 +137,14 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
     }
   });
 
-  test("add / unlink は kind='rename'、change は kind='change'", async () => {
+  /**
+   * **追加と削除を畳まない (Issue #126)。**
+   *
+   * 以前はどちらも `"rename"` の一語で、受け取った側は「形が変わった」ことしか
+   * 分からず**全量を取り直すしかなかった**。ここが畳まれた瞬間に、サーバは差分を
+   * 送れなくなる（送っても `add` か `remove` かを決められない）。
+   */
+  test("add / unlink / change がそのまま kind として届く", async () => {
     const calls: Array<{ path: string; kind: string }> = [];
     const { watch, emit } = createFakeWatch();
     const handle = createWatcher(root, (path, kind) => calls.push({ path, kind }), { watch });
@@ -151,12 +159,77 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
           calls.some((c) => c.path === "changed.md") &&
           calls.some((c) => c.path === "removed.md"),
       );
-      expect(calls.find((c) => c.path === "added.md")?.kind).toBe("rename");
+      expect(calls.find((c) => c.path === "added.md")?.kind).toBe("add");
       expect(calls.find((c) => c.path === "changed.md")?.kind).toBe("change");
-      expect(calls.find((c) => c.path === "removed.md")?.kind).toBe("rename");
+      expect(calls.find((c) => c.path === "removed.md")?.kind).toBe("unlink");
     } finally {
       handle.close();
     }
+  });
+
+  /**
+   * **`add` の直後の `change` に上書きされない (Issue #126)。**
+   *
+   * `writeFile` 1 回でも chokidar は `add` → `change` と続けて出すことがある。
+   * debounce が最後の kind で上書きしていたため、**「追加」が「内容変更」に化けて**
+   * いた —— #84 以降 `changed` はツリーを取り直さないので、**新しいファイルが
+   * 一覧に出ない**という形で表に出る（`bun test` のフル実行で実際に踏んだ）。
+   *
+   * ここが緩むと、その穴が黙って戻る。
+   */
+  test("add の直後に change が来ても add が消えない", async () => {
+    const calls: Array<{ path: string; kind: string }> = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (path, kind) => calls.push({ path, kind }), { watch });
+
+    try {
+      emit("add", "created.md");
+      emit("change", "created.md");
+      await waitFor(() => calls.some((c) => c.kind === "add"));
+      // 構造の変化が先に届く。内容の変化も続けて届く（別のことを伝えている）
+      expect(calls.map((c) => c.kind)).toEqual(["add", "change"]);
+      expect(calls.every((c) => c.path === "created.md")).toBe(true);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("unlink の直前の change は捨てる（もう読めないファイルの再読込を促さない）", async () => {
+    const calls: string[] = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (_path, kind) => calls.push(kind), { watch });
+
+    try {
+      emit("change", "gone.md");
+      emit("unlink", "gone.md");
+      await waitFor(() => calls.length > 0);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(calls).toEqual(["unlink"]);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("add のあと unlink なら、消えたことだけが届く", async () => {
+    const calls: string[] = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (_path, kind) => calls.push(kind), { watch });
+
+    try {
+      emit("add", "flash.md");
+      emit("unlink", "flash.md");
+      await waitFor(() => calls.length > 0);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(calls).toEqual(["unlink"]);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("isStructuralChange は add / unlink だけを true にする", () => {
+    expect(isStructuralChange("add")).toBe(true);
+    expect(isStructuralChange("unlink")).toBe(true);
+    expect(isStructuralChange("change")).toBe(false);
   });
 
   test("debounce 内の同一ファイルへの連続イベントは 1 回に集約される", async () => {

@@ -213,6 +213,11 @@ export interface BootOptions {
   dark?: boolean;
   /** navigator.language (言語 auto の解決に使う)。既定 "ja" */
   language?: string;
+  /**
+   * `/api/tree` が返す版 (Issue #126)。既定の `null` は
+   * **`X-Yomi-Tree-Gen` を返さないサーバ**で、クライアントは差分を当てず全量を取り直す。
+   */
+  treeGen?: number | null;
   /** 起動時 (init の /api/tree・/api/file) から効く応答差し替え */
   intercept?: FetchInterceptor;
 }
@@ -225,6 +230,11 @@ export interface AppHarness {
   files: Record<string, FakeFile>;
   /** `/api/tree` の応答 (テストから差し替え可) */
   tree: TreeNode;
+  /**
+   * `/api/tree` が返す版 (Issue #126)。`null` は**ヘッダを返さない古いサーバ**で、
+   * その場合クライアントは差分を当てず必ず全量を取り直す。
+   */
+  treeGen: number | null;
   /** 保存時に raw から html を作る関数 (既定は <p> 包み)。テストで差し替え可 */
   renderHtml: (raw: string) => string;
   /** これまでの fetch 呼び出し */
@@ -532,6 +542,7 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
   const state = {
     files: options.files ?? defaultFiles(),
     tree: options.tree ?? defaultTree(),
+    treeGen: options.treeGen ?? null,
     renderHtml: (raw: string) => `<p>${escapeHtml(raw)}</p>`,
     intercept: (options.intercept ?? null) as FetchInterceptor | null,
     confirmResult: true,
@@ -589,7 +600,18 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     const forced = state.intercept?.(url, method, body);
     if (forced) return reply(forced.status ?? 200, forced.body);
 
-    if (url.startsWith("/api/tree")) return reply(200, state.tree);
+    if (url.startsWith("/api/tree")) {
+      // **版ヘッダも返す (Issue #126)。** 実サーバはここに `X-Yomi-Tree-Gen` を載せ、
+      // クライアントはそれを基準に差分を当てるか全量へ逃げるかを決める。
+      // `treeGen` が `null` のテストは**ヘッダを返さない古いサーバ**を表す
+      return new Response(JSON.stringify(state.tree), {
+        status: 200,
+        headers:
+          state.treeGen === null
+            ? { "Content-Type": "application/json" }
+            : { "Content-Type": "application/json", "X-Yomi-Tree-Gen": String(state.treeGen) },
+      });
+    }
 
     if (url.startsWith("/api/file/create")) {
       const path = String(body?.path ?? "");
@@ -713,6 +735,12 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
     },
     set tree(next: TreeNode) {
       state.tree = next;
+    },
+    get treeGen() {
+      return state.treeGen;
+    },
+    set treeGen(next: number | null) {
+      state.treeGen = next;
     },
     get renderHtml() {
       return state.renderHtml;

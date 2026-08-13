@@ -13,10 +13,11 @@
  * (履歴・未保存確認・スクロール復元が document 側の責務のため)。
  */
 
-import { errorText, fetchJson } from "./app-context.js";
+import { errorText, fetchJson, fetchTree } from "./app-context.js";
 import { t } from "./i18n.js";
 import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
+import { applyTreeDiff } from "./tree-diff.js";
 import { collapseAllDirs, expandAllDirs, isTreeToolbarEnabled } from "./tree-toolbar.js";
 
 /** @param {import("./app-context.js").Ctx} ctx */
@@ -322,9 +323,10 @@ export function createTree(ctx) {
 
   /**
    * @param {TreeNode} root
+   * @param {number | null} [gen] `/api/tree` が返した版 (Issue #126)。省略は「版を知らない」
    * @returns {void}
    */
-  function renderTree(root) {
+  function renderTree(root, gen = null) {
     els.tree.removeAttribute("aria-busy");
     // 起動時プレースホルダ "読み込み中…" の data-i18n を除去する (Issue #48)。
     // これを残すと、言語切替時の applyI18n() が #tree.textContent を loading 文言で
@@ -345,10 +347,79 @@ export function createTree(ctx) {
     }
     reconcileChildren(ul, root.children ?? []);
 
+    // **差分更新のために手元へ持つ (Issue #126)。** 次に `tree` 通知が来たとき、
+    // このデータへ 1 件だけ足し引きして描き直す（`/api/tree` を取り直さない）
+    state.treeData = root;
+    state.treeGen = gen;
+
     updateTreeToolbarState();
     // クイックオープンの母集団を張り直す (Issue #54)。**ツリーと同じものを見る**ので、
     // 除外設定と --depth はサーバ側の適用結果がそのまま効く
     ctx.quickOpen.syncPaths(root);
+  }
+
+  /**
+   * `tree` 通知の差分を手元のツリーへ適用して、**変わったディレクトリだけ**描き直す
+   * (Issue #126)。
+   *
+   * **描き直す範囲がすべて。** `reconcileChildren` は渡された `<ul>` の配下を再帰的に
+   * 突き合わせるので、ルートから回すと 10,500 ノードを見ることになる（それが 18ms の
+   * 中身）。1 件の追加・削除で子リストが変わるのは**ディレクトリ 1 つ**だけなので、
+   * そこの `<ul>` から回せば、見るのはその配下だけで済む。
+   *
+   * @param {"add" | "remove"} op
+   * @param {string} path
+   * @returns {boolean} 適用できたか。**`false` なら呼び出し側が全量を取り直す**
+   */
+  function applyTreeChange(op, path) {
+    const root = state.treeData;
+    if (!root) return false;
+
+    const { ok, dirtyPath } = applyTreeDiff(root, op, path);
+    if (!ok) return false;
+    // 既にその状態だった。DOM もクイックオープンも触る必要が無い
+    if (dirtyPath === null) return true;
+
+    const ul =
+      dirtyPath === ""
+        ? /** @type {HTMLUListElement | null} */ (els.tree.querySelector(":scope > ul"))
+        : (state.dirNodes.get(dirtyPath)?.ul ?? null);
+    const dirtyNode = dirtyPath === "" ? root : findNode(root, dirtyPath);
+    // **描かれていないディレクトリは差分で直せない。** ここまで来ると `root` は
+    // **もう書き換わっている**ので、DOM だけ追随しないと以後ずっと食い違う。
+    // **土台ごと捨てて**、全量を取り直すまで差分を当てないようにする
+    // （`renderTree` が入れ直すまで、次以降の差分もここで `false` になる）
+    if (!ul || !dirtyNode) {
+      state.treeData = null;
+      return false;
+    }
+    reconcileChildren(ul, dirtyNode.children ?? []);
+
+    updateTreeToolbarState();
+    // **母集団も更新する。** ここを飛ばすと、消えたファイルがクイックオープンに残って
+    // Enter で 404 になる（`app-quick-open.js` の `syncPaths` のコメントと同じ理由）。
+    // 全走査だが DOM を触らないので、差分更新の効き（18ms → 5ms）は保たれる
+    ctx.quickOpen.syncPaths(root);
+    return true;
+  }
+
+  /**
+   * path でノードを引く。**セグメントを辿る**ので、深さぶんしか見ない。
+   *
+   * @param {TreeNode} root
+   * @param {string} path
+   * @returns {TreeNode | null}
+   */
+  function findNode(root, path) {
+    let node = root;
+    let acc = "";
+    for (const seg of path.split("/")) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      const next = (node.children ?? []).find((c) => c.path === acc);
+      if (!next) return null;
+      node = next;
+    }
+    return node;
   }
 
   function wireTreeToolbar() {
@@ -466,10 +537,11 @@ export function createTree(ctx) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      // 自己保存マークで watcher は発火しないため、自分でツリーを更新する
-      /** @type {import("./api-types.js").TreeNode} */
-      const tree = await fetchJson("/api/tree");
-      renderTree(tree);
+      // 自己保存マークで watcher は発火しないため、自分でツリーを更新する。
+      // **版も一緒に控える (Issue #126)** —— 作成でサーバの版は進んでいるので、
+      // ここで拾い直さないと次の差分が「取りこぼし」に見えて全量を引き直す
+      const { root, gen } = await fetchTree();
+      renderTree(root, gen);
       const moved = await ctx.document.navigateTo(created.path, { history: "push" });
       if (!moved) {
         // 編集中に破棄をキャンセルした等で遷移がブロックされた場合、ファイルは
@@ -517,6 +589,7 @@ export function createTree(ctx) {
 
   return {
     renderTree,
+    applyTreeChange,
     wireTreeToolbar,
     updateTreeToolbarState,
     openNewFileInput,
