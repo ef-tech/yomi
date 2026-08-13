@@ -1,0 +1,6 @@
+# bun の設定。**テストの前処理だけ**をここに置く。
+[test]
+# 全テストファイルより先に走らせる (Issue #133)。
+# npm の dompurify を「DOM がある状態」で 1 度だけ評価させ、mermaid が張りぼてを
+# 掴まないようにする。理由の詳細は tests/helpers/preload-dom.ts の docstring。
+preload = ["./tests/helpers/preload-dom.ts"]
