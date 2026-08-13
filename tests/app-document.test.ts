@@ -10,16 +10,20 @@ import {
   type AppHarness,
   type BootOptions,
   bootApp,
+  defaultFiles,
+  defaultTree,
   type FakeFile,
   resetAppEnvironment,
+  type TreeNode,
 } from "./helpers/app-harness.ts";
 
 /**
- * **`README.md` を開いた状態で起動する** (Issue #145)。
+ * **`README.md` を開いた状態で起動する** (Issue #145 / #150)。
  *
  * リンク遷移・パスのコピーなどは「開いているファイル」を起点にするが、**どのファイルが
- * 開くかは主題ではない**。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()`
- * を実サーバの並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になった。
+ * 開くかは主題ではない**。`defaultTree()` はルート直下に `README.md` を持つので
+ * `bootApp()` の既定もこれになるが（#150）、**主題でないことを既定に委ねない**ため
+ * `?path=` で明示する。
  *
  * **「初期ファイル選択」の describe だけは `bootApp()` を直接使う** —— あちらは
  * 「何が最初に開くか」そのものが主題なので、明示してしまうと検証にならない。
@@ -42,36 +46,130 @@ function putLink(harness: AppHarness, attrs: Record<string, string>, text = "lin
 
 const linkFile = (html: string): FakeFile => ({ raw: "# x\n", html, sha: "sha-x" });
 
+/**
+ * ルート直下のファイルだけを差し替えたツリーを作る（`docs/` はそのまま残す）。
+ *
+ * `defaultTree()` はルート直下に `README.md` を持つので、**README が無い場合**や
+ * 別綴りの README を試すには置き換えが要る。ディレクトリを残すのは、
+ * 「README を優先しなければ `docs/deep/note.md` が開く」という対比を保つため。
+ */
+function treeWithRootFiles(...names: string[]): TreeNode {
+  const tree = defaultTree();
+  tree.children = [
+    ...(tree.children ?? []).filter((c) => c.type === "dir"),
+    ...names.map((name): TreeNode => ({ type: "file", name, path: name })),
+  ];
+  return tree;
+}
+
+/**
+ * 既定 fixture に、`treeWithRootFiles` で足したファイルの中身を重ねる。
+ *
+ * `files` を渡すと**既定を丸ごと置き換える**ので、`docs/deep/note.md`（README が無い
+ * ときの期待値）まで消える。必ず `defaultFiles()` に足す形で作る。
+ */
+function filesWith(...names: string[]): Record<string, FakeFile> {
+  return {
+    ...defaultFiles(),
+    ...Object.fromEntries(
+      names.map((name) => [
+        name,
+        { raw: `# ${name}\n`, html: `<h1>${name}</h1>`, sha: `sha-${name}` },
+      ]),
+    ),
+  };
+}
+
 describe("起動時の初期ファイル選択", () => {
-  // **「ツリー最初のファイル」はディレクトリを先に見る** (Issue #145)。fixture を実サーバの
-  // 並びに直した結果、最初のファイルは `README.md` ではなく `docs/deep/note.md` になった。
-  // これは fake だけの話ではなく、**実サーバでも同じ挙動**（`chooseInitialFile` は
-  // `findFirstFile` を呼ぶだけで README を優先しない）。以前の期待値は
-  // **fixture の誤った並びが作っていた幻**だった
-  test("?path= が無ければツリー最初のファイルを replaceState で開く", async () => {
+  // **ルート直下の README を優先する** (Issue #150)。`sortTree` はディレクトリを先に置くので、
+  // README を優先しないと「ツリー最初のファイル」は**必ずいちばん深いディレクトリの中**
+  // （`defaultTree()` では `docs/deep/note.md`）になる
+  test("?path= が無ければルート直下の README を replaceState で開く", async () => {
     h = await bootApp();
 
-    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
+    expect(h.el("current-path").textContent).toBe("README.md");
     expect(h.historyCalls).toHaveLength(1);
     expect(h.historyCalls[0]?.mode).toBe("replace");
-    expect(h.window.location.search).toBe("?path=docs%2Fdeep%2Fnote.md");
+    expect(h.window.location.search).toBe("?path=README.md");
     expect(h.window.history.state).toEqual({
-      path: "docs/deep/note.md",
+      path: "README.md",
       hash: null,
       navIndex: 0,
     });
   });
 
-  test("?path= があればそのファイルを開く", async () => {
+  // DoD 4: README はルート直下なので `expandAncestors` が 1 つも開かない。
+  // 以前は `docs` と `docs/deep` が開いた状態から始まっていた
+  test("README で始まればディレクトリが 1 つも自動展開されない", async () => {
+    h = await bootApp();
+
+    expect(h.treeItem("docs").classList.contains("is-open")).toBe(false);
+    expect(h.treeItem("docs/deep").classList.contains("is-open")).toBe(false);
+    // `""` はルートを表す sentinel で、`openDirs` には常に入っている
+    // (`app-context.js` の初期値 / `tree-toolbar.js` の規約)。実ディレクトリは 0 件
+    expect(JSON.parse(h.storageValue("yomi:openDirs:v1") ?? "null")).toEqual([""]);
+  });
+
+  test("ルート直下に README が無ければツリー最初のファイルを開く", async () => {
+    h = await bootApp({
+      tree: treeWithRootFiles("intro.md"),
+      files: filesWith("intro.md"),
+    });
+
+    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
+    // 従来どおり祖先が開く（README がある場合との対比）
+    expect(h.treeItem("docs").classList.contains("is-open")).toBe(true);
+  });
+
+  // 大文字小文字と `.md` / `.markdown` / `.mdx` を等しく扱う。ツリーに載るのは
+  // `isMarkdownExtension` を通ったファイルだけなので、ここだけ `.md` に絞る理由が無い
+  test.each([
+    "readme.md",
+    "README.MD",
+    "ReadMe.markdown",
+    "readme.mdx",
+  ])("README の綴りは大文字小文字と拡張子を問わない (%s)", async (name) => {
+    h = await bootApp({
+      tree: treeWithRootFiles(name),
+      files: filesWith(name),
+    });
+
+    expect(h.el("current-path").textContent).toBe(name);
+  });
+
+  test("readme を含むだけの名前は README とみなさない", async () => {
+    h = await bootApp({
+      tree: treeWithRootFiles("readme-old.md", "my-readme.md"),
+      files: filesWith("readme-old.md", "my-readme.md"),
+    });
+
+    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
+  });
+
+  // ルート以外まで拾うと「どの README が開くのか」が説明できなくなる
+  test("ルート直下でない README は優先しない", async () => {
+    const tree = treeWithRootFiles("intro.md");
+    const docs = tree.children?.find((c) => c.name === "docs");
+    docs?.children?.push({ type: "file", name: "README.md", path: "docs/README.md" });
+
+    h = await bootApp({
+      tree,
+      files: filesWith("intro.md", "docs/README.md"),
+    });
+
+    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
+  });
+
+  test("?path= があれば README より優先される", async () => {
     h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
 
     expect(h.el("current-path").textContent).toBe("docs/guide.md");
     expect(h.el("preview").innerHTML).toContain("Guide");
   });
 
-  test("?path= がツリーに無ければ最初のファイルにフォールバックする", async () => {
+  test("?path= がツリーに無ければ README にフォールバックする", async () => {
     h = await bootApp({ url: "http://localhost:3944/?path=gone.md" });
-    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
+    expect(h.el("current-path").textContent).toBe("README.md");
   });
 
   test("URL の #見出し を復元してスクロールする", async () => {
