@@ -21,8 +21,30 @@ import { expect, type Page } from "@playwright/test";
 export const treeItem = (page: Page, path: string) =>
   page.locator(`#tree .tree-item[title="${path}"]`);
 
+/**
+ * 対象までの祖先ディレクトリを開く (Issue #150)。
+ *
+ * **起動時に開くのがルート直下の README になったので、`docs/` は畳まれたまま始まる**
+ * （自動展開されるのは初期ファイルの祖先だけで、README はルート直下）。畳まれた `<ul>` は
+ * `display: none` なので、中のファイルは `click()` できない。実際の利用者と同じく、
+ * まずディレクトリを開く。
+ */
+async function expandTo(page: Page, path: string) {
+  const segments = path.split("/");
+  segments.pop(); // 末尾はファイル名
+  let acc = "";
+  for (const seg of segments) {
+    acc = acc ? `${acc}/${seg}` : seg;
+    const dir = treeItem(page, acc);
+    // **既に開いているならクリックしない** —— トグルなので閉じてしまう
+    if (!/\bis-open\b/.test((await dir.getAttribute("class")) ?? "")) await dir.click();
+    await expect(dir).toHaveClass(/is-open/);
+  }
+}
+
 /** 表示中のファイルが切り替わるまで待つ。全フローの起点になるので 1 箇所に置く。 */
 export async function openFile(page: Page, path: string) {
+  await expandTo(page, path);
   await treeItem(page, path).click();
   await expect(page.locator("#current-path")).toHaveText(path);
 }
