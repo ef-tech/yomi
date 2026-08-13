@@ -51,13 +51,20 @@
  *
  * 比較に使うのはここの大小だけで、CSS は読みに行かない（正本を 1 か所にする）。
  *
- * ## `toc-panel` を入れていない
+ * ## `tocPanel` の `blocksShortcuts` が `false` な理由
  *
- * スマホ幅では `z-index: 60` の全画面パネルになる（PC ではフローティングで 10）。
- * ただし**`Esc` で閉じる導線が無い**ので、ここに載せると「最前面なのに誰も閉じない」
- * 状態を作り、**背後の sidebar まで Esc で閉じられなくなる**。閉じる導線を足すのは
- * パネルの機能の話（#112 の対象外）なので **#135** に分けた。
+ * **`true` にすると、TOC 自身のトグルが効かなくなる。** `Ctrl/Cmd+Shift+O` は
+ * `shortcutsBlocked(els)` を `exceptFor` 無しで通すので（`app.js`）、TOC が
+ * 「塞ぐ層」になった瞬間に**開いた TOC を同じキーで閉じられなくなる**（実測）。
+ * `Ctrl/Cmd+P`（クイックオープン）も同様に、TOC の上から開けなくなる。
  *
+ * **`Ctrl/Cmd+S` は理由にならない。** あれは `state.editing` のときだけ走るが、
+ * **編集モードに入ると TOC は自動で閉じる**（`app-editor.js` の `tocSuspended`)ので、
+ * 両者は共存しない（実測）。
+ *
+ * そもそもこの表は**ビューポート幅を持たない**ので、スマホ幅で全画面（`z-index: 60`）
+ * であることを根拠に `true` にすると、**PC 幅のフローティング（10）でも同じ抑止が
+ * 掛かる**。幅で変えたいなら表に「幅の条件」を持たせる設計変更が要る。
  */
 export const OVERLAY_LAYERS = /** @type {const} */ ([
   // モバイルの引き出し。全画面ではないのでショートカットは止めない
@@ -66,6 +73,11 @@ export const OVERLAY_LAYERS = /** @type {const} */ ([
   { name: "overflowMenu", priority: 55, blocksShortcuts: false },
   // CSS に z-index は無い。sidebar / ⋮ より優先という元の設計を数値にしたもの
   { name: "externalLinkBanner", priority: 57, blocksShortcuts: false },
+  // スマホ幅で全画面 (z-index: 60)。**クイックオープンと同じ値だが、`index.html` で
+  // 先に置かれているぶん下に描かれる**（実測）。優先順位もそれに合わせて 58 にする ——
+  // 60 にすると同着になり、`topOverlay` が先勝ちで TOC を返すので、**上に開いた
+  // クイックオープンが Esc で閉じられなくなる** (Issue #135)
+  { name: "tocPanel", priority: 58, blocksShortcuts: false },
   { name: "quickOpen", priority: 60, blocksShortcuts: true },
   { name: "conflictDiff", priority: 70, blocksShortcuts: true },
 ]);
