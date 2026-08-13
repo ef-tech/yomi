@@ -309,6 +309,55 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
     }
   });
 
+  /**
+   * **これが Issue #129 の本命。**
+   *
+   * #120 で「消す側」は直したが、**`set` は無条件上書きのまま**だった。
+   * 1 パス 1 値なので、そもそも 2 つのリクエストのマークが共存できない:
+   *
+   * 1. R1 が `set(X)` → map = X
+   * 2. R1 の書き込みが成功 → chokidar の `change` → debounce 開始
+   * 3. R2 が `set(Y)` → **map = Y。ここで R1 のマークが消える**
+   * 4. debounce 発火 → `isOwnSave` が実ファイル（= X）を読む → 一致しない
+   * 5. **X を保存した側の画面に余計なリロード**
+   *
+   * **両方とも失敗していない**（#120 の系列と違う）ことが要点。実消費者
+   * （`isOwnSave` → `onChange`）を通して、4 → 5 が起きないことを見る。
+   * **fake-watch なので sleep もタイミング勝負も無い。**
+   */
+  test("並行する 2 本の保存が、どちらも自己保存として抑止される (Issue #129)", async () => {
+    const saveMark = new SaveMark();
+    const r1Body = "R1 が書いた内容";
+    const r2Body = "R2 が書いた内容";
+
+    // 実ファイルは R1 の内容のまま（R2 の rename はまだ）
+    await writeFile(join(root, "both.md"), r1Body);
+
+    saveMark.set("both.md", sha256(r1Body)); // 1. R1 がマークを立てる
+    saveMark.set("both.md", sha256(r2Body)); // 3. R2 がマークを立てる（上書きしない）
+
+    const calls: string[] = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (p) => calls.push(p), { watch, saveMark });
+
+    try {
+      // 4. R1 の書き込みに対する debounce が発火する
+      emit("change", "both.md");
+      await wait(SETTLE_MS);
+      // **R1 のマークが残っているので抑止される。** 1 パス 1 値に戻すとここが publish される
+      expect(calls).not.toContain("both.md");
+
+      // 続いて R2 の rename が済み、その変更イベントが来る
+      await writeFile(join(root, "both.md"), r2Body);
+      emit("change", "both.md");
+      await wait(SETTLE_MS);
+      // **R2 のぶんも抑止される**（こちらは元から通っていた経路）
+      expect(calls).not.toContain("both.md");
+    } finally {
+      handle.close();
+    }
+  });
+
   test("save-mark 登録済みでも内容が違えば publish される (外部書き換えを見逃さない)", async () => {
     const saveMark = new SaveMark();
     saveMark.set("ext.md", sha256("expected-content"));
