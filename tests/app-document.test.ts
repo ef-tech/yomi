@@ -8,10 +8,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AppHarness,
+  type BootOptions,
   bootApp,
   type FakeFile,
   resetAppEnvironment,
 } from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * リンク遷移・パスのコピーなどは「開いているファイル」を起点にするが、**どのファイルが
+ * 開くかは主題ではない**。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()`
+ * を実サーバの並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になった。
+ *
+ * **「初期ファイル選択」の describe だけは `bootApp()` を直接使う** —— あちらは
+ * 「何が最初に開くか」そのものが主題なので、明示してしまうと検証にならない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -29,14 +43,23 @@ function putLink(harness: AppHarness, attrs: Record<string, string>, text = "lin
 const linkFile = (html: string): FakeFile => ({ raw: "# x\n", html, sha: "sha-x" });
 
 describe("起動時の初期ファイル選択", () => {
+  // **「ツリー最初のファイル」はディレクトリを先に見る** (Issue #145)。fixture を実サーバの
+  // 並びに直した結果、最初のファイルは `README.md` ではなく `docs/deep/note.md` になった。
+  // これは fake だけの話ではなく、**実サーバでも同じ挙動**（`chooseInitialFile` は
+  // `findFirstFile` を呼ぶだけで README を優先しない）。以前の期待値は
+  // **fixture の誤った並びが作っていた幻**だった
   test("?path= が無ければツリー最初のファイルを replaceState で開く", async () => {
     h = await bootApp();
 
-    expect(h.el("current-path").textContent).toBe("README.md");
+    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
     expect(h.historyCalls).toHaveLength(1);
     expect(h.historyCalls[0]?.mode).toBe("replace");
-    expect(h.window.location.search).toBe("?path=README.md");
-    expect(h.window.history.state).toEqual({ path: "README.md", hash: null, navIndex: 0 });
+    expect(h.window.location.search).toBe("?path=docs%2Fdeep%2Fnote.md");
+    expect(h.window.history.state).toEqual({
+      path: "docs/deep/note.md",
+      hash: null,
+      navIndex: 0,
+    });
   });
 
   test("?path= があればそのファイルを開く", async () => {
@@ -48,7 +71,7 @@ describe("起動時の初期ファイル選択", () => {
 
   test("?path= がツリーに無ければ最初のファイルにフォールバックする", async () => {
     h = await bootApp({ url: "http://localhost:3944/?path=gone.md" });
-    expect(h.el("current-path").textContent).toBe("README.md");
+    expect(h.el("current-path").textContent).toBe("docs/deep/note.md");
   });
 
   test("URL の #見出し を復元してスクロールする", async () => {
@@ -73,7 +96,7 @@ describe("起動時の初期ファイル選択", () => {
 
 describe("ツリーからの遷移", () => {
   test("クリックは pushState で履歴を積み、navIndex が増える", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.treeItem("docs/guide.md"));
     await h.flush();
 
@@ -84,7 +107,7 @@ describe("ツリーからの遷移", () => {
   });
 
   test("読み込みに失敗したら URL も history も動かさず status だけエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.window.location.search;
     const calls = h.historyCalls.length;
 
@@ -102,7 +125,7 @@ describe("ツリーからの遷移", () => {
 
 describe("戻る / 進む (popstate)", () => {
   test("popstate の state から復元し、履歴は増やさない", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.treeItem("docs/guide.md"));
     await h.flush();
     const calls = h.historyCalls.length;
@@ -119,7 +142,7 @@ describe("戻る / 進む (popstate)", () => {
   });
 
   test("popstate の state に hash があればその見出しへスクロールする", async () => {
-    h = await bootApp();
+    h = await boot();
     h.scrollIntoViewCalls.length = 0;
 
     const ev = new h.window.PopStateEvent("popstate", {
@@ -132,7 +155,7 @@ describe("戻る / 進む (popstate)", () => {
   });
 
   test("popstate 先の読み込みに失敗したら status をエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     h.intercept = () => ({ status: 404, body: { error: "gone", code: "not_found" } });
 
     const ev = new h.window.PopStateEvent("popstate", {
@@ -148,7 +171,7 @@ describe("戻る / 進む (popstate)", () => {
 
 describe("プレビュー内リンク", () => {
   test("内部 md リンクは yomi 内で遷移する", async () => {
-    h = await bootApp({
+    h = await boot({
       files: {
         "README.md": linkFile('<a href="docs/guide.md">g</a>'),
         "docs/guide.md": { raw: "# Guide\n", html: "<h1>Guide</h1>", sha: "sha-g" },
@@ -163,7 +186,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("拡張子なしのリンクは .md / .markdown / .mdx で補完する", async () => {
-    h = await bootApp({
+    h = await boot({
       files: {
         "README.md": linkFile('<a href="docs/guide">g</a>'),
         "docs/guide.md": { raw: "# Guide\n", html: "<h1>Guide</h1>", sha: "sha-g" },
@@ -176,7 +199,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("`other.md#見出し` は hash を URL と scroll に引き継ぐ", async () => {
-    h = await bootApp({
+    h = await boot({
       files: {
         "README.md": linkFile('<a href="docs/guide.md#section">g</a>'),
         "docs/guide.md": {
@@ -196,7 +219,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("ツリーに無いファイルへのリンクはエラー表示だけで遷移しない", async () => {
-    h = await bootApp({
+    h = await boot({
       files: { "README.md": linkFile('<a href="missing.md">x</a>') },
     });
 
@@ -209,7 +232,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("外部 URL は警告バナーを出し、開くまで window.open しない", async () => {
-    h = await bootApp();
+    h = await boot();
     putLink(h, { href: "https://example.com/x" });
 
     h.click(h.q("#preview a"));
@@ -225,7 +248,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("外部 URL バナーはキャンセルと Esc で閉じ、開かない", async () => {
-    h = await bootApp();
+    h = await boot();
     putLink(h, { href: "https://example.com/y" });
 
     h.click(h.q("#preview a"));
@@ -240,7 +263,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("危険スキームはブロックし、遷移もバナーも出さない", async () => {
-    h = await bootApp();
+    h = await boot();
     // 通常は DOMPurify が落とすので DOM に直挿しして click ハンドラの分岐を突く
     for (const href of ["javascript:alert(1)", "file:///etc/passwd", "vbscript:msgbox"]) {
       h.el("preview").innerHTML = "";
@@ -256,7 +279,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test('target="_blank" のリンクはブラウザ既定に任せる (preventDefault しない)', async () => {
-    h = await bootApp();
+    h = await boot();
     const a = putLink(h, { href: "/api/asset?path=sales.csv", target: "_blank" });
 
     const ev = new h.window.MouseEvent("click", { bubbles: true, cancelable: true });
@@ -269,7 +292,7 @@ describe("プレビュー内リンク", () => {
   });
 
   test("ページ内アンカーはブラウザ既定に任せる", async () => {
-    h = await bootApp();
+    h = await boot();
     const a = putLink(h, { href: "#section" });
 
     const ev = new h.window.MouseEvent("click", { bubbles: true, cancelable: true });
@@ -283,7 +306,7 @@ describe("プレビュー内リンク", () => {
 
 describe("パスのコピー", () => {
   test("パス表示をクリックすると現在パスをクリップボードへ入れる", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("current-path"));
     await h.flush();
 

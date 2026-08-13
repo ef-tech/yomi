@@ -8,10 +8,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AppHarness,
+  type BootOptions,
   bootApp,
   resetAppEnvironment,
   type TreeNode,
 } from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は**どのファイルが開くかではない**。`bootApp()` の既定は
+ * **ツリー最初のファイル**で、`defaultTree()` を実サーバの並び（ディレクトリが先）に
+ * 直した結果それは `docs/deep/note.md` になった。以前はここが偶然 `README.md` だったので、
+ * テストは**何も指定せずに README を前提**に書かれていた。前提を明示に変えれば、
+ * fixture の並びが変わっても壊れない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -27,13 +40,13 @@ function treeGets(harness: AppHarness) {
 
 describe("接続", () => {
   test("起動時に /ws へ接続する", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(h.sockets).toHaveLength(1);
     expect(h.ws.url).toBe("ws://localhost:3944/ws");
   });
 
   test("切断されたら再接続する", async () => {
-    h = await bootApp();
+    h = await boot();
     h.ws.close();
 
     // 初回のリトライ間隔は 500ms。実時間で待つ (fake timer を使うと app.js 側の
@@ -47,7 +60,7 @@ describe("接続", () => {
   });
 
   test("error を受けたら close する (close ハンドラ経由で再接続に入る)", async () => {
-    h = await bootApp();
+    h = await boot();
     const first = h.ws;
     first.dispatch("error", {});
     expect(first.closed).toBe(true);
@@ -56,7 +69,7 @@ describe("接続", () => {
 
 describe("changed 通知", () => {
   test("表示中のファイルが変わったら読み直して status を ok にする", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = fileGets(h).length;
     const file = h.files["README.md"];
     if (file) {
@@ -83,7 +96,7 @@ describe("changed 通知", () => {
   // （実測は `docs/bench/tree-baseline.md`）。構造が変わるのは `rename` 由来の
   // `tree` イベントだけで、サーバはそれを型で区別して送っている。
   test("表示していないファイルの変更では何も取り直さない", async () => {
-    h = await bootApp();
+    h = await boot();
     const fileBefore = fileGets(h).length;
     const treeBefore = treeGets(h).length;
 
@@ -99,7 +112,7 @@ describe("changed 通知", () => {
   // `changed` で毎回取り直すのをやめたぶん、取りこぼしの自動復旧が無くなった。
   // 切れている間の追加・削除は誰も拾わないし、chokidar 自体も取りこぼす (#119)。
   test("再接続したらツリーを取り直す", async () => {
-    h = await bootApp();
+    h = await boot();
     // **初回の `open` を先に起こす。** 実ブラウザでは接続が確立した時点で必ず発火するが、
     // ハーネスは socket を作るだけで発火させない。ここを省くと、再接続時の `open` が
     // 「1 回目」と見なされて取り直しが走らない
@@ -126,7 +139,7 @@ describe("changed 通知", () => {
   });
 
   test("ファイルの追加・削除 (tree) ではツリーを取り直す", async () => {
-    h = await bootApp();
+    h = await boot();
     const treeBefore = treeGets(h).length;
 
     h.ws.emit({ type: "tree", path: "docs/new.md" });
@@ -136,7 +149,7 @@ describe("changed 通知", () => {
   });
 
   test("編集中に変更通知が来たら競合バナーを出し、編集内容は保持する", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("edit-btn"));
     await h.flush();
     const editor = h.el<HTMLTextAreaElement>("editor");
@@ -166,7 +179,7 @@ describe("changed 通知", () => {
   });
 
   test("読み直しに失敗したら status をエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     h.intercept = (url) =>
       url.startsWith("/api/file?") ? { status: 500, body: { error: "boom" } } : undefined;
 
@@ -179,7 +192,7 @@ describe("changed 通知", () => {
 
 describe("tree 通知", () => {
   test("ツリーを取り直して再描画する", async () => {
-    h = await bootApp();
+    h = await boot();
     const added: TreeNode = {
       type: "dir",
       name: "",
@@ -200,7 +213,7 @@ describe("tree 通知", () => {
   });
 
   test("表示中のファイルがツリーから消えたらエラーを出す", async () => {
-    h = await bootApp();
+    h = await boot();
     h.tree = {
       type: "dir",
       name: "",
@@ -217,7 +230,7 @@ describe("tree 通知", () => {
   });
 
   test("ツリー取得に失敗したら status をエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     h.intercept = (url) =>
       url.startsWith("/api/tree") ? { status: 500, body: { error: "boom" } } : undefined;
 
@@ -232,7 +245,7 @@ describe("tree 通知", () => {
 
 describe("不正なメッセージ", () => {
   test("JSON として壊れたフレームは黙って捨てる", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.fetchCalls.length;
 
     h.ws.emitRaw("{ not json");
@@ -243,7 +256,7 @@ describe("不正なメッセージ", () => {
   });
 
   test("未知の type や null は何もしない", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.fetchCalls.length;
 
     h.ws.emit(null);

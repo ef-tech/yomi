@@ -14,7 +14,24 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  type BootOptions,
+  bootApp,
+  resetAppEnvironment,
+} from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は**どのファイルが開くかではない**。`bootApp()` の既定は
+ * **ツリー最初のファイル**で、`defaultTree()` を実サーバの並び（ディレクトリが先）に
+ * 直した結果それは `docs/deep/note.md` になった。以前はここが偶然 `README.md` だったので、
+ * テストは**何も指定せずに README を前提**に書かれていた。前提を明示に変えれば、
+ * fixture の並びが変わっても壊れない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -62,7 +79,7 @@ const openState = () => ({
 
 describe("重なったオーバーレイの Esc (Issue #112)", () => {
   test("Esc 1 回で最前面だけが閉じる（クイックオープン + 競合ダイアログ）", async () => {
-    h = await bootApp();
+    h = await boot();
     open("quickOpen");
     open("conflictDiff");
 
@@ -75,7 +92,7 @@ describe("重なったオーバーレイの Esc (Issue #112)", () => {
   });
 
   test("Esc 1 回で最前面だけが閉じる（sidebar + 外部リンクバナー）", async () => {
-    h = await bootApp();
+    h = await boot();
     open("sidebar");
     open("banner");
 
@@ -87,7 +104,7 @@ describe("重なったオーバーレイの Esc (Issue #112)", () => {
   });
 
   test("Esc 1 回で最前面だけが閉じる（sidebar + ⋮ メニュー）", async () => {
-    h = await bootApp();
+    h = await boot();
     open("sidebar");
     open("overflowMenu");
 
@@ -99,7 +116,7 @@ describe("重なったオーバーレイの Esc (Issue #112)", () => {
   });
 
   test("3 枚重なっても 1 回に 1 枚ずつ手前から閉じる", async () => {
-    h = await bootApp();
+    h = await boot();
     open("sidebar");
     open("quickOpen");
     open("conflictDiff");
@@ -119,7 +136,7 @@ describe("Esc の消費 (Issue #112)", () => {
   // 各ハンドラが `preventDefault()` し、先頭で `defaultPrevented` を見て譲ることで
   // 「1 イベントにつき 1 枚」が**登録順と無関係に**決まる
   test("Esc を処理したら必ず消費する（後続のハンドラが 2 枚目を閉じない）", async () => {
-    h = await bootApp();
+    h = await boot();
     open("sidebar");
 
     const ev = new h.window.KeyboardEvent("keydown", {
@@ -134,7 +151,7 @@ describe("Esc の消費 (Issue #112)", () => {
   });
 
   test("ツリーの新規入力欄を Esc で閉じても、背後の sidebar は残る", async () => {
-    h = await bootApp({ mobile: true });
+    h = await boot({ mobile: true });
     open("sidebar");
     h.click(h.el("tree-new-file"));
     await h.flush();
@@ -161,7 +178,7 @@ describe("重なりを解いたあとのフォーカス (Issue #112)", () => {
    * フォーカスが外れて落ちた）。
    */
   test("競合ダイアログを閉じたら、下のクイックオープンに操作が戻る", async () => {
-    h = await bootApp();
+    h = await boot();
 
     // 外部でファイルが書き換わった状態を作り、保存して競合させる
     h.click(h.el("edit-btn"));
@@ -202,7 +219,7 @@ describe("重なりを解いたあとのフォーカス (Issue #112)", () => {
 
 describe("全画面モーダルが開いている間のショートカット (Issue #112)", () => {
   test("競合ダイアログの裏でクイックオープンが開かない", async () => {
-    h = await bootApp();
+    h = await boot();
     open("conflictDiff");
 
     pressCtrlP();
@@ -215,7 +232,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
 
   test("競合ダイアログの裏で TOC が開かない", async () => {
     // TOC は「ファイルを開いている」ことが前提（`state.currentPath` を見る）
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md" });
     open("conflictDiff");
 
     pressCtrlShiftO();
@@ -225,7 +242,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
   });
 
   test("競合ダイアログの裏で保存が走らない", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md" });
     h.el<HTMLButtonElement>("edit-btn").click();
     await h.flush();
     const before = h.fetchCalls.length;
@@ -239,7 +256,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
   });
 
   test("クイックオープン自身のトグルは通る（自分が最前面なら閉じられる）", async () => {
-    h = await bootApp();
+    h = await boot();
     pressCtrlP();
     await h.flush();
     expect(quickOpen().hidden).toBe(false);
@@ -250,7 +267,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
   });
 
   test("抑止したショートカットはブラウザ既定にも渡さない", async () => {
-    h = await bootApp();
+    h = await boot();
     open("conflictDiff");
 
     // **抑止するときも奪う。** 奪わないと `Ctrl/Cmd+P` はブラウザの印刷ダイアログ、
@@ -272,7 +289,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
   });
 
   test("全画面でないもの（sidebar・⋮ メニュー）はショートカットを塞がない", async () => {
-    h = await bootApp();
+    h = await boot();
     open("sidebar");
     open("overflowMenu");
 
@@ -296,7 +313,7 @@ describe("全画面モーダルが開いている間のショートカット (Is
  */
 describe("スマホ幅の全画面 TOC (Issue #135)", () => {
   test("Esc で閉じる", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
     open("tocPanel");
 
     pressEsc();
@@ -308,7 +325,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
    * TOC が最前面を占め続けて sidebar が閉じられなくなる。
    */
   test("TOC を閉じたら、次の Esc で背後の sidebar が閉じる", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
     open("sidebar");
     open("tocPanel");
 
@@ -328,7 +345,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
    * 返し、**上に見えているクイックオープンが `Esc` で閉じられなくなる**。
    */
   test("TOC の上に開いたクイックオープンが先に閉じる", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
     open("tocPanel");
     open("quickOpen");
 
@@ -346,7 +363,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
    * TOC が「塞ぐ層」になった瞬間に**開いた TOC を同じキーで閉じられなくなる**。
    */
   test("TOC が開いていても Ctrl/Cmd+Shift+O で閉じられる", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
 
     // **本来の導線で開ける。** `hidden` を直接外すと `state.tocVisible` が立たず、
     // トグルが「閉じる」ではなく「開く」に倒れて、この検証が成立しない
@@ -365,7 +382,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
    * `Ctrl/Cmd+P` も `shortcutsBlocked` を通るので、`true` にすると塞がれる。
    */
   test("TOC が開いていても Ctrl/Cmd+P でクイックオープンを開ける", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
     open("tocPanel");
 
     pressCtrlP();
@@ -382,7 +399,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
    * 表の値が変わったときに気づけるようにしておく。
    */
   test("TOC が開いていても Ctrl/Cmd+S で保存できる", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md" });
     h.el<HTMLButtonElement>("edit-btn").click();
     await h.flush();
     h.el<HTMLTextAreaElement>("editor").value = "# 変更\n";
@@ -399,7 +416,7 @@ describe("スマホ幅の全画面 TOC (Issue #135)", () => {
 
   /** 競合ダイアログ（70）は TOC より手前。開いている間は TOC の Esc を通さない。 */
   test("競合ダイアログの裏の TOC は Esc で閉じない", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    h = await boot({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
     open("tocPanel");
     open("conflictDiff");
 

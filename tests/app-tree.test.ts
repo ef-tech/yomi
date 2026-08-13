@@ -9,10 +9,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AppHarness,
+  type BootOptions,
   bootApp,
   resetAppEnvironment,
   type TreeNode,
 } from "./helpers/app-harness.ts";
+
+/**
+ * **ルート直下の `README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は**ディレクトリの開閉**で、「起動直後はどこも開いていない」ことを
+ * 何度も見る。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()` を実サーバの
+ * 並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になり、**祖先の
+ * `docs` / `docs/deep` が自動で開く**（`expandAncestors`）。
+ *
+ * それは正しい挙動だが、ここで見たいのは「自動で開かない状態からの開閉」なので、
+ * **祖先を持たないファイルを開いて**起点を揃える。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -37,7 +52,7 @@ function isDirOpen(harness: AppHarness, path: string): boolean {
 
 describe("ツリー描画", () => {
   test("起動時に /api/tree を 1 回取得し、ファイルとディレクトリを描画する", async () => {
-    h = await bootApp();
+    h = await boot();
 
     const treeCalls = h.fetchCalls.filter((c) => c.url.startsWith("/api/tree"));
     expect(treeCalls).toHaveLength(1);
@@ -49,7 +64,7 @@ describe("ツリー描画", () => {
   });
 
   test("aria-busy と読み込み中プレースホルダを描画後に外す", async () => {
-    h = await bootApp();
+    h = await boot();
     const tree = h.el("tree");
     expect(tree.hasAttribute("aria-busy")).toBe(false);
     // data-i18n が残っていると言語切替でツリーが loading 文言に潰される (Issue #48 の回帰)
@@ -57,13 +72,13 @@ describe("ツリー描画", () => {
   });
 
   test("初期状態ではルート直下だけが開いている", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(isDirOpen(h, "docs")).toBe(false);
     expect(isDirOpen(h, "docs/deep")).toBe(false);
   });
 
   test("起動時に /api/tree が失敗したら、ツリー領域にエラーを出し status は error になる", async () => {
-    h = await bootApp({
+    h = await boot({
       intercept: (url) =>
         url.startsWith("/api/tree") ? { status: 500, body: { error: "boom" } } : undefined,
     });
@@ -80,7 +95,7 @@ describe("ツリー描画", () => {
 
 describe("ディレクトリの開閉", () => {
   test("クリックで開閉が切り替わり、localStorage に永続する", async () => {
-    h = await bootApp();
+    h = await boot();
 
     h.click(h.treeItem("docs"));
     await h.flush();
@@ -94,7 +109,7 @@ describe("ディレクトリの開閉", () => {
   });
 
   test("localStorage に保存された開閉状態を起動時に復元する", async () => {
-    h = await bootApp({
+    h = await boot({
       storage: { [OPEN_DIRS_KEY]: JSON.stringify(["", "docs", "docs/deep"]) },
     });
     expect(isDirOpen(h, "docs")).toBe(true);
@@ -102,7 +117,7 @@ describe("ディレクトリの開閉", () => {
   });
 
   test("ファイルを開くと祖先ディレクトリが自動で開く", async () => {
-    h = await bootApp({ url: "http://localhost:3944/?path=docs/deep/note.md" });
+    h = await boot({ url: "http://localhost:3944/?path=docs/deep/note.md" });
     expect(isDirOpen(h, "docs")).toBe(true);
     expect(isDirOpen(h, "docs/deep")).toBe(true);
   });
@@ -110,7 +125,7 @@ describe("ディレクトリの開閉", () => {
 
 describe("ツリーツールバー", () => {
   test("「すべて開く」で全ディレクトリが開き、永続する", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("tree-expand-all"));
     await h.flush();
 
@@ -121,7 +136,7 @@ describe("ツリーツールバー", () => {
   });
 
   test("「すべて閉じる」でルート直下だけの状態に戻る", async () => {
-    h = await bootApp({
+    h = await boot({
       storage: { [OPEN_DIRS_KEY]: JSON.stringify(["", "docs", "docs/deep"]) },
     });
     h.click(h.el("tree-collapse-all"));
@@ -139,7 +154,7 @@ describe("ツリーツールバー", () => {
       path: "",
       children: [{ type: "file", name: "a.md", path: "a.md" }],
     };
-    h = await bootApp({
+    h = await boot({
       tree: flat,
       files: { "a.md": { raw: "# a\n", html: "<h1>a</h1>", sha: "sha-a" } },
     });
@@ -152,7 +167,7 @@ describe("ツリーツールバー", () => {
 
 describe("ファイル選択", () => {
   test("クリックしたファイルだけが is-selected になる", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(h.treeItem("README.md").classList.contains("is-selected")).toBe(true);
 
     h.click(h.treeItem("docs/guide.md"));
@@ -165,7 +180,7 @@ describe("ファイル選択", () => {
 
 describe("新規 Markdown 作成", () => {
   test("ツールバーの新規作成でルート直下に入力欄が出る", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("tree-new-file"));
     await h.flush();
 
@@ -176,7 +191,7 @@ describe("新規 Markdown 作成", () => {
   });
 
   test("ディレクトリの「＋」は そのディレクトリを開いて入力欄を子に置く", async () => {
-    h = await bootApp();
+    h = await boot();
     const addBtn = h.q<HTMLButtonElement>('#tree .dir-new-btn[data-dir-path="docs"]');
     h.click(addBtn);
     await h.flush();
@@ -190,7 +205,7 @@ describe("新規 Markdown 作成", () => {
   });
 
   test("Esc で入力欄を閉じ、POST は発生しない", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("tree-new-file"));
     await h.flush();
 
@@ -203,7 +218,7 @@ describe("新規 Markdown 作成", () => {
   });
 
   test("Enter で拡張子を補完して POST し、ツリーを取り直して編集モードで開く", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("tree-new-file"));
     await h.flush();
 
@@ -235,7 +250,7 @@ describe("新規 Markdown 作成", () => {
   });
 
   test("パス区切りを含む名前は不正として POST しない", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("tree-new-file"));
     await h.flush();
 
@@ -249,7 +264,7 @@ describe("新規 Markdown 作成", () => {
   });
 
   test("作成に失敗したら status がエラーになり、編集モードに入らない", async () => {
-    h = await bootApp();
+    h = await boot();
     h.intercept = (url) =>
       url.startsWith("/api/file/create")
         ? { status: 409, body: { error: "exists", code: "already_exists" } }
@@ -285,7 +300,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   }
 
   test("変わっていないノードの DOM 要素は作り直されない", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.treeItem("README.md");
     const dirBefore = h.treeItem("docs");
 
@@ -297,7 +312,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("追加されたファイルだけが増え、既存ノードは据え置かれる", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.treeItem("README.md");
     const countBefore = h.qa(".tree-item").length;
 
@@ -322,7 +337,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
    * - **status のファイル数**（`app.js` が `fileButtons.size` を出す）
    */
   test("削除されたファイルは DOM からもマップからも消える", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.treeItem("README.md"));
     await h.flush(6);
     expect(h.el("current-path").textContent).toBe("README.md");
@@ -338,7 +353,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("ディレクトリごと消すと、その中のファイルもマップから消える", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.treeItem("docs"));
     await h.flush();
     h.click(h.treeItem("docs/guide.md"));
@@ -356,7 +371,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("並び順が変わっても新しい要素を作らずに並べ替える", async () => {
-    h = await bootApp();
+    h = await boot();
     const readme = h.treeItem("README.md");
 
     const next = structuredClone(h.tree);
@@ -369,7 +384,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("開いていたディレクトリは開いたまま残る", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.treeItem("docs"));
     await h.flush();
     expect(isDirOpen(h, "docs")).toBe(true);
@@ -385,7 +400,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   test("ファイル → ディレクトリに変わっても、新しいノードがマップに残る", async () => {
     // **DOM だけ見ていると素通りする。** `dropSubtree` がパスだけで消していたころは、
     // 先に登録された新ノードの登録まで落としており、「すべて開く」で開かなかった
-    h = await bootApp();
+    h = await boot();
 
     const next = structuredClone(h.tree);
     next.children = (next.children ?? []).map((c) =>
@@ -407,7 +422,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("ディレクトリ → ファイルに変わっても、新しいノードがマップに残る", async () => {
-    h = await bootApp();
+    h = await boot();
 
     // 開ける中身を用意しておく（無いと遷移そのものが失敗して判定にならない）
     h.files.docs = { raw: "# docs\n", html: "<h1>docs</h1>", sha: "sha-docs" };
@@ -428,7 +443,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   test("先頭のファイルを消しても、後続のノードは作り直されない", async () => {
     // **付け替えを起こさないこと。** 素朴な実装だと、消えたカーソルを飛ばせずに
     // 後続の兄弟を全部 `insertBefore` で前へ寄せる（2,000 件で 75ms 掛かった）
-    h = await bootApp();
+    h = await boot();
     // 先頭は README.md（file）、その後ろに docs（dir）が並ぶ
     const survivor = h.treeItem("docs");
 
@@ -443,7 +458,7 @@ describe("ツリーの差分更新 (Issue #84)", () => {
   });
 
   test("同じパスがファイルからディレクトリに変わったら作り直す", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.treeItem("README.md");
 
     const next = structuredClone(h.tree);

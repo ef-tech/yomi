@@ -7,7 +7,11 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
+import { bootApp, defaultTree, resetAppEnvironment } from "./helpers/app-harness.ts";
 
 afterEach(resetAppEnvironment);
 
@@ -67,11 +71,62 @@ describe("resetAppEnvironment", () => {
 
   test("boot し直せば再び使える (冪等)", async () => {
     const first = await bootApp();
-    expect(first.el("current-path").textContent).toBe("README.md");
+    // **ツリー最初のファイル**（`defaultTree()` は実サーバと同じくディレクトリが先。Issue #145）
+    expect(first.el("current-path").textContent).toBe("docs/deep/note.md");
     resetAppEnvironment();
 
     const second = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
     expect(second.el("current-path").textContent).toBe("docs/guide.md");
     expect(second.el("preview").innerHTML).toContain("Guide");
+  });
+});
+
+/**
+ * **フェイクサーバが実サーバと違うツリーを返していないこと** (Issue #145)。
+ *
+ * ## なぜ「並び順を目視で揃える」では足りないか
+ *
+ * `defaultTree()` は手書きの fixture なので、**足し引きするたびに崩れうる**。しかも
+ * 崩れても大半のテストは通ってしまい、**実装のバグを見逃す / 無いバグを疑う**という形で
+ * 遠くに出る（#126 の実装中に実際に踏み、切り分けに時間を取られた）。
+ *
+ * ## 実物に通して突き合わせる
+ *
+ * 並び順を自前で書き写すと「同じ勘違いで書いて読む」ことになるので、**fixture が挙げた
+ * パスで実ファイルを作り、`scanMarkdownTree` に走らせた結果と比べる**。これなら
+ * 並び順（ディレクトリが先・名前順）だけでなく、`pruneEmpty` の意味論まで一度に守れる。
+ */
+describe("defaultTree は実サーバの走査結果と一致する (Issue #145)", () => {
+  /** `name` / `path` / `type` / 子の順序だけを見る形に落とす（葉の `children` の有無は揃える）。 */
+  const shape = (n: TreeNode): unknown => ({
+    name: n.name,
+    path: n.path,
+    type: n.type,
+    children: (n.children ?? []).map(shape),
+  });
+
+  /** ツリーに載っているファイルの path を全部集める。 */
+  const filePaths = (n: TreeNode, out: string[] = []): string[] => {
+    if (n.type === "file") out.push(n.path);
+    for (const c of n.children ?? []) filePaths(c, out);
+    return out;
+  };
+
+  test("同じパス群を実ファイルで走査すると、同じ形になる", async () => {
+    const fixture = defaultTree() as TreeNode;
+    const dir = await mkdtemp(join(tmpdir(), "yomi-harness-tree-"));
+    try {
+      for (const rel of filePaths(fixture)) {
+        const abs = join(dir, rel);
+        await mkdir(dirname(abs), { recursive: true });
+        await writeFile(abs, "# x\n");
+      }
+      const scanned = await scanMarkdownTree(dir);
+      // **root の `name` だけは比べない** —— fixture は `""`、scanner は `"."` を使う。
+      // 見たいのは**子の並びと構造**なので、そこを揃えてから比較する
+      expect(shape({ ...fixture, name: "." })).toEqual(shape(scanned));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

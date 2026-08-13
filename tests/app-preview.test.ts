@@ -8,11 +8,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AppHarness,
+  type BootOptions,
   bootApp,
   type FakeFile,
   mermaidStub,
   resetAppEnvironment,
 } from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は**どのファイルが開くかではない**。`bootApp()` の既定は
+ * **ツリー最初のファイル**で、`defaultTree()` を実サーバの並び（ディレクトリが先）に
+ * 直した結果それは `docs/deep/note.md` になった。以前はここが偶然 `README.md` だったので、
+ * テストは**何も指定せずに README を前提**に書かれていた。前提を明示に変えれば、
+ * fixture の並びが変わっても壊れない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -41,14 +54,14 @@ function themeBtn(harness: AppHarness, mode: string) {
 
 describe("表示モード", () => {
   test("既定は preview で、aria-selected が同期している", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(h.el("content-body").dataset.mode).toBe("preview");
     expect(viewBtn(h, "preview").getAttribute("aria-selected")).toBe("true");
     expect(viewBtn(h, "md").getAttribute("aria-selected")).toBe("false");
   });
 
   test("切り替えると data-mode / aria-selected / localStorage が揃って変わる", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(viewBtn(h, "split"));
     await h.flush();
 
@@ -59,18 +72,18 @@ describe("表示モード", () => {
   });
 
   test("保存済みの表示モードを起動時に復元する", async () => {
-    h = await bootApp({ storage: { [VIEW_KEY]: "md" } });
+    h = await boot({ storage: { [VIEW_KEY]: "md" } });
     expect(h.el("content-body").dataset.mode).toBe("md");
     expect(viewBtn(h, "md").getAttribute("aria-selected")).toBe("true");
   });
 
   test("不正な保存値は無視して preview に落とす", async () => {
-    h = await bootApp({ storage: { [VIEW_KEY]: "bogus" } });
+    h = await boot({ storage: { [VIEW_KEY]: "bogus" } });
     expect(h.el("content-body").dataset.mode).toBe("preview");
   });
 
   test("同じモードを押しても再描画しない", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = mermaidStub.runCalls.length;
     h.click(viewBtn(h, "preview"));
     await h.flush();
@@ -88,22 +101,22 @@ describe("Mermaid の描画", () => {
   };
 
   test("mermaid ブロックがあれば表示時に run する", async () => {
-    h = await bootApp({ files: mermaidFile });
+    h = await boot({ files: mermaidFile });
     expect(mermaidStub.runCalls.length).toBeGreaterThan(0);
   });
 
   test("mermaid ブロックが無ければ run しない", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(mermaidStub.runCalls).toHaveLength(0);
   });
 
   test("md モードでは run しない", async () => {
-    h = await bootApp({ files: mermaidFile, storage: { [VIEW_KEY]: "md" } });
+    h = await boot({ files: mermaidFile, storage: { [VIEW_KEY]: "md" } });
     expect(mermaidStub.runCalls).toHaveLength(0);
   });
 
   test("描画に失敗したら status をエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     mermaidStub.failNextRun = true;
     h.el("preview").innerHTML = '<pre class="mermaid">graph LR</pre>';
     h.click(viewBtn(h, "split"));
@@ -116,7 +129,7 @@ describe("Mermaid の描画", () => {
 
 describe("テーマ", () => {
   test("auto は data-theme を付けず、light / dark は付ける", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(h.document.documentElement.hasAttribute("data-theme")).toBe(false);
 
     h.click(themeBtn(h, "dark"));
@@ -136,7 +149,7 @@ describe("テーマ", () => {
   // 起動時は applyThemeMode → applyLang の順なので初期表示は正しく、**テーマを操作した
   // 後だけ**壊れる（気づきにくい）。両方向とも固定する。
   test("テーマを切り替えても言語トグルの aria-pressed が壊れない (Issue #85)", async () => {
-    h = await bootApp();
+    h = await boot();
     const langPressed = () =>
       [...h.document.querySelectorAll<HTMLElement>(".lang-toggle-btn")].map(
         (b) => `${b.dataset.langMode}=${b.getAttribute("aria-pressed")}`,
@@ -154,7 +167,7 @@ describe("テーマ", () => {
   });
 
   test("言語を切り替えてもテーマトグルの aria-pressed が壊れない (Issue #85)", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(themeBtn(h, "dark"));
     await h.flush();
 
@@ -170,7 +183,7 @@ describe("テーマ", () => {
   });
 
   test("テーマ変更で Mermaid を初期化し直し、プレビューを再描画する", async () => {
-    h = await bootApp({
+    h = await boot({
       files: {
         "README.md": {
           raw: "x",
@@ -190,7 +203,7 @@ describe("テーマ", () => {
   });
 
   test("auto のときシステムのダーク切替に追従して Mermaid を初期化し直す", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = mermaidStub.initializeCalls.length;
 
     h.setDark(true);
@@ -209,7 +222,7 @@ describe("テーマ", () => {
 
 describe("目次 (TOC)", () => {
   test("開くとパネルが出て見出しツリーを描画し、localStorage に永続する", async () => {
-    h = await bootApp(headingFixture());
+    h = await boot(headingFixture());
     expect(h.el("toc-panel").hidden).toBe(true);
 
     h.click(h.el("toc-btn"));
@@ -222,7 +235,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("既定の展開レベルは h3 までで、切り替えると h4 以降も出る", async () => {
-    h = await bootApp({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
+    h = await boot({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
     expect(h.qa("#toc-list .toc-entry")).toHaveLength(3);
 
     h.click(h.el("toc-expand-toggle"));
@@ -239,7 +252,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("見出しが無ければ空表示にする", async () => {
-    h = await bootApp({
+    h = await boot({
       files: { "README.md": { raw: "text", html: "<p>text</p>", sha: "s1" } },
       storage: { [TOC_VISIBLE_KEY]: "true" },
     });
@@ -248,7 +261,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("見出しをクリックするとその要素へスクロールする", async () => {
-    h = await bootApp({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
+    h = await boot({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
     h.scrollIntoViewCalls.length = 0;
 
     const entries = h.qa("#toc-list .toc-entry");
@@ -262,7 +275,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("閉じると IntersectionObserver を破棄する", async () => {
-    h = await bootApp({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
+    h = await boot({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
     const observer = h.observers.at(-1);
     expect(observer?.observed.length).toBeGreaterThan(0);
 
@@ -275,7 +288,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("交差した見出しのうち上端に近いものが is-active になる", async () => {
-    h = await bootApp({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
+    h = await boot({ ...headingFixture(), storage: { [TOC_VISIBLE_KEY]: "true" } });
     const observer = h.observers.at(-1);
     if (!observer) throw new Error("IntersectionObserver が作られていません");
 
@@ -291,7 +304,7 @@ describe("目次 (TOC)", () => {
   });
 
   test("md モードで開くと一時的に preview へ切り替え、閉じると元へ戻る", async () => {
-    h = await bootApp({ ...headingFixture(), storage: { [VIEW_KEY]: "md" } });
+    h = await boot({ ...headingFixture(), storage: { [VIEW_KEY]: "md" } });
     expect(h.el("content-body").dataset.mode).toBe("md");
 
     h.click(h.el("toc-btn"));
@@ -318,7 +331,7 @@ describe("タスクリストのチェック", () => {
   });
 
   test("チェックすると該当行だけを反転した body を POST する", async () => {
-    h = await bootApp({ files: taskFixture() });
+    h = await boot({ files: taskFixture() });
     const boxes = h.qa<HTMLInputElement>('#preview input[type="checkbox"]');
     expect(boxes.map((b) => b.dataset.taskIndex)).toEqual(["0", "1"]);
 
@@ -338,7 +351,7 @@ describe("タスクリストのチェック", () => {
   });
 
   test("保存に失敗したらチェック状態を元に戻す", async () => {
-    h = await bootApp({ files: taskFixture() });
+    h = await boot({ files: taskFixture() });
     h.intercept = (url, method) =>
       url === "/api/file" && method === "POST"
         ? { status: 500, body: { error: "boom" } }
@@ -355,7 +368,7 @@ describe("タスクリストのチェック", () => {
   });
 
   test("編集モード中は disabled になり、抜けると戻る", async () => {
-    h = await bootApp({ files: taskFixture() });
+    h = await boot({ files: taskFixture() });
     const box = h.qa<HTMLInputElement>('#preview input[type="checkbox"]')[0];
     if (!box) throw new Error("チェックボックスがありません");
     expect(box.disabled).toBe(false);

@@ -15,8 +15,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AppHarness,
   bootApp,
+  defaultTree,
   resetAppEnvironment,
-  type TreeNode,
 } from "./helpers/app-harness.ts";
 
 let h: AppHarness;
@@ -24,37 +24,17 @@ let h: AppHarness;
 afterEach(resetAppEnvironment);
 
 /**
- * **サーバの並び順に従った fixture** を使う（ディレクトリが先、その中で名前順）。
+ * **ハーネスの既定ツリーをそのまま使う** (Issue #145)。
  *
- * ハーネスの `defaultTree()` はファイルを先に置いており、**実サーバが返さない並び**に
- * なっている。差分の挿入位置は「渡された子リストが整列済み」を前提にする
- * (`public/tree-diff.js`) ので、それで測ると位置がずれて見える —— 実装ではなく
- * fixture の問題なので、ここは実物と同じ並びを自前で用意する。
+ * 以前はここに `sortedTree()` を自前で持っていた —— `defaultTree()` がファイルを
+ * ディレクトリより前に置いており、**実サーバが返さない並び**だったため。差分の挿入位置は
+ * 「渡された子リストが整列済み」を前提にする (`public/tree-diff.js`) ので、それで測ると
+ * 位置がずれて見えた。
+ *
+ * **#145 で `defaultTree()` 自体を実サーバの並びに直した**ので、回避策は要らなくなった。
+ * 同じ形を 2 か所に持つと片方が古くなるので、こちらを消して既定へ寄せる。
  */
-function sortedTree(): TreeNode {
-  return {
-    type: "dir",
-    name: "",
-    path: "",
-    children: [
-      {
-        type: "dir",
-        name: "docs",
-        path: "docs",
-        children: [
-          {
-            type: "dir",
-            name: "deep",
-            path: "docs/deep",
-            children: [{ type: "file", name: "note.md", path: "docs/deep/note.md" }],
-          },
-          { type: "file", name: "guide.md", path: "docs/guide.md" },
-        ],
-      },
-      { type: "file", name: "README.md", path: "README.md" },
-    ],
-  };
-}
+const sortedTree = defaultTree;
 
 /** `/api/tree` を引いた回数。**差分が効いていれば増えない。** */
 function treeGets(harness: AppHarness): number {
