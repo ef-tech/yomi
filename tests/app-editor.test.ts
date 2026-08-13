@@ -6,7 +6,25 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  type BootOptions,
+  bootApp,
+  resetAppEnvironment,
+} from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は「開いているファイルを編集・保存する」ことで、**どのファイルが
+ * 開くかは主題ではない**。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()`
+ * を実サーバの並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になった。
+ *
+ * 以前はここが偶然 `README.md` だったので、テストは**何も指定せずに README を前提**に
+ * 書かれていた。前提を明示に変えれば、fixture の並びが変わっても壊れない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -31,7 +49,7 @@ async function enterEdit(harness: AppHarness) {
 
 describe("編集モードの出入り", () => {
   test("編集ボタンで editor が現れ、TOC は一時的に無効になる", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(h.el<HTMLTextAreaElement>("editor").hidden).toBe(true);
 
     await enterEdit(h);
@@ -47,7 +65,7 @@ describe("編集モードの出入り", () => {
   });
 
   test("未編集のまま完了すると保存せずに編集モードを抜ける", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     h.click(h.el("edit-btn"));
     await h.flush();
@@ -59,7 +77,7 @@ describe("編集モードの出入り", () => {
   });
 
   test("開いているファイルが無ければ編集モードに入れない", async () => {
-    h = await bootApp({ tree: { type: "dir", name: "", path: "", children: [] }, files: {} });
+    h = await boot({ tree: { type: "dir", name: "", path: "", children: [] }, files: {} });
     expect(h.el<HTMLButtonElement>("edit-btn").disabled).toBe(true);
 
     h.click(h.el("edit-btn"));
@@ -68,7 +86,7 @@ describe("編集モードの出入り", () => {
   });
 
   test("別ファイルを開くと編集モードは解除される", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
 
     h.click(h.treeItem("docs/guide.md"));
@@ -81,7 +99,7 @@ describe("編集モードの出入り", () => {
 
 describe("dirty 表示", () => {
   test("内容を変えると dirty インジケータが出て、戻すと消える", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     const original = h.files["README.md"]?.raw ?? "";
 
@@ -94,7 +112,7 @@ describe("dirty 表示", () => {
   });
 
   test("dirty なら beforeunload を preventDefault する", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
 
     const clean = new h.window.Event("beforeunload", { cancelable: true });
@@ -110,7 +128,7 @@ describe("dirty 表示", () => {
 
 describe("保存", () => {
   test("完了ボタンで baseSha 付きの POST を送り、成功したら編集モードを抜ける", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "# 新しい内容\n");
 
@@ -129,7 +147,7 @@ describe("保存", () => {
   });
 
   test("保存に成功するとプレビューと md ソースがサーバ応答で置き換わる", async () => {
-    h = await bootApp();
+    h = await boot();
     h.renderHtml = (raw) => `<h1 id="saved">${raw.trim()}</h1>`;
     await enterEdit(h);
     type(h, "保存後\n");
@@ -144,7 +162,7 @@ describe("保存", () => {
   });
 
   test("Ctrl/Cmd+S は編集モードのときだけ保存する", async () => {
-    h = await bootApp();
+    h = await boot();
     h.keydown(h.document, { key: "s", code: "KeyS", metaKey: true });
     await h.flush();
     expect(savePosts(h)).toHaveLength(0);
@@ -157,7 +175,7 @@ describe("保存", () => {
   });
 
   test("2 回目の保存は 1 回目で返ってきた sha を baseSha に使う", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "1回目\n");
     h.keydown(h.document, { key: "s", code: "KeyS", ctrlKey: true });
@@ -178,7 +196,7 @@ describe("保存", () => {
   });
 
   test("保存に失敗したら編集モードを維持し status をエラーにする", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "だめ\n");
     h.intercept = (url, method) =>
@@ -195,7 +213,7 @@ describe("保存", () => {
   });
 
   test("Tab で 2 スペースを挿入し dirty になる", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     const editor = h.el<HTMLTextAreaElement>("editor");
     editor.value = "ab";
@@ -212,7 +230,7 @@ describe("保存", () => {
 
 describe("破棄と離脱の確認", () => {
   test("dirty なら破棄ボタンで確認し、キャンセルすると編集を続ける", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "捨てたくない\n");
 
@@ -226,7 +244,7 @@ describe("破棄と離脱の確認", () => {
   });
 
   test("確認を了承すると保存せずに編集モードを抜ける", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "捨てる\n");
 
@@ -239,7 +257,7 @@ describe("破棄と離脱の確認", () => {
   });
 
   test("dirty で別ファイルへ移ろうとすると確認し、キャンセルすると遷移しない", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "未保存\n");
     h.confirmResult = false;
@@ -255,7 +273,7 @@ describe("破棄と離脱の確認", () => {
   });
 
   test("dirty でなければ確認せずに遷移する", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
 
     h.click(h.treeItem("docs/guide.md"));
@@ -282,7 +300,7 @@ describe("保存競合 (409)", () => {
   }
 
   test("競合するとバナーが出て、編集内容は保持される", async () => {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h);
 
     expect(h.el("conflict-banner").hidden).toBe(false);
@@ -292,7 +310,7 @@ describe("保存競合 (409)", () => {
   });
 
   test("「サーバ版を採用」でサーバ内容に置き換わり dirty が落ちる", async () => {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h);
 
     h.click(h.el("conflict-take-server"));
@@ -308,7 +326,7 @@ describe("保存競合 (409)", () => {
   });
 
   test("「ローカル版で上書き」は baseSha 無しで再送する", async () => {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h);
 
     h.click(h.el("conflict-overwrite"));
@@ -324,7 +342,7 @@ describe("保存競合 (409)", () => {
   });
 
   test("「閉じる」はバナーだけ閉じ、編集内容もサーバ内容も変えない", async () => {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h);
 
     h.click(h.el("conflict-dismiss"));
@@ -367,14 +385,14 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
     });
 
   async function openDiff(local: string, server: string) {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h, local, server);
     h.click(h.el("conflict-show-diff"));
     await h.flush();
   }
 
   test("バナーの「差分を見る」でダイアログが開く", async () => {
-    h = await bootApp();
+    h = await boot();
     await provokeConflict(h, "ローカル版\n", "サーバ版\n");
     expect(dialog().hidden).toBe(true);
 
@@ -517,7 +535,7 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
 
     // 最前面 (z-index 70) なので、1 回の Esc で背後まで閉じてはいけない
     test("Esc は差分ダイアログだけを閉じ、背後の sidebar は開いたまま", async () => {
-      h = await bootApp({ mobile: true });
+      h = await boot({ mobile: true });
       h.click(h.el("menu-btn"));
       expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
       await provokeConflict(h, "ローカル版\n", "サーバ版\n");
@@ -652,7 +670,7 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
     }
 
     test("チェックを反映した本文をローカル版として差分に出す（エディタの空文字ではない）", async () => {
-      h = await bootApp();
+      h = await boot();
       await provokeCheckboxConflict(h);
       expect(h.el("conflict-banner").hidden).toBe(false);
       expect(h.el<HTMLTextAreaElement>("editor").value).toBe(""); // エディタは空のまま
@@ -668,7 +686,7 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
     });
 
     test("編集モードでなくても「強制上書き」が効く（無言で終わらない）", async () => {
-      h = await bootApp();
+      h = await boot();
       await provokeCheckboxConflict(h);
       h.click(h.el("conflict-show-diff"));
       await h.flush();
@@ -726,7 +744,7 @@ describe("保存競合の差分ダイアログ (Issue #57)", () => {
 
   // サーバ側でファイルが消えていると raw が null で返る
   test("サーバ側のファイルが消えていても壊れない", async () => {
-    h = await bootApp();
+    h = await boot();
     await enterEdit(h);
     type(h, "ローカル版\n");
     h.intercept = (url, method) => {

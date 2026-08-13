@@ -286,27 +286,43 @@ const DARK_MEDIA = "(prefers-color-scheme: dark)";
 
 let bootCounter = 0;
 
+/**
+ * フェイクサーバが `/api/tree` で返すツリー。
+ *
+ * **並びは `src/scanner.ts` の `sortTree` に従う** —— ディレクトリが先、その中で名前順
+ * (Issue #145)。以前はファイルを先に置いており、**実サーバが返さない形**だった。
+ *
+ * ## 実サーバと違う並びを返す fake は罠になる
+ *
+ * `public/tree-diff.js` の挿入位置は「渡された子リストが整列済み」を前提にしている。
+ * 整列していない fixture で測ると**実装は正しいのに位置がずれて見える**（#126 の実装中に
+ * 実際に踏み、切り分けに時間を取られた）。逆に、**実物で壊れていても気づけない**方向にも
+ * 効くので、どちらに転んでも害になる。
+ *
+ * この並びは `tests/app-harness.test.ts` が `sortTree` と同じ規則で機械的に検証している
+ * （手で並べ直したときに崩れないようにするため）。
+ */
 export function defaultTree(): TreeNode {
   return {
     type: "dir",
     name: "",
     path: "",
     children: [
-      { type: "file", name: "README.md", path: "README.md" },
       {
         type: "dir",
         name: "docs",
         path: "docs",
         children: [
-          { type: "file", name: "guide.md", path: "docs/guide.md" },
           {
             type: "dir",
             name: "deep",
             path: "docs/deep",
             children: [{ type: "file", name: "note.md", path: "docs/deep/note.md" }],
           },
+          { type: "file", name: "guide.md", path: "docs/guide.md" },
         ],
       },
+      { type: "file", name: "README.md", path: "README.md" },
     ],
   };
 }

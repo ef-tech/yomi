@@ -7,7 +7,24 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type AppHarness, bootApp, resetAppEnvironment } from "./helpers/app-harness.ts";
+import {
+  type AppHarness,
+  type BootOptions,
+  bootApp,
+  resetAppEnvironment,
+} from "./helpers/app-harness.ts";
+
+/**
+ * **`README.md` を開いた状態で起動する** (Issue #145)。
+ *
+ * このファイルの主題は**どのファイルが開くかではない**。`bootApp()` の既定は
+ * **ツリー最初のファイル**で、`defaultTree()` を実サーバの並び（ディレクトリが先）に
+ * 直した結果それは `docs/deep/note.md` になった。以前はここが偶然 `README.md` だったので、
+ * テストは**何も指定せずに README を前提**に書かれていた。前提を明示に変えれば、
+ * fixture の並びが変わっても壊れない。
+ */
+const boot = (options: BootOptions = {}) =>
+  bootApp({ url: "http://localhost:3944/?path=README.md", ...options });
 
 let h: AppHarness;
 
@@ -36,7 +53,7 @@ async function open() {
 
 describe("クイックオープン", () => {
   test("Ctrl/Cmd+P で開き、入力欄にフォーカスが移る", async () => {
-    h = await bootApp();
+    h = await boot();
     expect(panel().hidden).toBe(true);
 
     await open();
@@ -46,14 +63,14 @@ describe("クイックオープン", () => {
   });
 
   test("もう一度押すと閉じる", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     await open();
     expect(panel().hidden).toBe(true);
   });
 
   test("Esc で閉じる", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     h.keydown(input(), { key: "Escape" });
@@ -62,7 +79,7 @@ describe("クイックオープン", () => {
   });
 
   test("背景をクリックすると閉じる（パネル内は閉じない）", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     h.click(panel());
@@ -71,22 +88,24 @@ describe("クイックオープン", () => {
   });
 
   test("開いた直後は全ファイルが候補に出て、先頭が選択されている", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     // ハーネスの既定 fixture は README.md / docs/guide.md / docs/deep/note.md。
     // クエリが空なら document order (= ツリーの並び) で返る。
+    // **並びは実サーバと同じ「ディレクトリが先」** (Issue #145)。以前は fixture が
+    // ファイルを先に置いていたので `README.md` が先頭だった
     expect(items().map((b) => b.dataset.path)).toEqual([
-      "README.md",
-      "docs/guide.md",
       "docs/deep/note.md",
+      "docs/guide.md",
+      "README.md",
     ]);
-    expect(activeItem()?.dataset.path).toBe("README.md");
+    expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
     expect(activeItem()?.getAttribute("aria-selected")).toBe("true");
   });
 
   test("入力で候補が絞られ、選択は先頭へ戻る", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     typeInto(input(), "readme");
@@ -97,7 +116,7 @@ describe("クイックオープン", () => {
   });
 
   test("一致しなければ空表示にする", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     typeInto(input(), "zzzz");
@@ -109,27 +128,28 @@ describe("クイックオープン", () => {
 
   // **マウスなしで完結する** (DoD 1 行目)
   test("↑↓ で選択が動き、端で循環する", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
-    expect(activeItem()?.dataset.path).toBe("README.md");
+    // 候補はツリー順（ディレクトリが先。Issue #145）
+    expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
 
     h.keydown(input(), { key: "ArrowDown" });
     expect(activeItem()?.dataset.path).toBe("docs/guide.md");
 
     h.keydown(input(), { key: "ArrowDown" });
-    expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
+    expect(activeItem()?.dataset.path).toBe("README.md");
 
     // 末尾から下 → 先頭へ回る
     h.keydown(input(), { key: "ArrowDown" });
-    expect(activeItem()?.dataset.path).toBe("README.md");
+    expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
 
     // 先頭から上 → 末尾へ回る
     h.keydown(input(), { key: "ArrowUp" });
-    expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
+    expect(activeItem()?.dataset.path).toBe("README.md");
   });
 
   test("Enter で選択中のファイルを開き、パネルを閉じる", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     h.keydown(input(), { key: "ArrowDown" }); // docs/guide.md
@@ -141,7 +161,7 @@ describe("クイックオープン", () => {
   });
 
   test("候補をクリックしても開ける", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     const target = items().find((b) => b.dataset.path === "docs/deep/note.md");
@@ -154,7 +174,7 @@ describe("クイックオープン", () => {
   });
 
   test("候補が無いまま Enter を押しても何も起きない", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     typeInto(input(), "zzzz");
     await h.flush();
@@ -171,7 +191,7 @@ describe("クイックオープン", () => {
   // **遷移は navigateTo に委ねているので、未保存確認が従来どおり働く** (DoD 4 行目)。
   // 独自の遷移経路を作っていないことが、この 2 本で担保される。
   test("未保存編集中に開くと確認が出て、キャンセルすれば遷移しない", async () => {
-    h = await bootApp();
+    h = await boot();
     const before = h.el("current-path").textContent;
     h.click(h.el("edit-btn"));
     await h.flush();
@@ -195,7 +215,7 @@ describe("クイックオープン", () => {
   });
 
   test("未保存編集中でも、確認で OK すれば遷移して編集モードを抜ける", async () => {
-    h = await bootApp();
+    h = await boot();
     h.click(h.el("edit-btn"));
     await h.flush();
     typeInto(h.el<HTMLTextAreaElement>("editor"), "編集中");
@@ -216,7 +236,7 @@ describe("クイックオープン", () => {
   // 過去にそれで壊している。クイックオープンは最前面 (z-index 60) なので常に最優先で、
   // 1 回の Esc で背後まで閉じてはいけない。
   test("Esc はクイックオープンだけを閉じ、背後の sidebar は開いたまま", async () => {
-    h = await bootApp({ mobile: true });
+    h = await boot({ mobile: true });
     h.click(h.el("menu-btn"));
     expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
 
@@ -229,7 +249,7 @@ describe("クイックオープン", () => {
   });
 
   test("Esc はクイックオープンだけを閉じ、外部 URL バナーは出たまま", async () => {
-    h = await bootApp();
+    h = await boot();
     const a = h.document.createElement("a");
     a.setAttribute("href", "https://example.com/");
     h.el("preview").appendChild(a);
@@ -245,7 +265,7 @@ describe("クイックオープン", () => {
   });
 
   test("候補ボタンは tab 順から外れている (aria-activedescendant で選択を伝える)", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     expect(items().every((b) => b.tabIndex === -1)).toBe(true);
 
@@ -270,7 +290,7 @@ describe("クイックオープン", () => {
     }
 
     test("Enter でファイルを開かない（変換確定を横取りしない）", async () => {
-      h = await bootApp();
+      h = await boot();
       const before = h.el("current-path").textContent;
       await open();
 
@@ -282,16 +302,16 @@ describe("クイックオープン", () => {
     });
 
     test("↑↓ で選択を動かさない（IME の変換候補を選ばせる）", async () => {
-      h = await bootApp();
+      h = await boot();
       await open();
-      expect(activeItem()?.dataset.path).toBe("README.md");
+      expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
 
       composingKeydown("ArrowDown");
-      expect(activeItem()?.dataset.path).toBe("README.md");
+      expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
     });
 
     test("Esc で閉じない（変換のキャンセルを横取りしない）", async () => {
-      h = await bootApp();
+      h = await boot();
       await open();
 
       composingKeydown("Escape");
@@ -310,7 +330,7 @@ describe("クイックオープン", () => {
   // （jsdom はそのフォーカス挙動を実装していないので、body へ直接キーを送って再現する）
   describe("フォーカスがパネルの外に落ちているとき", () => {
     test("Esc でパネルが閉じ、背後の sidebar は開いたまま", async () => {
-      h = await bootApp({ mobile: true });
+      h = await boot({ mobile: true });
       h.click(h.el("menu-btn"));
       expect(h.el("sidebar").classList.contains("is-open")).toBe(true);
       await open();
@@ -323,9 +343,9 @@ describe("クイックオープン", () => {
     });
 
     test("↑↓ で候補を選び、Enter で開ける", async () => {
-      h = await bootApp();
+      h = await boot();
       await open();
-      expect(activeItem()?.dataset.path).toBe("README.md");
+      expect(activeItem()?.dataset.path).toBe("docs/deep/note.md");
 
       h.keydown(h.document.body, { key: "ArrowDown" });
       expect(activeItem()?.dataset.path).toBe("docs/guide.md");
@@ -336,7 +356,7 @@ describe("クイックオープン", () => {
     });
 
     test("Tab でフォーカスを入力欄へ引き戻す", async () => {
-      h = await bootApp();
+      h = await boot();
       await open();
       // blur でフォーカスが body に落ちた状態を作る（実ブラウザで空白を mousedown した状態）
       input().blur();
@@ -354,7 +374,7 @@ describe("クイックオープン", () => {
   // ——「既定動作を打ち消し、入力欄へ戻す」——を、`defaultPrevented` と、パネル内の別要素から
   // 戻ることの 2 点で見る。
   test("Tab は既定動作を打ち消してフォーカスを入力欄へ戻す", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
 
     const send = (target: EventTarget, shiftKey: boolean) => {
@@ -381,7 +401,7 @@ describe("クイックオープン", () => {
   });
 
   test("候補が無いとき aria-expanded を false にする", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     expect(input().getAttribute("aria-expanded")).toBe("true");
 
@@ -395,7 +415,7 @@ describe("クイックオープン", () => {
   // 戻り先の `#overflow-quick-open` は閉じたメニューの中にいるので `focus()` が空振りする
   // （`isConnected` は true なので素朴なガードではすり抜ける）。実機で `<body>` に落ちた。
   test("⋮ メニューから開いて閉じても、フォーカスが body に落ちない", async () => {
-    h = await bootApp({ mobile: true });
+    h = await boot({ mobile: true });
     h.click(h.el("overflow-btn"));
     h.click(h.el("overflow-quick-open"));
     await h.flush();
@@ -410,7 +430,7 @@ describe("クイックオープン", () => {
   });
 
   test("スマホの ⋮ メニューからも開ける（編集中も含む）", async () => {
-    h = await bootApp({ mobile: true });
+    h = await boot({ mobile: true });
     h.click(h.el("edit-btn"));
     await h.flush();
 
@@ -428,7 +448,7 @@ describe("クイックオープン", () => {
   // 作っていても 0 件になる）。**サーバには存在するがツリーには出ないファイル**を用意して、
   // 候補がツリー由来であることを見る。
   test("サーバにあってもツリーに無ければ候補に出ない", async () => {
-    h = await bootApp({
+    h = await boot({
       tree: {
         name: ".",
         path: "",
@@ -457,7 +477,7 @@ describe("クイックオープン", () => {
   test("HTML メタ文字を含むファイル名を要素として解釈しない", async () => {
     const name = "<img src=x onerror=alert(1)>&amp;.md";
     const nasty = `docs/${name}`;
-    h = await bootApp({
+    h = await boot({
       tree: {
         name: ".",
         path: "",
@@ -487,7 +507,7 @@ describe("クイックオープン", () => {
   });
 
   test("一致した文字がハイライトされる", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     typeInto(input(), "rdm");
     await h.flush();
@@ -501,7 +521,7 @@ describe("クイックオープン", () => {
   // 返すので、描画側が UTF-16 のコードユニットで数えると 1 つずつずれ、`<mark>` に
   // サロゲートの片割れが入って `�` になる（実機で踏んだ）。
   test("絵文字入りのファイル名でもハイライトが壊れない", async () => {
-    h = await bootApp({
+    h = await boot({
       tree: {
         name: ".",
         path: "",
@@ -538,12 +558,12 @@ describe("クイックオープン", () => {
   // **開いたまま watcher の tree イベントが来たら候補も引き直す。** 母集団だけ更新して
   // 表示を放置すると、消えたファイルが一覧に残って Enter で 404 になる。
   test("パネルを開いたままツリーが更新されたら候補も追随する", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     expect(items().map((b) => b.dataset.path)).toEqual([
-      "README.md",
-      "docs/guide.md",
       "docs/deep/note.md",
+      "docs/guide.md",
+      "README.md",
     ]);
 
     // docs/guide.md が消え、docs/added.md が増えた
@@ -551,25 +571,26 @@ describe("クイックオープン", () => {
       name: ".",
       path: "",
       type: "dir",
+      // **ここも実サーバの並びにする** (Issue #145)
       children: [
-        { name: "README.md", path: "README.md", type: "file" },
         {
           name: "docs",
           path: "docs",
           type: "dir",
           children: [{ name: "added.md", path: "docs/added.md", type: "file" }],
         },
+        { name: "README.md", path: "README.md", type: "file" },
       ],
     };
     h.files["docs/added.md"] = { raw: "a", html: "<p>a</p>", sha: "s9" };
     h.ws.emit({ type: "tree" });
     await h.flush();
 
-    expect(items().map((b) => b.dataset.path)).toEqual(["README.md", "docs/added.md"]);
+    expect(items().map((b) => b.dataset.path)).toEqual(["docs/added.md", "README.md"]);
   });
 
   test("閉じるとフォーカスが元の要素へ戻る", async () => {
-    h = await bootApp();
+    h = await boot();
     const editBtn = h.el("edit-btn");
     editBtn.focus();
 
@@ -582,7 +603,7 @@ describe("クイックオープン", () => {
   });
 
   test("ファイル名は主、ディレクトリは従として並べる（同名の区別）", async () => {
-    h = await bootApp({
+    h = await boot({
       tree: {
         name: ".",
         path: "",
@@ -626,7 +647,7 @@ describe("クイックオープン", () => {
   // reject 経路は狭い（`navigateTo` は読み込み失敗を自分で握り潰す）ので、
   // **`history.pushState` を 1 回だけ落とす**ことで到達させる。
   test("遷移が失敗したらエラーを status に出す（例外で握り潰さない）", async () => {
-    h = await bootApp();
+    h = await boot();
     await open();
     h.keydown(input(), { key: "ArrowDown" });
 
