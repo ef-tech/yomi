@@ -14,6 +14,7 @@
  */
 
 import { errorText, fetchJson, messageOf, THEME_MODES, VIEW_MODES } from "./app-context.js";
+import { isTopOverlay } from "./app-overlays.js";
 import { t } from "./i18n.js";
 import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
 import { prefs } from "./prefs.js";
@@ -538,6 +539,19 @@ export function createPreview(ctx) {
     els.tocBtn.disabled = true;
     els.tocBtn.addEventListener("click", () => toggleToc());
     els.tocClose.addEventListener("click", () => applyTocVisibility(false));
+    // **Esc で閉じる (Issue #135)。** スマホ幅では全画面パネルになるのに閉じる導線が
+    // `×` ボタンしか無く、他の全画面パネルと作法が揃っていなかった。
+    // 優先順位の判定は `app-overlays.js` に一本化してある (Issue #112)
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      if (!isTopOverlay("tocPanel", els)) return;
+      // もう誰かが Esc を消費していたら譲る (Issue #112)
+      if (ev.defaultPrevented) return;
+      // **必ず奪う。** 奪わないと、後続のハンドラが「まだ誰も処理していない」と見て
+      // 同じ Esc でもう 1 枚閉じる
+      ev.preventDefault();
+      applyTocVisibility(false);
+    });
     els.tocExpandToggle.addEventListener("click", () => {
       const next = state.tocExpandLevel === "h3" ? "h6" : "h3";
       state.tocExpandLevel = next;
