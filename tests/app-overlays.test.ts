@@ -25,6 +25,7 @@ const conflictDiff = () => h.el("conflict-diff");
 const sidebar = () => h.el("sidebar");
 const banner = () => h.el("external-link-banner");
 const overflowMenu = () => h.el("overflow-menu");
+const tocPanel = () => h.el("toc-panel");
 
 const pressEsc = () => h.keydown(h.document, { key: "Escape" });
 const pressCtrlP = () => h.keydown(h.document, { key: "p", code: "KeyP", ctrlKey: true });
@@ -39,11 +40,14 @@ const pressCtrlShiftO = () =>
  * 前提を大量に積むことになる。**見たいのは「重なったときにどのハンドラが動くか」**なので、
  * 各ハンドラが門番に使っているのと同じ状態（`hidden` と class）を直接立てる。
  */
-function open(name: "quickOpen" | "conflictDiff" | "banner" | "overflowMenu" | "sidebar") {
+function open(
+  name: "quickOpen" | "conflictDiff" | "banner" | "overflowMenu" | "sidebar" | "tocPanel",
+) {
   if (name === "sidebar") sidebar().classList.add("is-open");
   else if (name === "quickOpen") quickOpen().hidden = false;
   else if (name === "conflictDiff") conflictDiff().hidden = false;
   else if (name === "banner") banner().hidden = false;
+  else if (name === "tocPanel") tocPanel().hidden = false;
   else overflowMenu().hidden = false;
 }
 
@@ -52,6 +56,7 @@ const openState = () => ({
   conflictDiff: !conflictDiff().hidden,
   banner: !banner().hidden,
   overflowMenu: !overflowMenu().hidden,
+  tocPanel: !tocPanel().hidden,
   sidebar: sidebar().classList.contains("is-open"),
 });
 
@@ -277,5 +282,128 @@ describe("全画面モーダルが開いている間のショートカット (Is
     // **塞ぐと引き出しを開いたままファイルを探せなくなる。**
     // これらは「背後に別のパネルが開く」問題を起こさないので止める理由がない
     expect(quickOpen().hidden).toBe(false);
+  });
+});
+
+/**
+ * スマホ幅の全画面 TOC (Issue #135)。
+ *
+ * #112 は TOC を優先順位の表に載せなかった。**`Esc` で閉じる導線が無いのに最前面として
+ * 登録すると「最前面なのに誰も閉じない」状態になり、背後の sidebar まで `Esc` で
+ * 閉じられなくなる**ため。閉じる導線とセットで入れるのがこの Issue。
+ *
+ * ここは**重なった状態**だけを見る（単体の開閉は `tests/app-preview.test.ts`）。
+ */
+describe("スマホ幅の全画面 TOC (Issue #135)", () => {
+  test("Esc で閉じる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("tocPanel");
+
+    pressEsc();
+    expect(openState()).toMatchObject({ tocPanel: false });
+  });
+
+  /**
+   * **これが #112 が恐れていた壊れ方。** TOC を表に載せただけで `Esc` を足さないと、
+   * TOC が最前面を占め続けて sidebar が閉じられなくなる。
+   */
+  test("TOC を閉じたら、次の Esc で背後の sidebar が閉じる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("sidebar");
+    open("tocPanel");
+
+    pressEsc();
+    // 最前面の TOC だけが閉じる。sidebar は残る
+    expect(openState()).toMatchObject({ tocPanel: false, sidebar: true });
+
+    pressEsc();
+    expect(openState()).toMatchObject({ tocPanel: false, sidebar: false });
+  });
+
+  /**
+   * **クイックオープンは TOC より手前。**
+   *
+   * どちらも `z-index: 60` だが、`index.html` で後に置かれているクイックオープンが
+   * 上に描かれる。優先順位を同着（どちらも 60）にすると `topOverlay` が先勝ちで TOC を
+   * 返し、**上に見えているクイックオープンが `Esc` で閉じられなくなる**。
+   */
+  test("TOC の上に開いたクイックオープンが先に閉じる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("tocPanel");
+    open("quickOpen");
+
+    pressEsc();
+    expect(openState()).toMatchObject({ quickOpen: false, tocPanel: true });
+
+    pressEsc();
+    expect(openState()).toMatchObject({ quickOpen: false, tocPanel: false });
+  });
+
+  /**
+   * **これが `blocksShortcuts: false` の一番効く根拠。**
+   *
+   * `Ctrl/Cmd+Shift+O` は `shortcutsBlocked(els)` を `exceptFor` 無しで通すので、
+   * TOC が「塞ぐ層」になった瞬間に**開いた TOC を同じキーで閉じられなくなる**。
+   */
+  test("TOC が開いていても Ctrl/Cmd+Shift+O で閉じられる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+
+    // **本来の導線で開ける。** `hidden` を直接外すと `state.tocVisible` が立たず、
+    // トグルが「閉じる」ではなく「開く」に倒れて、この検証が成立しない
+    pressCtrlShiftO();
+    await h.flush();
+    expect(openState()).toMatchObject({ tocPanel: true });
+
+    pressCtrlShiftO();
+    await h.flush();
+    expect(openState()).toMatchObject({ tocPanel: false });
+  });
+
+  /**
+   * **TOC の上からクイックオープンを開ける。**
+   *
+   * `Ctrl/Cmd+P` も `shortcutsBlocked` を通るので、`true` にすると塞がれる。
+   */
+  test("TOC が開いていても Ctrl/Cmd+P でクイックオープンを開ける", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("tocPanel");
+
+    pressCtrlP();
+    await h.flush();
+
+    expect(openState()).toMatchObject({ quickOpen: true, tocPanel: true });
+  });
+
+  /**
+   * **`Ctrl/Cmd+S` は現状の UI では TOC と共存しない。**
+   *
+   * 編集モードに入ると TOC は自動で閉じる（`app-editor.js` の `tocSuspended`）ので、
+   * ここは**直接 `hidden` を外して**その状態を作っている。UI からは到達できないが、
+   * 表の値が変わったときに気づけるようにしておく。
+   */
+  test("TOC が開いていても Ctrl/Cmd+S で保存できる", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
+    h.el<HTMLButtonElement>("edit-btn").click();
+    await h.flush();
+    h.el<HTMLTextAreaElement>("editor").value = "# 変更\n";
+    h.el("editor").dispatchEvent(new h.window.Event("input", { bubbles: true }));
+    await h.flush();
+
+    open("tocPanel");
+    const before = h.fetchCalls.filter((c) => c.method === "POST").length;
+    pressCtrlS();
+    await h.flush(4);
+
+    expect(h.fetchCalls.filter((c) => c.method === "POST").length).toBe(before + 1);
+  });
+
+  /** 競合ダイアログ（70）は TOC より手前。開いている間は TOC の Esc を通さない。 */
+  test("競合ダイアログの裏の TOC は Esc で閉じない", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md", mobile: true });
+    open("tocPanel");
+    open("conflictDiff");
+
+    pressEsc();
+    expect(openState()).toMatchObject({ conflictDiff: false, tocPanel: true });
   });
 });

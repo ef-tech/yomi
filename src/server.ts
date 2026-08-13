@@ -716,8 +716,9 @@ async function handleFileWrite(
     await writeFileAtomic(safe.abs, buf);
   } catch (err) {
     // **自分が立てたマークだけを消す (Issue #120)。** 同じファイルを別のリクエストが
-    // 保存中なら、そちらのマークが入っている。無条件に消すと、そのリクエストの
-    // 正常な保存が watcher から「他人の変更」に見えて余計なリロードが飛ぶ
+    // 保存中でも、そちらのマークは残る（#129 で 1 パスに複数持てるようにした）。
+    // 無条件に消すと、そのリクエストの正常な保存が watcher から「他人の変更」に
+    // 見えて余計なリロードが飛ぶ
     const cleared = saveMark.clear(safe.rel, newSha);
     // **生のメッセージを返さない。** 一時ファイルの絶対パスと pid が載るので、
     // 内部状態が漏れる（`handleFileCreate` が同じ理由で汎用化しているのに揃える）。
@@ -725,9 +726,10 @@ async function handleFileWrite(
     // 差し込めるので、オブジェクトで渡す（#99 が同じ理由で立てた作法）
     console.error("保存に失敗しました:", {
       path: safe.rel,
-      // `false` = 別リクエストのマークが載っていた。**並行保存が実際に起きた観測点**で、
-      // 余計なリロードの報告を切り分けるときの唯一の手掛かりになる (Issue #120)
-      mark: cleared ? "cleared" : "別リクエストのものを保持",
+      // `false` = 自分のマークがもう無かった（上限で押し出された等）。#129 で
+      // 1 パスに複数持てるようになったので、**「別リクエストに上書きされた」ではない**。
+      // 余計なリロードの報告を切り分けるときの手掛かりになる (Issue #120 / #129)
+      mark: cleared ? "cleared" : "自分のマークが既に無い",
       error: err instanceof Error ? err.message : String(err),
     });
     return Response.json(
