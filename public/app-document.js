@@ -34,6 +34,19 @@ import {
 
 const COPY_FEEDBACK_MS = 1500;
 
+/**
+ * ルート直下の README として扱うファイル名 (Issue #150)。
+ *
+ * **拡張子を `.md` に絞らない。** ツリーに載るのは `isMarkdownExtension`
+ * (`src/util/markdown-ext.ts`) を通ったファイルだけで、yomi は `.md` / `.markdown` /
+ * `.mdx` を等しく Markdown として扱う（scanner・watcher・`navigateInternal` の拡張子
+ * 補完がすべてこの 3 つ）。ここだけ `.md` に絞ると、`README.markdown` を置いた
+ * リポジトリで**同じ理屈が通らなくなる**。
+ *
+ * 大文字小文字は問わない（`readme.md` / `README.MD` も同じ）。
+ */
+const ROOT_README_RE = /^readme\.(?:md|markdown|mdx)$/i;
+
 /** @param {import("./app-context.js").Ctx} ctx */
 export function createDocument(ctx) {
   const { els, state } = ctx;
@@ -66,7 +79,35 @@ export function createDocument(ctx) {
   }
 
   /**
-   * URL の `?path=` が実在すればそれを、無ければツリー最初のファイルを開く。
+   * ルート直下の README を返す。無ければ null (Issue #150)。
+   *
+   * **探すのはルート直下だけ**で、再帰しない。`docs/README.md` まで拾うと
+   * 「どの README が開くのか」が説明できなくなる（ルートの README は
+   * 「このリポジトリの入口」という慣習があるが、下位ディレクトリのそれは無い）。
+   *
+   * @param {TreeNode} tree
+   * @returns {string | null}
+   */
+  function findRootReadme(tree) {
+    for (const child of tree.children ?? []) {
+      if (child.type === "file" && ROOT_README_RE.test(child.name)) return child.path;
+    }
+    return null;
+  }
+
+  /**
+   * URL の `?path=` が実在すればそれを、無ければルート直下の README を、
+   * それも無ければツリー最初のファイルを開く。
+   *
+   * **README を優先する理由 (Issue #150)**: `sortTree` はディレクトリを先に置くので、
+   * 「ツリー最初のファイル」は**必ずいちばん深いディレクトリの中**になる。`yomi .` を
+   * 叩いた利用者から見ると「なぜこのファイルが開くのか」が分からず、しかも
+   * `expandAncestors` でその祖先が全部開いた状態から始まる。ルートに README を置く
+   * 慣習は広いので、あればそれを入口にする。
+   *
+   * **`?path=` の優先は変えない** —— deep-link で開いたのに README に飛ばされたら、
+   * 共有したリンクが機能しなくなる。
+   *
    * @param {TreeNode} tree
    * @returns {string | null}
    */
@@ -75,7 +116,7 @@ export function createDocument(ctx) {
     if (fromUrl && state.fileButtons.has(fromUrl)) {
       return fromUrl;
     }
-    return findFirstFile(tree);
+    return findRootReadme(tree) ?? findFirstFile(tree);
   }
 
   /**

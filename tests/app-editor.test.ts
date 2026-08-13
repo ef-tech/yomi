@@ -14,14 +14,15 @@ import {
 } from "./helpers/app-harness.ts";
 
 /**
- * **`README.md` を開いた状態で起動する** (Issue #145)。
+ * **`README.md` を開いた状態で起動する** (Issue #145 / #150)。
  *
  * このファイルの主題は「開いているファイルを編集・保存する」ことで、**どのファイルが
- * 開くかは主題ではない**。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()`
- * を実サーバの並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になった。
+ * 開くかは主題ではない**。`bootApp()` の既定は**ルート直下の README**（Issue #150）で、
+ * 無ければツリー最初のファイル（`defaultTree()` を実サーバの並び＝ディレクトリが先に
+ * 直した結果 `docs/deep/note.md`。Issue #145）に落ちる。
  *
- * 以前はここが偶然 `README.md` だったので、テストは**何も指定せずに README を前提**に
- * 書かれていた。前提を明示に変えれば、fixture の並びが変わっても壊れない。
+ * **主題でないものを既定に委ねない**ので、ここでは `?path=` で明示する
+ * —— fixture の並びや初期ファイル選択の規則が変わっても壊れない。
  */
 const boot = (options: BootOptions = {}) =>
   bootApp({ url: "http://localhost:3944/?path=README.md", ...options });

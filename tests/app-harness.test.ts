@@ -71,8 +71,9 @@ describe("resetAppEnvironment", () => {
 
   test("boot し直せば再び使える (冪等)", async () => {
     const first = await bootApp();
-    // **ツリー最初のファイル**（`defaultTree()` は実サーバと同じくディレクトリが先。Issue #145）
-    expect(first.el("current-path").textContent).toBe("docs/deep/note.md");
+    // **ルート直下の README**（`defaultTree()` はこれを持つ。Issue #150）。
+    // README が無ければツリー最初のファイル（ディレクトリが先。Issue #145）に落ちる
+    expect(first.el("current-path").textContent).toBe("README.md");
     resetAppEnvironment();
 
     const second = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });

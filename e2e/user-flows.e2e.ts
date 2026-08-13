@@ -46,7 +46,11 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   // 初期表示が終わるまで待つ（ツリーの描画と最初のファイルの反映）
   await expect(treeItem(page, "README.md")).toBeVisible();
-  await expect(page.locator("#current-path")).toHaveText("docs/guide.md");
+  // **開くのはルート直下の README** (Issue #150)。README はルート直下なので
+  // 祖先の自動展開が起きず、**`docs/` は畳まれた状態で始まる**
+  // —— 中のファイルへ行くには `openFile` が先にディレクトリを開く（`helpers.ts`）
+  await expect(page.locator("#current-path")).toHaveText("README.md");
+  await expect(treeItem(page, "docs")).not.toHaveClass(/is-open/);
 });
 
 test.afterEach(async ({ page }) => {

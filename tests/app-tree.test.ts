@@ -16,15 +16,16 @@ import {
 } from "./helpers/app-harness.ts";
 
 /**
- * **ルート直下の `README.md` を開いた状態で起動する** (Issue #145)。
+ * **ルート直下の `README.md` を開いた状態で起動する** (Issue #145 / #150)。
  *
  * このファイルの主題は**ディレクトリの開閉**で、「起動直後はどこも開いていない」ことを
- * 何度も見る。`bootApp()` の既定は**ツリー最初のファイル**で、`defaultTree()` を実サーバの
- * 並び（ディレクトリが先）に直した結果それは `docs/deep/note.md` になり、**祖先の
- * `docs` / `docs/deep` が自動で開く**（`expandAncestors`）。
+ * 何度も見る。README を優先するようになった今（#150）は `bootApp()` の既定でも同じ状態に
+ * なるが、**README が無ければツリー最初のファイル**（`defaultTree()` を実サーバの並び＝
+ * ディレクトリが先に直した結果 `docs/deep/note.md`。#145）に落ち、**祖先の `docs` /
+ * `docs/deep` が自動で開く**（`expandAncestors`）。
  *
- * それは正しい挙動だが、ここで見たいのは「自動で開かない状態からの開閉」なので、
- * **祖先を持たないファイルを開いて**起点を揃える。
+ * ここで見たいのは「自動で開かない状態からの開閉」なので、**祖先を持たないファイルを
+ * 開いて**起点を揃える。主題でないものを既定に委ねない。
  */
 const boot = (options: BootOptions = {}) =>
   bootApp({ url: "http://localhost:3944/?path=README.md", ...options });

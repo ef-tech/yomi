@@ -68,11 +68,27 @@ const TREE_PLUS: TreeNode = {
   ],
 };
 
-/** DOM の骨格を「タグ + class」の出現回数で表す (文言は含めない = i18n 非依存)。 */
+/**
+ * DOM の骨格を「タグ + class」の出現回数で表す (文言は含めない = i18n 非依存)。
+ *
+ * **`is-selected` は落とす (Issue #150)。** これを付けるのは `highlightSelected` であって、
+ * 写しの対象である `renderNode` ではない。実物は起動時に初期ファイルを開いて 1 つ選択するが、
+ * ベンチは**ファイルを開かない**ので、残すと「選択状態の有無」という**描画と無関係な差**で
+ * 落ちる。i18n の文言を含めないのと同じ理由（このファイル冒頭）。
+ *
+ * **以前これで落ちなかったのは偶然だった。** `TREE` の最初のファイルは `docs/a.md` だが
+ * `files` には `README.md` しか無く、**初期ファイルの読み込みが 404 で失敗して誰も選択されて
+ * いなかった**。#150 でルート直下の README を優先するようになり、実際に開けて選択が付いた
+ * ことで表に出た。
+ */
 function skeleton(root: Element): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const el of root.querySelectorAll("*")) {
-    const key = `${el.tagName.toLowerCase()}.${el.className || "-"}`;
+    const cls = el.className
+      .replace(/\bis-selected\b/g, "")
+      .trim()
+      .replace(/\s+/g, " ");
+    const key = `${el.tagName.toLowerCase()}.${cls || "-"}`;
     counts[key] = (counts[key] ?? 0) + 1;
   }
   return counts;
