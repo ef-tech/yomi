@@ -53,6 +53,12 @@ export function createEditor(ctx) {
   }
 
   /**
+   * **Markdown を開いているときだけ使える操作**の有効・無効 (Issue #155 で意味を狭めた)。
+   *
+   * 以前は「ファイルを開いているか」を表しており、パスのコピーもここに含まれていた。
+   * テキストファイルも開けるようになって**「開いてはいるが編集はできない」状態**が
+   * 生まれたので、種別を問わない操作は {@link enableFileActions} へ分けた。
+   *
    * @param {boolean} enabled
    * @returns {void}
    */
@@ -60,7 +66,6 @@ export function createEditor(ctx) {
     els.editBtn.disabled = !enabled;
     els.tocBtn.disabled = !enabled;
     els.tocFab.disabled = !enabled;
-    els.currentPath.disabled = !enabled;
     if (els.overflowEdit) els.overflowEdit.disabled = !enabled;
     // 画像 zip も「ファイルを開いている」ことが前提 (Issue #140)。
     // **`index.html` に常にあるので `?.` を付けない** —— 欠けたら静かに無効化されるより
@@ -68,6 +73,19 @@ export function createEditor(ctx) {
     // その事実より古いもので、いまは常真）
     els.downloadImagesBtn.disabled = !enabled;
     els.overflowDownloadImages.disabled = !enabled;
+  }
+
+  /**
+   * **ファイルを開いていれば種別を問わず使える操作**の有効・無効 (Issue #155)。
+   *
+   * いまはパスのコピー (Issue #24) だけ。テキストファイルでもパスは配りたいので、
+   * 編集系と一緒に落とさない。
+   *
+   * @param {boolean} enabled
+   * @returns {void}
+   */
+  function enableFileActions(enabled) {
+    els.currentPath.disabled = !enabled;
   }
 
   function enterEditMode() {
@@ -152,7 +170,8 @@ export function createEditor(ctx) {
     if (!force && state.currentSha) payload.baseSha = state.currentSha;
 
     try {
-      /** @type {import("./api-types.js").FileResponse} */
+      // 保存の応答は Markdown 専用（テキストには書き込めない。Issue #155）
+      /** @type {import("./api-types.js").MarkdownFileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -559,7 +578,9 @@ export function createEditor(ctx) {
   }
 
   function wireEditActions() {
+    // 起動直後はまだ何も開いていない
     enableEditActions(false);
+    enableFileActions(false);
     els.editBtn.addEventListener("click", toggleEditMode);
 
     els.discardBtn.addEventListener("click", () => {
@@ -597,6 +618,7 @@ export function createEditor(ctx) {
     handleFinishEdit,
     setDirty,
     enableEditActions,
+    enableFileActions,
     confirmLeaveEdit,
     saveEdit,
     syncEditButtonLabels,

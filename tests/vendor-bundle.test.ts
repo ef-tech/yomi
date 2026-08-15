@@ -38,9 +38,12 @@ async function browserModules(): Promise<{ name: string; text: string }[]> {
 const CDN_HOSTS = /\b(jsdelivr\.net|unpkg\.com|esm\.sh|esm\.run|cdnjs\.cloudflare|skypack\.dev)/;
 const URL_MODULE_LOAD = /(?:\bimport\s*\(\s*|\bfrom\s*)["'`]https?:\/\//;
 
+/** 同梱する bundle。highlight.js は Issue #155 で追加。 */
+const BUNDLES = ["dompurify.js", "mermaid.js", "highlight.js"];
+
 describe("vendor bundle (Issue #52)", () => {
-  test("dompurify.js / mermaid.js が同梱され、ライセンスバナーを持つ", async () => {
-    for (const name of ["dompurify.js", "mermaid.js"]) {
+  test("bundle が同梱され、ライセンスバナーを持つ", async () => {
+    for (const name of BUNDLES) {
       const text = await readFile(join(VENDOR, name), "utf8");
       expect(text.length).toBeGreaterThan(1000);
       expect(text).toContain("yomi vendored bundle");
@@ -48,7 +51,7 @@ describe("vendor bundle (Issue #52)", () => {
   });
 
   test("bundle は CDN / URL からコードを取得しない", async () => {
-    for (const name of ["dompurify.js", "mermaid.js"]) {
+    for (const name of BUNDLES) {
       const text = await readFile(join(VENDOR, name), "utf8");
       expect(CDN_HOSTS.test(text)).toBe(false);
       expect(URL_MODULE_LOAD.test(text)).toBe(false);
@@ -59,8 +62,9 @@ describe("vendor bundle (Issue #52)", () => {
     const modules = await browserModules();
     const all = modules.map((m) => m.text).join("\n");
     // どのモジュールから読んでいてもよいが、**必ず同梱 bundle から**読むこと
-    expect(all).toContain('from "./vendor/dompurify.js"');
-    expect(all).toContain('from "./vendor/mermaid.js"');
+    for (const name of BUNDLES) {
+      expect(all).toContain(`from "./vendor/${name}"`);
+    }
   });
 
   test("ブラウザ側コードは jsDelivr / URL import を持たない", async () => {
@@ -77,11 +81,48 @@ describe("vendor bundle (Issue #52)", () => {
     };
     const dompurify = await readFile(join(VENDOR, "dompurify.js"), "utf8");
     const mermaid = await readFile(join(VENDOR, "mermaid.js"), "utf8");
+    const highlight = await readFile(join(VENDOR, "highlight.js"), "utf8");
     // バナーは build-vendor.ts が package.json のピン留め版数から刻む。ズレ = 再ビルド忘れ。
     expect(dompurify).toContain(`DOMPurify v${pkg.devDependencies.dompurify}`);
     expect(mermaid).toContain(`Mermaid v${pkg.devDependencies.mermaid}`);
+    expect(highlight).toContain(`highlight.js v${pkg.devDependencies["highlight.js"]}`);
     // 固定版であること (キャレット等の範囲指定を許さない)
     expect(pkg.devDependencies.dompurify).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pkg.devDependencies.mermaid).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg.devDependencies["highlight.js"]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+/**
+ * Issue #155: サーバが返す `lang` は `src/util/text-ext.ts` の allowlist 由来なので、
+ * **その値のぶんだけ highlight.js に言語が登録されていないと静かに無色になる**
+ * （highlight.js は未登録の言語で例外を投げない）。両者の一致を機械的に見る。
+ */
+describe("ハイライト言語の登録漏れ (Issue #155)", () => {
+  test("text-ext.ts が返しうる言語がすべて vendor エントリに登録されている", async () => {
+    const { TEXT_FILENAMES, TEXT_LANGUAGES, PLAIN_LANGUAGE } = await import(
+      "../src/util/text-ext.ts"
+    );
+    const entry = await readFile(join(ROOT, "scripts", "vendor", "highlight.js"), "utf8");
+
+    const used = new Set([...Object.values(TEXT_LANGUAGES), ...Object.values(TEXT_FILENAMES)]);
+    // plaintext は highlight.js の組み込みなので登録しない
+    used.delete(PLAIN_LANGUAGE);
+
+    const missing = [...used]
+      .sort()
+      .filter((lang) => !entry.includes(`hljs.registerLanguage("${lang}"`));
+    expect(missing).toEqual([]);
+  });
+
+  test("登録した言語に対応する言語ファイルが highlight.js に存在する", async () => {
+    const entry = await readFile(join(ROOT, "scripts", "vendor", "highlight.js"), "utf8");
+    const registered = [...entry.matchAll(/hljs\.registerLanguage\("([^"]+)"/g)].map((m) => m[1]);
+    expect(registered.length).toBeGreaterThan(0);
+    for (const lang of registered) {
+      // import できることまで見る (綴り違いは build でしか落ちないので、ここで拾う)
+      const mod = await import(`highlight.js/lib/languages/${lang}`);
+      expect(typeof mod.default).toBe("function");
+    }
   });
 });

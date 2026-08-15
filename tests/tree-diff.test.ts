@@ -16,9 +16,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyTreeDiff } from "../public/tree-diff.js";
-import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
+import { scanViewableTree, type TreeNode } from "../src/scanner.ts";
 
-/** 実ファイルを作って `scanMarkdownTree` に走らせ、正解のツリーを得る。 */
+/** 実ファイルを作って `scanViewableTree` に走らせ、正解のツリーを得る。 */
 async function scanOf(paths: readonly string[]): Promise<TreeNode> {
   const dir = await mkdtemp(join(tmpdir(), "yomi-treediff-"));
   try {
@@ -27,7 +27,7 @@ async function scanOf(paths: readonly string[]): Promise<TreeNode> {
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, "# x\n");
     }
-    return await scanMarkdownTree(dir);
+    return await scanViewableTree(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -36,7 +36,7 @@ async function scanOf(paths: readonly string[]): Promise<TreeNode> {
 /**
  * **`name` / `path` / `type` / 子の順序だけを見る形に落とす。**
  *
- * `scanMarkdownTree` は葉に `children` を付けないが、差分側は付けうる。
+ * `scanViewableTree` は葉に `children` を付けないが、差分側は付けうる。
  * 見たいのは「同じ木か」なので、そこは揃えてから比べる。
  */
 function shape(node: TreeNode): unknown {

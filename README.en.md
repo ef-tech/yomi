@@ -5,7 +5,7 @@
 [![CI](https://github.com/ef-tech/yomi/actions/workflows/ci.yml/badge.svg)](https://github.com/ef-tech/yomi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A local Markdown viewer. A command-line tool that recursively collects the `.md` files under the current directory and lets you read them in a two-pane browser UI (left: tree, right: preview).
+A local Markdown viewer. A command-line tool that recursively collects the `.md` files under the current directory and lets you read them in a two-pane browser UI (left: tree, right: preview). The `.json` / `.csv` / config files / code sitting next to your md files can be opened read-only from the same tree.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-preview.png">
@@ -25,6 +25,7 @@ A local Markdown viewer. A command-line tool that recursively collects the `.md`
 - Browser back/forward support; reload restore and URL sharing via `?path=foo.md`
 - Click GFM task lists `- [ ] xxx` in the preview to toggle ON/OFF; changes are written back to the md file
 - Images in Markdown `![](foo.png)` are resolved by relative path and displayed (same dir, `../`, and subdirectories)
+- Non-md text files (`.json` / `.csv` / `.ts` / `Dockerfile`, …) can be viewed **read-only**, with syntax highlighting
 - UI language switch (Japanese / English, auto-follows the browser language, saved to `localStorage`)
 
 ## Screenshots
@@ -276,6 +277,26 @@ Data files linked from Markdown (e.g. `[Sales](data/sales.csv)`) are served from
 - **Extensions outside the allowlist are not served** (400). `.html` / `.htm` / `.xhtml` / `.js` / `.mjs` are deliberately excluded because serving them would open a script-execution / HTML-rendering path (the Issue #21 / #22 XSS hardening).
 - Root-escape rejection via `resolveSafe`, the 50 MB size cap, `X-Content-Type-Options: nosniff`, and the strong ETag are shared with images and PDFs.
 
+### Reading non-md text files (Issue #155)
+
+The left tree lists not only Markdown but every file yomi can read as text. Click one and its contents appear in the right pane as-is, with syntax highlighting chosen from the extension. You no longer need to switch to an editor just to look at the `package.json` or `compose.yaml` sitting next to your `README.md`.
+
+| Kind | Extensions / file names |
+|---|---|
+| Plain text | `.txt` / `.text` / `.log` / `.csv` / `.tsv` |
+| Config & data | `.json` / `.jsonc` / `.yaml` / `.yml` / `.toml` / `.ini` / `.cfg` / `.conf` / `.properties` / `.xml` / `.html` / `.htm` |
+| Styles | `.css` / `.scss` / `.less` |
+| Code | `.js` / `.mjs` / `.cjs` / `.jsx` / `.ts` / `.tsx` / `.py` / `.rb` / `.go` / `.rs` / `.java` / `.kt` / `.kts` / `.swift` / `.php` / `.c` / `.h` / `.cpp` / `.cc` / `.hpp` / `.cs` / `.sh` / `.bash` / `.zsh` / `.lua` / `.pl` / `.pm` / `.sql` / `.graphql` / `.gql` / `.proto` / `.diff` / `.patch` |
+| Conventional files without an extension | `Dockerfile` / `Makefile` / `LICENSE` / `.gitignore` / `.gitattributes` / `.dockerignore` / `.npmignore` / `.yomiignore` / `.editorconfig` |
+
+- **Read-only.** Editing, saving and creating stay Markdown-only. While a text file is open the edit button, the TOC and the image zip are disabled and the header shows "Read-only". Copying the path still works.
+- **The view mode is pinned to "Preview".** Split / MD exist to show source and preview side by side, which would just show the same content twice for a file that only has raw text.
+- Updates are live-reloaded just like Markdown, and the files show up in **quick open (Ctrl/Cmd+P)**.
+- **Extensions outside the allowlist cannot be opened** (400). Images and PDFs are served through the "Downloading attached files" path above. `.env` is not listed by default because it usually holds secrets (you can opt back in with a negation pattern in [`.yomiignore`](#customizing-exclude-patterns-yomiignore)).
+- **Text larger than 2 MB cannot be opened** (413): the whole content is handed to the browser and highlighted, so a huge log would freeze the page. Markdown has no such limit.
+- Contents are never interpreted as HTML. Opening a `.html` file shows the tags as characters.
+- Exclusions (`.yomiignore` and the default excluded directories) apply exactly as they do for Markdown.
+
 ### Scroll sync in split mode (Issue #9)
 
 In **Split** mode (two panes: md source + preview), the scroll positions sync left/right based on headings. Absolute source line numbers are embedded on `<h1>`–`<h6>` via a `data-line` attribute, and a pure function linearly interpolates between the line-based Y coordinate on the source side and `offsetTop` on the preview side.
@@ -503,14 +524,16 @@ bunx playwright show-trace test-results/<test name>/trace.zip
 bun run typecheck
 ```
 
-### Vendored bundle (DOMPurify / Mermaid)
+### Vendored bundle (DOMPurify / Mermaid / highlight.js)
 
-Preview sanitization (DOMPurify) and Mermaid rendering load from a **bundle vendored into the distribution**, not from a CDN (Issue #52). This keeps them working offline / during CDN outages / on restricted networks, and no requests go to external hosts (jsdelivr, etc.). The preview HTML is served with a Content-Security-Policy including `script-src 'self'`.
+Preview sanitization (DOMPurify), Mermaid rendering and syntax highlighting (highlight.js) load from a **bundle vendored into the distribution**, not from a CDN (Issue #52 / #155). This keeps them working offline / during CDN outages / on restricted networks, and no requests go to external hosts (jsdelivr, etc.). The preview HTML is served with a Content-Security-Policy including `script-src 'self'`.
 
-`dompurify` / `mermaid` are version-pinned devDependencies, and `public/vendor/*.js` is committed as a generated artifact. **When you bump a dependency version, regenerate and commit the bundle:**
+`dompurify` / `mermaid` / `highlight.js` are version-pinned devDependencies, and `public/vendor/*.js` is committed as a generated artifact. **When you bump a dependency version, regenerate and commit the bundle:**
+
+highlight.js is not bundled in full (190+ languages): `scripts/vendor/highlight.js` registers only the languages that appear in the allowlist of `src/util/text-ext.ts` (151 KB). **When you add a language to that allowlist, register it here too** — `tests/vendor-bundle.test.ts` catches the omission (an unregistered language does not throw; it silently renders without colors).
 
 ```bash
-bun run build   # regenerate public/vendor/dompurify.js / mermaid.js
+bun run build   # regenerate public/vendor/dompurify.js / mermaid.js / highlight.js
 ```
 
 CI runs `bun run build` to verify build integrity (no CDN references or stray chunks remain, and the generated artifacts are committed).

@@ -1,0 +1,5 @@
+{
+  "name": "yomi-e2e-fixture",
+  "enabled": true,
+  "retries": 3
+}

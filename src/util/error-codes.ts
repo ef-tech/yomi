@@ -21,6 +21,11 @@ export const ERROR_CODES = [
   "path_required",
   "not_found",
   "not_markdown",
+  // Issue #155: ツリーに載らない拡張子を `/api/file` で開こうとした（読み取りのみ）。
+  // `not_markdown` と分けるのは、**書き込み/作成は今も Markdown 限定**だから ——
+  // 同じ code にすると「読めないのか書けないのか」が文言から分からなくなる。
+  "not_viewable",
+  "file_too_large",
   "unsafe_path",
   "excluded_dir",
   "excluded_path",

@@ -6,7 +6,7 @@ import { collectArticleImages } from "./article-images.ts";
 import { renderMarkdown } from "./renderer.ts";
 import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
-import { scanMarkdownTree } from "./scanner.ts";
+import { scanViewableTree } from "./scanner.ts";
 import { assetContentType, assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
 import { writeFileAtomic } from "./util/atomic-write.ts";
 import { buildContentDisposition } from "./util/content-disposition.ts";
@@ -14,6 +14,8 @@ import type { ErrorCode } from "./util/error-codes.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES, isImageExtension } from "./util/image-ext.ts";
+import { textLanguageOf } from "./util/text-ext.ts";
+import { isViewableFile } from "./util/viewable.ts";
 import { createZip, type ZipEntry } from "./util/zip.ts";
 import { createWatcher, isStructuralChange, type WatcherHandle } from "./watcher.ts";
 
@@ -34,6 +36,17 @@ const ASSET_TYPES: Record<string, string> = {
 
 /** 書き込み API の body サイズ上限 (bytes) */
 export const MAX_WRITE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * テキストファイル (非 Markdown) を `/api/file` で返すときのサイズ上限 (bytes)。Issue #155。
+ *
+ * **クライアントは受け取った raw を丸ごと DOM に入れ、ハイライトまで掛ける。** 巨大なログを
+ * そのまま流すとブラウザが固まるので、届く前にここで止める。超過は 413 (`file_too_large`) で、
+ * 切り詰めて返すことはしない —— 途中まで表示されたものを「全部」と誤読されるほうが害が大きい。
+ *
+ * **Markdown には掛けない。** これまで上限なしで読めていたので、ここで課すと既存の挙動が変わる。
+ */
+export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 
 /**
  * `/api/images.zip` が返す zip の上限 (Issue #140)。
@@ -115,7 +128,7 @@ export function createServer(config: ServerConfig): ServerHandle {
    * `/api/tree` の直列化済み応答 (Issue #84)。
    *
    * **毎回フルスキャンしていた。** 10,000 ファイルの環境では応答 34.7ms のうち
-   * **30.8ms が `scanMarkdownTree`** で、`JSON.stringify` は 0.8ms しかない
+   * **30.8ms が `scanViewableTree`** で、`JSON.stringify` は 0.8ms しかない
    * （実測は `docs/bench/tree-diff-update.md`）。ツリーが変わるのは watcher が
    * `rename` を拾ったときだけなので、そこまでは使い回せる。
    *
@@ -451,7 +464,7 @@ async function serializeTree(
   excludes: ReadonlySet<string>,
   maxDepth?: number,
 ): Promise<string> {
-  const tree = await scanMarkdownTree(rootDir, { excludes, maxDepth });
+  const tree = await scanViewableTree(rootDir, { excludes, maxDepth });
   return JSON.stringify(tree);
 }
 
@@ -550,8 +563,13 @@ async function handleFileRead(
   if (!requested) {
     return Response.json({ error: "path クエリが必要です" }, { status: 400 });
   }
-  if (!isMarkdownPath(requested)) {
-    return Response.json({ error: "Markdown ファイル以外は読み取れません" }, { status: 400 });
+  // **ツリーに載る集合と揃える (Issue #155)。** Markdown はレンダリングして返し、
+  // テキストは raw だけを返す。どちらでもない拡張子は従来どおり弾く（allowlist）。
+  if (!isViewableFile(requested)) {
+    return Response.json(
+      { error: "このファイルは表示できません", code: "not_viewable" },
+      { status: 400 },
+    );
   }
   // 解決前に字句で弾く (unsafe_path オラクルと symlink 除外名のすり抜けを塞ぐ)
   if (isRequestExcluded(requested, excludes)) {
@@ -566,9 +584,34 @@ async function handleFileRead(
       return excludedPathResponse(requested);
     }
     const buf = await readFile(safe.abs);
+    // **解決後のパスでも種別を引き直す。** 要求文字列と解決後の rel は symlink で
+    // 食い違いうるので、実際に読んだファイルの名前で判定する。
+    const lang = textLanguageOf(safe.rel);
+    if (lang !== null) {
+      // **上限は Markdown に掛けない。** md は無制限で読めていた（既存の挙動を変えない）。
+      // テキストは巨大なログを掴みうるので、DOM へ流す前にここで止める。
+      if (buf.byteLength > MAX_TEXT_BYTES) {
+        return Response.json(
+          {
+            // **要求されたパスを返す**（`safe.rel` ではなく）。他のエラー応答と揃うし、
+            // symlink 越しに開いたときに利用者が知らない実体名を返さずに済む
+            error: `ファイルが大きすぎます (上限 ${Math.floor(MAX_TEXT_BYTES / 1024 / 1024)}MB): ${requested}`,
+            code: "file_too_large",
+          },
+          { status: 413 },
+        );
+      }
+      return Response.json({
+        path: safe.rel,
+        raw: buf.toString("utf-8"),
+        kind: "text",
+        lang,
+        sha: sha256(buf),
+      });
+    }
     const raw = buf.toString("utf-8");
     const html = await renderMarkdown(raw, { currentPath: safe.rel });
-    return Response.json({ path: safe.rel, raw, html, sha: sha256(buf) });
+    return Response.json({ path: safe.rel, raw, html, kind: "markdown", sha: sha256(buf) });
   } catch (err) {
     if (err instanceof UnsafePathError) {
       return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });

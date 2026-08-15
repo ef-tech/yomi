@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
+import { scanViewableTree, type TreeNode } from "../src/scanner.ts";
 
 let root: string;
 
@@ -20,9 +20,13 @@ beforeAll(async () => {
   //   /a.md
   //   /b.markdown
   //   /c.mdx
-  //   /not.txt
+  //   /not.txt            (Issue #155 で載るようになった: テキスト)
+  //   /data.json          (同上)
+  //   /Dockerfile         (同上: 拡張子を持たない慣習ファイル)
+  //   /image.png          (allowlist 外: 載らない)
+  //   /archive.zip        (allowlist 外: 載らない)
   //   /sub/d.md
-  //   /sub/empty/      (md なし、削られるべき)
+  //   /sub/empty/      (開けるファイルなし、削られるべき)
   //   /node_modules/x.md  (除外されるべき)
   //   /.git/HEAD          (除外されるべき)
   //   /deep/lvl2/lvl3/x.md
@@ -30,6 +34,10 @@ beforeAll(async () => {
   await makeFile("b.markdown");
   await makeFile("c.mdx");
   await makeFile("not.txt");
+  await makeFile("data.json");
+  await makeFile("Dockerfile");
+  await makeFile("image.png");
+  await makeFile("archive.zip");
   await makeDir("sub");
   await makeFile("sub/d.md");
   await makeDir("sub/empty");
@@ -49,22 +57,33 @@ function findChild(node: TreeNode, name: string): TreeNode | undefined {
   return node.children?.find((c) => c.name === name);
 }
 
-describe("scanMarkdownTree", () => {
+describe("scanViewableTree", () => {
   test("ルートノードの形式", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     expect(tree.name).toBe(".");
     expect(tree.path).toBe("");
     expect(tree.type).toBe("dir");
     expect(Array.isArray(tree.children)).toBe(true);
   });
 
-  test("非 Markdown ファイルは含まれない", async () => {
-    const tree = await scanMarkdownTree(root);
-    expect(findChild(tree, "not.txt")).toBeUndefined();
+  test("allowlist 外のファイルは含まれない (Issue #155)", async () => {
+    const tree = await scanViewableTree(root);
+    // 画像・アーカイブは「ツリーから開いて読むもの」ではない (asset-ext.ts の担当)
+    expect(findChild(tree, "image.png")).toBeUndefined();
+    expect(findChild(tree, "archive.zip")).toBeUndefined();
+  });
+
+  test("テキストファイルも拾う (Issue #155)", async () => {
+    const tree = await scanViewableTree(root);
+    const names = (tree.children ?? []).map((c) => c.name);
+    expect(names).toContain("not.txt");
+    expect(names).toContain("data.json");
+    // 拡張子を持たない慣習ファイルも TEXT_FILENAMES 経由で載る
+    expect(names).toContain("Dockerfile");
   });
 
   test("md / markdown / mdx をすべて拾う", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     const names = (tree.children ?? []).map((c) => c.name);
     expect(names).toContain("a.md");
     expect(names).toContain("b.markdown");
@@ -72,20 +91,20 @@ describe("scanMarkdownTree", () => {
   });
 
   test("デフォルト除外パターン (node_modules / .git) が効く", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     expect(findChild(tree, "node_modules")).toBeUndefined();
     expect(findChild(tree, ".git")).toBeUndefined();
   });
 
   test("空のサブディレクトリは結果から削られる", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     const sub = findChild(tree, "sub");
     expect(sub).toBeDefined();
     expect(findChild(sub as TreeNode, "empty")).toBeUndefined();
   });
 
   test("再帰スキャン: 深いネストもたどる", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     const deep = findChild(tree, "deep");
     expect(deep).toBeDefined();
     const lvl2 = findChild(deep as TreeNode, "lvl2");
@@ -96,7 +115,7 @@ describe("scanMarkdownTree", () => {
   });
 
   test("ソート: ディレクトリ -> ファイル、それぞれ alphabetical", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     // dirs before files
     const dirIdxs = (tree.children ?? [])
       .map((c, i) => (c.type === "dir" ? i : -1))
@@ -114,7 +133,7 @@ describe("scanMarkdownTree", () => {
   });
 
   test("path は POSIX 形式の相対パス", async () => {
-    const tree = await scanMarkdownTree(root);
+    const tree = await scanViewableTree(root);
     const sub = findChild(tree, "sub");
     const d = findChild(sub as TreeNode, "d.md");
     expect(d?.path).toBe("sub/d.md");
@@ -123,14 +142,14 @@ describe("scanMarkdownTree", () => {
 
   test("カスタム excludes を渡せる", async () => {
     // sub も除外してみる
-    const tree = await scanMarkdownTree(root, {
+    const tree = await scanViewableTree(root, {
       excludes: new Set(["sub", "node_modules", ".git"]),
     });
     expect(findChild(tree, "sub")).toBeUndefined();
   });
 });
 
-describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
+describe("scanViewableTree — maxDepth (Issue #44)", () => {
   // root 構造 (level): a.md/b.markdown/c.mdx(1), sub(1)/d.md(2),
   //   deep(1)/lvl2(2)/lvl3(3)/x.md(4)
   function allPaths(node: TreeNode): string[] {
@@ -143,7 +162,7 @@ describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
   }
 
   test("maxDepth=1 はルート直下のみ (境界 dir は中を見ず表示)", async () => {
-    const paths = allPaths(await scanMarkdownTree(root, { maxDepth: 1 }));
+    const paths = allPaths(await scanViewableTree(root, { maxDepth: 1 }));
     // ルート直下の md とディレクトリは出る
     expect(paths).toContain("a.md");
     expect(paths).toContain("sub");
@@ -152,12 +171,12 @@ describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
     expect(paths).not.toContain("sub/d.md");
     expect(paths).not.toContain("deep/lvl2");
     // 境界 dir (sub) は中を見ないので子は空
-    const sub = findChild(await scanMarkdownTree(root, { maxDepth: 1 }), "sub");
+    const sub = findChild(await scanViewableTree(root, { maxDepth: 1 }), "sub");
     expect(sub?.children).toEqual([]);
   });
 
   test("maxDepth=2 は 2 階層まで、3 階層目以降は出ない", async () => {
-    const paths = allPaths(await scanMarkdownTree(root, { maxDepth: 2 }));
+    const paths = allPaths(await scanViewableTree(root, { maxDepth: 2 }));
     expect(paths).toContain("a.md");
     expect(paths).toContain("sub/d.md");
     expect(paths).toContain("deep/lvl2"); // 境界 dir として表示
@@ -166,22 +185,22 @@ describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
   });
 
   test("maxDepth 未指定は無制限 (深い md も拾う)", async () => {
-    const paths = allPaths(await scanMarkdownTree(root, {}));
+    const paths = allPaths(await scanViewableTree(root, {}));
     expect(paths).toContain("deep/lvl2/lvl3/x.md");
     // 深さ無制限と maxDepth 省略は同一結果
-    expect(allPaths(await scanMarkdownTree(root))).toEqual(paths);
+    expect(allPaths(await scanViewableTree(root))).toEqual(paths);
   });
 
   test("非境界の本当に空な dir は maxDepth 下でも従来どおり削られる", async () => {
     // maxDepth=3 では sub(1) は境界でない → 中を見て sub/empty(空) は prune される
-    const sub = findChild(await scanMarkdownTree(root, { maxDepth: 3 }), "sub");
+    const sub = findChild(await scanViewableTree(root, { maxDepth: 3 }), "sub");
     expect(sub).toBeDefined();
     expect(findChild(sub as TreeNode, "empty")).toBeUndefined();
   });
 
   test("maxDepth がツリー深さより大きい場合は無制限と同一", async () => {
-    const big = allPaths(await scanMarkdownTree(root, { maxDepth: 99 }));
-    const unlimited = allPaths(await scanMarkdownTree(root));
+    const big = allPaths(await scanViewableTree(root, { maxDepth: 99 }));
+    const unlimited = allPaths(await scanViewableTree(root));
     expect(big).toContain("deep/lvl2/lvl3/x.md");
     expect([...big].sort()).toEqual([...unlimited].sort());
   });
@@ -192,7 +211,7 @@ describe("scanMarkdownTree — maxDepth (Issue #44)", () => {
     await mkdir(join(r, "only", "inner"), { recursive: true });
     await writeFile(join(r, "only", "inner", "x.md"), "");
     try {
-      const tree = await scanMarkdownTree(r, { maxDepth: 1 });
+      const tree = await scanViewableTree(r, { maxDepth: 1 });
       const only = findChild(tree, "only");
       expect(only).toBeDefined();
       expect(only?.children).toEqual([]); // 境界 dir として中は空のまま残る

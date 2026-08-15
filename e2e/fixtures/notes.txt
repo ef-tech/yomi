@@ -1,0 +1,4 @@
+yomi E2E fixture (plain text)
+
+このファイルは Issue #155 のテキスト表示フローが読む。
+内容を変えるときは e2e/text-view.e2e.ts の期待値も直すこと。

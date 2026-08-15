@@ -18,6 +18,7 @@ import { sha256 } from "../src/save-mark.ts";
 import {
   createServer,
   MAX_ASSET_BYTES,
+  MAX_TEXT_BYTES,
   MAX_WRITE_BYTES,
   type ServerHandle,
 } from "../src/server.ts";
@@ -2205,5 +2206,146 @@ describe("server - 記事の画像を zip で返す (Issue #140)", () => {
     const res = await fetch(`${url}/api/images.zip?path=docs%2Fguide.md`, { method: "POST" });
     expect(res.status).toBe(405);
     expect(res.headers.get("Allow")).toBe("GET, HEAD");
+  });
+});
+
+/**
+ * Issue #155: md 以外のテキストファイルも `/api/file` で読める。
+ *
+ * **md の応答形は変えない**（`html` を返し続ける）。テキストは `html` を持たず、
+ * 代わりに `kind: "text"` と `lang` を返す —— 「`html` が無い」で分岐すると
+ * 空文字と区別が付かないので、クライアントは `kind` を見る。
+ */
+describe("server - テキストファイルの読み取り (Issue #155)", () => {
+  let root: string;
+  let url: string;
+  let handle: ServerHandle;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-text-read-"));
+    await writeFile(join(root, "hello.md"), "# Hello");
+    await writeFile(join(root, "notes.txt"), "plain text\nsecond line");
+    await writeFile(join(root, "config.json"), '{ "a": 1 }');
+    await writeFile(join(root, "Dockerfile"), "FROM oven/bun:1\n");
+    await writeFile(join(root, "photo.png"), "not really a png");
+    await writeFile(join(root, "archive.zip"), "not really a zip");
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await writeFile(join(root, "node_modules", "dep.json"), "{}");
+    const ctx = await startServer(root);
+    url = ctx.url;
+    handle = ctx.handle;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("テキストは raw と kind / lang を返し、html を持たない", async () => {
+    const res = await fetch(`${url}/api/file?path=notes.txt`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      path: string;
+      raw: string;
+      kind: string;
+      lang: string;
+      sha: string;
+      html?: string;
+    };
+    expect(json.path).toBe("notes.txt");
+    expect(json.raw).toBe("plain text\nsecond line");
+    expect(json.kind).toBe("text");
+    expect(json.lang).toBe("plaintext");
+    expect(json.sha).toBe(sha256("plain text\nsecond line"));
+    expect(json.html).toBeUndefined();
+  });
+
+  test("拡張子からハイライト言語を返す", async () => {
+    const res = await fetch(`${url}/api/file?path=config.json`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { lang: string }).lang).toBe("json");
+  });
+
+  test("拡張子を持たない慣習ファイルも読める", async () => {
+    const res = await fetch(`${url}/api/file?path=Dockerfile`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string; lang: string; raw: string };
+    expect(json.kind).toBe("text");
+    expect(json.lang).toBe("dockerfile");
+    expect(json.raw).toBe("FROM oven/bun:1\n");
+  });
+
+  test("Markdown の応答は従来どおり html を含み kind:markdown を返す", async () => {
+    const res = await fetch(`${url}/api/file?path=hello.md`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string; html: string; raw: string };
+    expect(json.kind).toBe("markdown");
+    expect(json.raw).toBe("# Hello");
+    expect(json.html).toContain("<h1");
+  });
+
+  test.each([
+    ["photo.png"],
+    ["archive.zip"],
+  ])("allowlist 外の `%s` は 400 + code:not_viewable", async (path) => {
+    const res = await fetch(`${url}/api/file?path=${encodeURIComponent(path)}`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("not_viewable");
+  });
+
+  test("除外配下のテキストは読めない (Issue #65 の関門が効く)", async () => {
+    const res = await fetch(`${url}/api/file?path=node_modules%2Fdep.json`);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(((await res.json()) as { code: string }).code).toBe("excluded_path");
+  });
+
+  test("テキストには書き込めない (編集は Markdown 限定のまま)", async () => {
+    const res = await fetch(`${url}/api/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: url },
+      body: JSON.stringify({ path: "notes.txt", body: "overwritten" }),
+    });
+    expect(res.status).toBe(400);
+    // 中身が変わっていないことまで見る (400 を返しつつ書けていたら意味がない)
+    expect(await readFile(join(root, "notes.txt"), "utf-8")).toBe("plain text\nsecond line");
+  });
+});
+
+describe("server - テキストのサイズ上限 (Issue #155)", () => {
+  let root: string;
+  let url: string;
+  let handle: ServerHandle;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-text-size-"));
+    // 上限ちょうどは通り、1 バイト超えると 413。
+    await writeFile(join(root, "edge.txt"), "a".repeat(MAX_TEXT_BYTES));
+    await writeFile(join(root, "huge.txt"), "a".repeat(MAX_TEXT_BYTES + 1));
+    // **md には上限を掛けない**（従来の挙動を変えない）
+    await writeFile(join(root, "huge.md"), "a".repeat(MAX_TEXT_BYTES + 1));
+    const ctx = await startServer(root);
+    url = ctx.url;
+    handle = ctx.handle;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("上限ちょうどは 200", async () => {
+    const res = await fetch(`${url}/api/file?path=edge.txt`);
+    expect(res.status).toBe(200);
+  });
+
+  test("上限を超えたテキストは 413 + code:file_too_large", async () => {
+    const res = await fetch(`${url}/api/file?path=huge.txt`);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { code: string }).code).toBe("file_too_large");
+  });
+
+  test("Markdown は上限の対象外", async () => {
+    const res = await fetch(`${url}/api/file?path=huge.md`);
+    expect(res.status).toBe(200);
   });
 });

@@ -13,7 +13,14 @@
  * Mermaid を初期化し直して再描画する必要があるため (描画と不可分)。
  */
 
-import { errorText, fetchJson, messageOf, THEME_MODES, VIEW_MODES } from "./app-context.js";
+import {
+  errorText,
+  fetchJson,
+  messageOf,
+  sanitize,
+  THEME_MODES,
+  VIEW_MODES,
+} from "./app-context.js";
 import { isTopOverlay } from "./app-overlays.js";
 import { t } from "./i18n.js";
 import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
@@ -21,6 +28,7 @@ import { prefs } from "./prefs.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
+import hljs from "./vendor/highlight.js";
 import mermaid from "./vendor/mermaid.js";
 
 /** @param {import("./app-context.js").Ctx} ctx */
@@ -78,11 +86,111 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * ハイライト言語 ID として CSS クラスに載せてよい形か (Issue #155)。
+   *
+   * 値はサーバの allowlist (`src/util/text-ext.ts`) 由来なので現実には安全だが、
+   * **`class` 属性へ値を流す唯一の経路**なので、ここでも形を確かめる
+   * (`asset-ext.ts` が `isAssetExtension` を二重に掛けているのと同じ考え方)。
+   *
+   * @param {string | null} lang
+   * @returns {lang is string}
+   */
+  function isSafeLanguageId(lang) {
+    return typeof lang === "string" && /^[a-z0-9+#-]{1,32}$/.test(lang);
+  }
+
+  /**
+   * テキストにシンタックスハイライトを当てる (Issue #155)。
+   *
+   * **`highlight.js` の出力もサニタイズしてから入れる。** ライブラリは入力を
+   * エスケープして `<span class="hljs-*">` で包むだけなので本来は安全だが、
+   * **利用者のファイルの中身が `innerHTML` に至る唯一の経路**なので、#21 / #59 で
+   * 使っている DOMPurify を通してから入れる（`SANITIZE_CONFIG` は `class` を許可し
+   * `<style>` と `style` 属性を落とすので、色は付いたまま注入経路だけが塞がる）。
+   *
+   * 失敗したときは何もしない —— 呼び出し元が `textContent` を入れた後なので、
+   * **ハイライトが無いだけの素のテキスト**が残る。
+   *
+   * @param {HTMLElement} code
+   * @returns {void}
+   */
+  function highlightTextView(code) {
+    const lang = state.currentLang;
+    // plaintext (`.txt` / `.csv` / ログ) に文法は無い。未登録の言語も素通しする
+    if (!isSafeLanguageId(lang) || lang === "plaintext" || !hljs.getLanguage(lang)) return;
+    try {
+      const { value } = hljs.highlight(state.currentRaw, { language: lang, ignoreIllegals: true });
+      code.innerHTML = sanitize(value);
+    } catch (err) {
+      // 色が付かないだけなので、利用者に出さずログに留める
+      console.error("シンタックスハイライトに失敗しました:", messageOf(err));
+    }
+  }
+
+  /**
+   * テキストファイルを読み取り専用で描く (Issue #155)。
+   *
+   * **`innerHTML` を使わない。** 中身は利用者のファイルそのもので、HTML として解釈させる
+   * 理由がない（#21 / #59 の経緯。サニタイズに頼るより、そもそも解釈させないほうが強い）。
+   * `textContent` に入れればブラウザは文字として扱う。
+   *
+   * ハイライトは {@link highlightTextView} が当てる。**先に `textContent` を入れてから**
+   * 当てるので、ハイライトが失敗しても素のテキストが残る。
+   *
+   * @returns {void}
+   */
+  function renderTextFile() {
+    const pre = document.createElement("pre");
+    pre.className = "text-view";
+    const code = document.createElement("code");
+    if (isSafeLanguageId(state.currentLang)) code.className = `language-${state.currentLang}`;
+    code.textContent = state.currentRaw;
+    highlightTextView(code);
+    pre.appendChild(code);
+    els.preview.replaceChildren(pre);
+    els.preview.classList.add("is-text");
+    // **表示モードは preview に固定する。** split / md は「ソースとプレビュー」を
+    // 出し分けるものなので、raw しか無いテキストでは同じ中身が 2 つ並ぶだけになる。
+    // `state.viewMode` は書き換えない —— 利用者が選んだモードは Markdown へ戻ったときに戻す
+    // （固定は `applyViewMode` 側でも効くので、TOC の復帰などで書き換わることはない）
+    els.contentBody.dataset.mode = "preview";
+    setViewToggleEnabled(false);
+  }
+
+  /**
+   * 表示モードの切替ボタンをまとめて有効・無効にする (Issue #155)。
+   *
+   * @param {boolean} enabled
+   * @returns {void}
+   */
+  function setViewToggleEnabled(enabled) {
+    for (const btn of els.toggleButtons) {
+      /** @type {HTMLButtonElement} */ (btn).disabled = !enabled;
+    }
+    for (const btn of els.overflowViewBtns) {
+      /** @type {HTMLButtonElement} */ (btn).disabled = !enabled;
+    }
+  }
+
   function renderCurrentFile() {
-    els.preview.innerHTML = state.currentHtml;
     els.source.textContent = state.currentRaw;
-    els.preview.scrollTop = 0;
     els.source.scrollTop = 0;
+
+    if (state.currentKind === "text") {
+      renderTextFile();
+      els.preview.scrollTop = 0;
+      // 見出しが無いので同期する対がない（残しておくと前のファイルの対で飛ぶ）
+      scrollSyncPairs = [];
+      return;
+    }
+
+    els.preview.classList.remove("is-text");
+    els.preview.innerHTML = state.currentHtml;
+    // テキストから戻ってきたときに、利用者が選んでいたモードへ復帰する
+    els.contentBody.dataset.mode = state.viewMode;
+    setViewToggleEnabled(true);
+    els.preview.scrollTop = 0;
     if (state.viewMode !== "md") {
       renderMermaid()
         .catch(() => {})
@@ -180,7 +288,12 @@ export function createPreview(ctx) {
    */
   function applyViewMode(mode) {
     state.viewMode = mode;
-    els.contentBody.dataset.mode = mode;
+    // **テキスト表示中は画面を preview に固定する (Issue #155)。** `state.viewMode` は
+    // 更新しておき、Markdown へ戻ったときに `renderCurrentFile` が反映する。
+    // ここで守らないと、**TOC の一時 preview 切替からの復帰**（`applyTocVisibility` が
+    // 保存済みモードで `applyViewMode` を呼ぶ）がテキスト表示中に走ったときに、
+    // ソースペインが出てしまう（ハイライトの無い `#source` 側が見える）。
+    els.contentBody.dataset.mode = state.currentKind === "text" ? "preview" : mode;
     for (const btn of els.toggleButtons) {
       const active = btn.dataset.mode === mode;
       btn.setAttribute("aria-selected", active ? "true" : "false");
@@ -207,6 +320,9 @@ export function createPreview(ctx) {
    */
   function selectViewMode(mode) {
     if (!mode || !VIEW_MODES.includes(mode)) return;
+    // **テキスト表示中は preview 固定 (Issue #155)。** ボタンは無効化してあるが、
+    // ショートカットや ⋮ メニュー経由でも同じ判断になるようここでも止める
+    if (state.currentKind === "text") return;
     if (state.viewMode === mode) return;
     // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
     // (後から TOC を閉じても、ユーザの選択を尊重する)
@@ -307,7 +423,8 @@ export function createPreview(ctx) {
     target.disabled = true;
 
     try {
-      /** @type {import("./api-types.js").FileResponse} */
+      // 保存の応答は Markdown 専用（テキストには書き込めない。Issue #155）
+      /** @type {import("./api-types.js").MarkdownFileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -567,6 +684,8 @@ export function createPreview(ctx) {
     initMermaid,
     renderMermaid,
     renderCurrentFile,
+    renderTextFile,
+    setViewToggleEnabled,
     wireSystemThemeFollow,
     rebuildScrollSyncPairs,
     wireScrollSync,

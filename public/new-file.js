@@ -7,9 +7,13 @@
  * クライアント側の入力整形であり、セキュリティ境界はサーバが持つ。
  */
 
-/** クライアント側で受け入れる Markdown 拡張子 (サーバの MD_EXTENSIONS と同値) */
-/** @type {ReadonlySet<string>} */
-export const MD_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
+// **定義は `file-kind.js` に移した (Issue #155)。** ツリーの描画でも Markdown 判定が
+// 要るようになり、「新規作成の入力補完」であるこのモジュールに置いたままだと、
+// 無関係なモジュールがここへ import しに来ることになる。既存の import 元を壊さない
+// よう再エクスポートは残す。
+export { MD_EXTENSIONS } from "./file-kind.js";
+
+import { MD_EXTENSIONS } from "./file-kind.js";
 
 /**
  * インライン入力されたファイル名を Markdown ファイル名に補完する。

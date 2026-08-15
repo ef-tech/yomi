@@ -14,6 +14,7 @@
  */
 
 import { errorText, fetchJson, fetchTree } from "./app-context.js";
+import { isMarkdownName } from "./file-kind.js";
 import { t } from "./i18n.js";
 import { completeMarkdownFileName, joinTreePath } from "./new-file.js";
 import { prefs } from "./prefs.js";
@@ -64,7 +65,10 @@ export function createTree(ctx) {
     li.dataset.nodeKey = `${node.type}:${node.path}`;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `tree-item is-${node.type}`;
+    // **Markdown とテキストでアイコンを変える (Issue #155)。** 並んだときに、
+    // 開けば編集できるもの (md) と読むだけのもの (テキスト) が一目で分かるようにする
+    const kindClass = node.type === "file" && !isMarkdownName(node.name) ? " is-text" : "";
+    button.className = `tree-item is-${node.type}${kindClass}`;
     button.title = node.path;
 
     const icon = document.createElement("span");
@@ -531,7 +535,8 @@ export function createTree(ctx) {
     closeNewFileInput();
 
     try {
-      /** @type {import("./api-types.js").FileResponse} */
+      // 新規作成は Markdown 専用の経路（Issue #155 でもテキストは作れない）
+      /** @type {import("./api-types.js").MarkdownFileResponse} */
       const created = await fetchJson("/api/file/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
