@@ -212,6 +212,38 @@ describe("テキスト表示中の UI (Issue #155)", () => {
       expect(btn.disabled).toBe(false);
     }
   });
+
+  /**
+   * **TOC の「一時 preview 切替」の復帰で固定が破られないこと。**
+   *
+   * md モードで TOC を開くと `tocPreviewOverride` が立ち、閉じたときに保存済みモードへ
+   * 戻す (`applyViewMode`)。テキストへ移ってから閉じると、この復帰が
+   * `content-body[data-mode]` を md に書き換えてしまい、**テキストなのにソースペインが
+   * 出る**（ハイライトも効かない `#source` 側が見える）。
+   */
+  test("テキスト表示中に TOC を閉じても preview 固定が破られない", async () => {
+    h = await boot({ storage: { "yomi:viewMode:v1": "md" } });
+    // md モードで TOC を開く → 一時的に preview へ切り替わる (tocPreviewOverride)
+    h.click(h.el("toc-btn"));
+    await h.flush();
+    expect(h.el("content-body").dataset.mode).toBe("preview");
+
+    h.click(h.treeItem("notes.txt"));
+    await h.flush();
+    expect(h.el("content-body").dataset.mode).toBe("preview");
+
+    // テキストを開いているあいだに TOC を閉じる（× ボタン。Esc でも同じ経路）
+    h.click(h.el("toc-close"));
+    await h.flush();
+
+    expect(h.el("content-body").dataset.mode).toBe("preview");
+    expect(h.q("#preview pre.text-view > code").textContent).toBe(TEXT_RAW);
+
+    // Markdown へ戻ったら、保存されていたモード (md) に復帰する
+    h.click(h.treeItem("docs/guide.md"));
+    await h.flush();
+    expect(h.el("content-body").dataset.mode).toBe("md");
+  });
 });
 
 describe("テキストファイルとツリー / クイックオープン (Issue #155)", () => {

@@ -101,16 +101,6 @@ export function createPreview(ctx) {
   }
 
   /**
-   * テキストファイルを読み取り専用で描く (Issue #155)。
-   *
-   * **`innerHTML` を使わない。** 中身は利用者のファイルそのもので、HTML として解釈させる
-   * 理由がない（#21 / #59 の経緯。サニタイズに頼るより、そもそも解釈させないほうが強い）。
-   * `textContent` に入れればブラウザは文字として扱う。
-   *
-   * ハイライトは {@link highlightTextView} が当てる。**先に `textContent` を入れてから**
-   * 当てるので、ハイライトが失敗しても素のテキストが残る。
-   */
-  /**
    * テキストにシンタックスハイライトを当てる (Issue #155)。
    *
    * **`highlight.js` の出力もサニタイズしてから入れる。** ライブラリは入力を
@@ -138,6 +128,18 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * テキストファイルを読み取り専用で描く (Issue #155)。
+   *
+   * **`innerHTML` を使わない。** 中身は利用者のファイルそのもので、HTML として解釈させる
+   * 理由がない（#21 / #59 の経緯。サニタイズに頼るより、そもそも解釈させないほうが強い）。
+   * `textContent` に入れればブラウザは文字として扱う。
+   *
+   * ハイライトは {@link highlightTextView} が当てる。**先に `textContent` を入れてから**
+   * 当てるので、ハイライトが失敗しても素のテキストが残る。
+   *
+   * @returns {void}
+   */
   function renderTextFile() {
     const pre = document.createElement("pre");
     pre.className = "text-view";
@@ -151,9 +153,9 @@ export function createPreview(ctx) {
     // **表示モードは preview に固定する。** split / md は「ソースとプレビュー」を
     // 出し分けるものなので、raw しか無いテキストでは同じ中身が 2 つ並ぶだけになる。
     // `state.viewMode` は書き換えない —— 利用者が選んだモードは Markdown へ戻ったときに戻す
+    // （固定は `applyViewMode` 側でも効くので、TOC の復帰などで書き換わることはない）
     els.contentBody.dataset.mode = "preview";
     setViewToggleEnabled(false);
-    return code;
   }
 
   /**
@@ -286,7 +288,12 @@ export function createPreview(ctx) {
    */
   function applyViewMode(mode) {
     state.viewMode = mode;
-    els.contentBody.dataset.mode = mode;
+    // **テキスト表示中は画面を preview に固定する (Issue #155)。** `state.viewMode` は
+    // 更新しておき、Markdown へ戻ったときに `renderCurrentFile` が反映する。
+    // ここで守らないと、**TOC の一時 preview 切替からの復帰**（`applyTocVisibility` が
+    // 保存済みモードで `applyViewMode` を呼ぶ）がテキスト表示中に走ったときに、
+    // ソースペインが出てしまう（ハイライトの無い `#source` 側が見える）。
+    els.contentBody.dataset.mode = state.currentKind === "text" ? "preview" : mode;
     for (const btn of els.toggleButtons) {
       const active = btn.dataset.mode === mode;
       btn.setAttribute("aria-selected", active ? "true" : "false");

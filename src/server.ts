@@ -593,7 +593,9 @@ async function handleFileRead(
       if (buf.byteLength > MAX_TEXT_BYTES) {
         return Response.json(
           {
-            error: `ファイルが大きすぎます (上限 ${Math.floor(MAX_TEXT_BYTES / 1024 / 1024)}MB): ${safe.rel}`,
+            // **要求されたパスを返す**（`safe.rel` ではなく）。他のエラー応答と揃うし、
+            // symlink 越しに開いたときに利用者が知らない実体名を返さずに済む
+            error: `ファイルが大きすぎます (上限 ${Math.floor(MAX_TEXT_BYTES / 1024 / 1024)}MB): ${requested}`,
             code: "file_too_large",
           },
           { status: 413 },
