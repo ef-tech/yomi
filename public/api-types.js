@@ -40,14 +40,41 @@
  */
 
 /**
- * `GET /api/file` と `POST /api/file` の 200 応答。
+ * Markdown を返すときの 200 応答（`GET /api/file` と `POST /api/file`）。
+ *
+ * **`kind` は省略されうる。** 保存 (`POST`) の応答は Markdown 専用の経路なので、
+ * 種別を載せていない。読み取り (`GET`) は Issue #155 以降つねに `"markdown"` を返す。
  *
  * @typedef {{
  *   path: string,
  *   raw: string,
  *   html: string,
  *   sha: string,
- * }} FileResponse
+ *   kind?: "markdown",
+ * }} MarkdownFileResponse
+ */
+
+/**
+ * テキストファイルを返すときの 200 応答（`GET /api/file` のみ。Issue #155）。
+ *
+ * **`html` を持たない。** レンダリングせず raw をそのまま見せるので、クライアントは
+ * `textContent` に入れる。`lang` は `src/util/text-ext.ts` の allowlist 由来の
+ * highlight.js 言語 ID。
+ *
+ * @typedef {{
+ *   path: string,
+ *   raw: string,
+ *   sha: string,
+ *   kind: "text",
+ *   lang: string,
+ * }} TextFileResponse
+ */
+
+/**
+ * `GET /api/file` の 200 応答。**`kind` で絞ってから `html` を読むこと** ——
+ * テキストには無い。
+ *
+ * @typedef {MarkdownFileResponse | TextFileResponse} FileResponse
  */
 
 /**

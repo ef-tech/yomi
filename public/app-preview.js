@@ -78,11 +78,80 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * ハイライト言語 ID として CSS クラスに載せてよい形か (Issue #155)。
+   *
+   * 値はサーバの allowlist (`src/util/text-ext.ts`) 由来なので現実には安全だが、
+   * **`class` 属性へ値を流す唯一の経路**なので、ここでも形を確かめる
+   * (`asset-ext.ts` が `isAssetExtension` を二重に掛けているのと同じ考え方)。
+   *
+   * @param {string | null} lang
+   * @returns {boolean}
+   */
+  function isSafeLanguageId(lang) {
+    return typeof lang === "string" && /^[a-z0-9+#-]{1,32}$/.test(lang);
+  }
+
+  /**
+   * テキストファイルを読み取り専用で描く (Issue #155)。
+   *
+   * **`innerHTML` を使わない。** 中身は利用者のファイルそのもので、HTML として解釈させる
+   * 理由がない（#21 / #59 の経緯。サニタイズに頼るより、そもそも解釈させないほうが強い）。
+   * `textContent` に入れればブラウザは文字として扱う。
+   *
+   * ハイライトは Issue #155 のコミット C で `code` 要素へ後から当てる。ここでは
+   * `language-*` クラスを付けるところまでを担う。
+   */
+  function renderTextFile() {
+    const pre = document.createElement("pre");
+    pre.className = "text-view";
+    const code = document.createElement("code");
+    if (isSafeLanguageId(state.currentLang)) code.className = `language-${state.currentLang}`;
+    code.textContent = state.currentRaw;
+    pre.appendChild(code);
+    els.preview.replaceChildren(pre);
+    els.preview.classList.add("is-text");
+    // **表示モードは preview に固定する。** split / md は「ソースとプレビュー」を
+    // 出し分けるものなので、raw しか無いテキストでは同じ中身が 2 つ並ぶだけになる。
+    // `state.viewMode` は書き換えない —— 利用者が選んだモードは Markdown へ戻ったときに戻す
+    els.contentBody.dataset.mode = "preview";
+    setViewToggleEnabled(false);
+    return code;
+  }
+
+  /**
+   * 表示モードの切替ボタンをまとめて有効・無効にする (Issue #155)。
+   *
+   * @param {boolean} enabled
+   * @returns {void}
+   */
+  function setViewToggleEnabled(enabled) {
+    for (const btn of els.toggleButtons) {
+      /** @type {HTMLButtonElement} */ (btn).disabled = !enabled;
+    }
+    for (const btn of els.overflowViewBtns) {
+      /** @type {HTMLButtonElement} */ (btn).disabled = !enabled;
+    }
+  }
+
   function renderCurrentFile() {
-    els.preview.innerHTML = state.currentHtml;
     els.source.textContent = state.currentRaw;
-    els.preview.scrollTop = 0;
     els.source.scrollTop = 0;
+
+    if (state.currentKind === "text") {
+      renderTextFile();
+      els.preview.scrollTop = 0;
+      // 見出しが無いので同期する対がない（残しておくと前のファイルの対で飛ぶ）
+      scrollSyncPairs = [];
+      return;
+    }
+
+    els.preview.classList.remove("is-text");
+    els.preview.innerHTML = state.currentHtml;
+    // テキストから戻ってきたときに、利用者が選んでいたモードへ復帰する
+    els.contentBody.dataset.mode = state.viewMode;
+    setViewToggleEnabled(true);
+    els.preview.scrollTop = 0;
     if (state.viewMode !== "md") {
       renderMermaid()
         .catch(() => {})
@@ -207,6 +276,9 @@ export function createPreview(ctx) {
    */
   function selectViewMode(mode) {
     if (!mode || !VIEW_MODES.includes(mode)) return;
+    // **テキスト表示中は preview 固定 (Issue #155)。** ボタンは無効化してあるが、
+    // ショートカットや ⋮ メニュー経由でも同じ判断になるようここでも止める
+    if (state.currentKind === "text") return;
     if (state.viewMode === mode) return;
     // ユーザが手動で viewMode を変えたなら、TOC による一時的な preview override は破棄
     // (後から TOC を閉じても、ユーザの選択を尊重する)
@@ -307,7 +379,8 @@ export function createPreview(ctx) {
     target.disabled = true;
 
     try {
-      /** @type {import("./api-types.js").FileResponse} */
+      // 保存の応答は Markdown 専用（テキストには書き込めない。Issue #155）
+      /** @type {import("./api-types.js").MarkdownFileResponse} */
       const data = await fetchJson("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -567,6 +640,8 @@ export function createPreview(ctx) {
     initMermaid,
     renderMermaid,
     renderCurrentFile,
+    renderTextFile,
+    setViewToggleEnabled,
     wireSystemThemeFollow,
     rebuildScrollSyncPairs,
     wireScrollSync,

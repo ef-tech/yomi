@@ -70,8 +70,18 @@ export interface TreeNode {
 
 export interface FakeFile {
   raw: string;
+  /** Markdown をレンダリングした HTML。`kind: "text"` のファイルでは返さない */
   html: string;
   sha: string;
+  /**
+   * Issue #155: ファイルの種別。省略時は `"markdown"`。
+   *
+   * `"text"` にすると `/api/file` GET が**実サーバと同じく `html` を返さず**、
+   * 代わりに `kind` / `lang` を載せる。
+   */
+  kind?: "markdown" | "text";
+  /** `kind: "text"` のときのハイライト言語 ID。既定 `"plaintext"` */
+  lang?: string;
 }
 
 export interface FetchCall {
@@ -644,7 +654,25 @@ export async function bootApp(options: BootOptions = {}): Promise<AppHarness> {
         const path = new URL(url, "http://localhost").searchParams.get("path") ?? "";
         const file = state.files[path];
         if (!file) return reply(404, { error: "not found", code: "not_found" });
-        return reply(200, { path, raw: file.raw, html: file.html, sha: file.sha });
+        // **実サーバと同じ形で返す (Issue #155)。** テキストは `html` を持たず、
+        // 代わりに `kind` / `lang` を載せる —— fake が `html` を返してしまうと、
+        // クライアントが `kind` を見ずに描画していても気づけない
+        if (file.kind === "text") {
+          return reply(200, {
+            path,
+            raw: file.raw,
+            kind: "text",
+            lang: file.lang ?? "plaintext",
+            sha: file.sha,
+          });
+        }
+        return reply(200, {
+          path,
+          raw: file.raw,
+          html: file.html,
+          kind: "markdown",
+          sha: file.sha,
+        });
       }
       const path = String(body?.path ?? "");
       const file = state.files[path];

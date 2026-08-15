@@ -130,15 +130,28 @@ export function createDocument(ctx) {
   }
 
   /**
-   * @param {{ path: string, raw: string, html: string, sha?: string | null }} data
+   * サーバの応答を画面へ反映する。
+   *
+   * **種別はサーバの `kind` で決める (Issue #155)。** 拡張子から推測すると、symlink 越しに
+   * 開いたときに要求パスと実体で食い違う（サーバは解決後のパスで判定している）。
+   * `kind` を返さない応答は Markdown とみなす —— 保存 (`POST /api/file`) と競合応答は
+   * Markdown 専用の経路なので、その 2 つがここへ来ても正しく倒れる。
+   *
+   * @param {{ path: string, raw: string, html?: string, kind?: string, lang?: string | null, sha?: string | null }} data
    * @returns {void}
    */
   function applyFile(data) {
+    const isText = data.kind === "text";
     state.currentPath = data.path;
     state.currentRaw = data.raw;
-    state.currentHtml = sanitize(data.html);
+    state.currentKind = isText ? "text" : "markdown";
+    state.currentLang = isText ? (data.lang ?? null) : null;
+    // テキストには html が無い。`sanitize(undefined)` は空文字を返すが、**意図を明示して
+    // 空にする** —— 「レンダリングした結果が空」と「レンダリングしていない」を混同しない
+    state.currentHtml = isText ? "" : sanitize(data.html);
     state.currentSha = data.sha ?? null;
     els.currentPath.textContent = data.path;
+    els.readonlyBadge.hidden = !isText;
     ctx.editor.hideConflict();
     if (state.editing) {
       // applyFile で別ファイルに切替 = 編集解除
@@ -147,7 +160,9 @@ export function createDocument(ctx) {
     ctx.preview.renderCurrentFile();
     ctx.tree.highlightSelected(data.path);
     ctx.tree.expandAncestors(data.path);
-    ctx.editor.enableEditActions(true);
+    // **編集系はテキストでは落とす**（読み取り専用）。パスのコピーは種別を問わず使える
+    ctx.editor.enableEditActions(!isText);
+    ctx.editor.enableFileActions(true);
     ctx.preview.refreshToc();
     ctx.preview.wireTaskCheckboxes();
   }

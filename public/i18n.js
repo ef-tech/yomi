@@ -92,6 +92,8 @@ const MESSAGES = {
     "path.copy.aria": "表示中のファイルパス。タップでコピー",
     "path.copy.title": "タップでパスをコピー",
     "dirty.indicator": "● 未保存",
+    // Issue #155: テキストファイルは読むだけ (編集ボタンが押せない理由を示す)
+    "file.readonly": "読み取り専用",
     "edit.button": "編集",
     "edit.button.title": "ブラウザ内で編集する",
     "edit.saveClose": "保存して閉じる",
@@ -253,6 +255,7 @@ const MESSAGES = {
     "path.copy.aria": "Current file path. Tap to copy.",
     "path.copy.title": "Tap to copy path",
     "dirty.indicator": "● Unsaved",
+    "file.readonly": "Read-only",
     "edit.button": "Edit",
     "edit.button.title": "Edit in the browser",
     "edit.saveClose": "Save and close",

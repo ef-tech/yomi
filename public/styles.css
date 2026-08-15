@@ -368,6 +368,17 @@ body {
   font-weight: 600;
 }
 
+/* Issue #155: テキストファイル表示中であることを示す (編集ボタンが押せない理由) */
+.readonly-badge {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 /* ===== 競合バナー ===== */
 .conflict-banner {
   display: flex;
@@ -793,6 +804,31 @@ body {
   min-width: 0;
 }
 
+/* ===== テキストファイルの読み取り専用表示 (Issue #155) ===== */
+
+/* Markdown の余白は「読み物」向けに広い。テキストは行を追うので詰める */
+.preview.is-text {
+  padding: 1.5rem 2rem;
+}
+
+.text-view {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  /* **折り返す。** 横スクロールにすると、長い 1 行を持つ JSON やログで
+     ほとんどの行が画面外に出て読めなくなる */
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.text-view code {
+  font: inherit;
+  background: none;
+  padding: 0;
+}
+
 /* GFM タスクリストのチェックボックス (Issue #17): プレビュー内でクリック可能 */
 .preview input[type="checkbox"] {
   cursor: pointer;
@@ -1044,6 +1080,10 @@ body {
 }
 .tree-item.is-file > .icon::before {
   content: "≡";
+}
+/* Issue #155: テキストファイル (読むだけ) は md と別のアイコンにする */
+.tree-item.is-file.is-text > .icon::before {
+  content: "▫";
 }
 
 .tree-item .name {
@@ -1515,11 +1555,18 @@ body {
     background: rgba(26, 127, 55, 0.12);
     border-color: rgba(26, 127, 55, 0.4);
   }
-  /* スマホでは dirty / 編集 / view-toggle はすべて overflow menu に移動するので非表示 */
+  /* スマホでは dirty / 編集 / view-toggle はすべて overflow menu に移動するので非表示。
+     読み取り専用バッジ (Issue #155) も同様 —— 幅が足りずパス表示を押し出してしまう */
   .content-header > .dirty-indicator,
+  .content-header > .readonly-badge,
   .content-header > .edit-actions,
   .content-header > .view-toggle {
     display: none;
+  }
+
+  /* テキスト表示はスマホでも余白を詰める (Issue #155) */
+  .preview.is-text {
+    padding: 1rem 1.1rem;
   }
 
   /* === FAB (右下、目次トリガー) === */

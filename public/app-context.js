@@ -192,6 +192,8 @@ export function createElements() {
     status: byId("status"),
     currentPath: /** @type {HTMLButtonElement} */ (byId("current-path")),
     dirtyIndicator: byId("dirty-indicator"),
+    // 読み取り専用バッジ (Issue #155)。テキストファイル表示中だけ出す
+    readonlyBadge: byId("readonly-badge"),
     // ⋮ overflow menu (Issue #30, スマホ専用)
     overflowBtn: byId("overflow-btn"),
     overflowMenu: byId("overflow-menu"),
@@ -283,6 +285,19 @@ export function createState() {
     treeGen: null,
     /** @type {string | null} 現在表示中のファイル path */
     currentPath: null,
+    /**
+     * @type {"markdown" | "text"}
+     * 表示中ファイルの種別 (Issue #155)。**サーバの `/api/file` が返す `kind` が正本**で、
+     * 拡張子から推測しない（symlink 越しだと要求パスと実体で食い違う）。
+     * `"text"` のあいだは編集・TOC・画像 zip・表示モード切替を無効にする。
+     */
+    currentKind: "markdown",
+    /**
+     * @type {string | null}
+     * テキスト表示時のハイライト言語 ID (Issue #155)。Markdown 表示中は null。
+     * 値はサーバの allowlist (`src/util/text-ext.ts`) 由来。
+     */
+    currentLang: null,
     /** 現在のファイル内容 */
     currentRaw: "",
     currentHtml: "",
