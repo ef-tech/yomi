@@ -5,7 +5,7 @@
 [![CI](https://github.com/ef-tech/yomi/actions/workflows/ci.yml/badge.svg)](https://github.com/ef-tech/yomi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-ローカル Markdown ビューア。カレントディレクトリ配下の `.md` ファイルを再帰的に集めて、2 ペインのブラウザ UI（左：ツリー、右：プレビュー）で読むためのコマンドラインツール。
+ローカル Markdown ビューア。カレントディレクトリ配下の `.md` ファイルを再帰的に集めて、2 ペインのブラウザ UI（左：ツリー、右：プレビュー）で読むためのコマンドラインツール。md の隣にある `.json` / `.csv` / 設定ファイル / コードも、同じツリーから読み取り専用で開けます。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-preview.png">
@@ -25,6 +25,7 @@
 - ブラウザの戻る/進むに対応、URL `?path=foo.md` でリロード復元・URL コピペで再現
 - GFM タスクリスト `- [ ] xxx` をプレビュー上でクリックして ON/OFF、md ファイルにも反映
 - Markdown 内の画像 `![](foo.png)` を相対パス解決して表示（同階層・`../`・サブディレクトリ対応）
+- md 以外のテキストファイル（`.json` / `.csv` / `.ts` / `Dockerfile` など）も**読み取り専用**で閲覧、シンタックスハイライト付き
 - UI 言語の切替（日本語 / English、ブラウザ言語に自動追従、`localStorage` に保存）
 
 ## スクリーンショット
@@ -278,6 +279,26 @@ Markdown からリンクしたデータファイル (`[売上](data/sales.csv)` 
 - **許可リストに無い拡張子は配信しません**（400）。特に `.html` / `.htm` / `.xhtml` / `.js` / `.mjs` は、配信するとスクリプト実行や HTML 描画の経路になるため意図的に除外しています（Issue #21 / #22 の XSS 対策）。
 - `resolveSafe` によるルート外拒否、50 MB のサイズ上限、`X-Content-Type-Options: nosniff`、強 ETag は画像・PDF と共通です。
 
+### md 以外のテキストファイルを読む (Issue #155)
+
+左ツリーには Markdown だけでなく、**テキストとして読めるファイル**も並びます。クリックすると右ペインに中身がそのまま表示され、拡張子に応じたシンタックスハイライトが付きます。`README.md` の隣にある `package.json` や `compose.yaml` を見るために、エディタへ切り替える必要がありません。
+
+| 種別 | 拡張子・ファイル名 |
+|---|---|
+| 素のテキスト | `.txt` / `.text` / `.log` / `.csv` / `.tsv` |
+| 設定・データ | `.json` / `.jsonc` / `.yaml` / `.yml` / `.toml` / `.ini` / `.cfg` / `.conf` / `.properties` / `.xml` / `.html` / `.htm` |
+| スタイル | `.css` / `.scss` / `.less` |
+| コード | `.js` / `.mjs` / `.cjs` / `.jsx` / `.ts` / `.tsx` / `.py` / `.rb` / `.go` / `.rs` / `.java` / `.kt` / `.kts` / `.swift` / `.php` / `.c` / `.h` / `.cpp` / `.cc` / `.hpp` / `.cs` / `.sh` / `.bash` / `.zsh` / `.lua` / `.pl` / `.pm` / `.sql` / `.graphql` / `.gql` / `.proto` / `.diff` / `.patch` |
+| 拡張子を持たない慣習ファイル | `Dockerfile` / `Makefile` / `LICENSE` / `.gitignore` / `.gitattributes` / `.dockerignore` / `.npmignore` / `.yomiignore` / `.editorconfig` |
+
+- **読み取り専用です。** 編集・保存・新規作成は Markdown だけで、テキストを開いているあいだは編集ボタン・目次・画像 zip が押せなくなり、ヘッダに「読み取り専用」と出ます。パスのコピーは使えます。
+- **表示モードは「プレビュー」に固定**されます。並列 / MD モードは「ソースとプレビュー」を出し分けるもので、raw しか持たないテキストでは同じ中身が 2 つ並ぶだけになるためです。
+- ファイルの更新は Markdown と同じくライブリロードされます。**クイックオープン（Ctrl/Cmd+P）の候補**にも出ます。
+- **許可リストに無い拡張子は開けません**（400）。画像や PDF は上の「添付ファイルのダウンロード」の経路で扱います。`.env` は秘密情報を含むことが多いので既定では載せません（必要なら [`.yomiignore`](#除外パターンのカスタマイズ-yomiignore) の否定パターンで解除できます）。
+- **2 MB を超えるテキストは開けません**（413）。中身を丸ごとブラウザへ渡して色付けするため、巨大なログを開くと固まってしまうためです（Markdown にこの上限はありません）。
+- 中身は HTML として解釈しません。`.html` を開いてもタグは文字として表示されます。
+- 除外設定（`.yomiignore` / 既定の除外ディレクトリ）は Markdown と同じように効きます。
+
 ### 並列モードのスクロール同期 (Issue #9)
 
 **並列** モード (md ソース + プレビューの 2 ペイン) では、見出し基準でスクロール位置が左右同期します。`<h1>` 〜 `<h6>` に source 上の絶対行番号を `data-line` 属性で埋め、source 側の行ベース Y 座標と preview 側の `offsetTop` を線形補間する純関数で対応付けます。
@@ -503,19 +524,21 @@ bunx playwright show-trace test-results/<テスト名>/trace.zip
 bun run typecheck
 ```
 
-### ベンダー bundle (DOMPurify / Mermaid)
+### ベンダー bundle (DOMPurify / Mermaid / highlight.js)
 
-プレビューのサニタイズ (DOMPurify) と Mermaid 描画は、CDN ではなく**配布物へ同梱した bundle** から読み込みます (Issue #52)。そのためオフライン / CDN 障害 / ネットワーク制限下でも動作し、外部ホスト (jsdelivr 等) へのリクエストは発生しません。プレビュー HTML には `script-src 'self'` を含む Content-Security-Policy を付与しています。
+プレビューのサニタイズ (DOMPurify)・Mermaid 描画・シンタックスハイライト (highlight.js) は、CDN ではなく**配布物へ同梱した bundle** から読み込みます (Issue #52 / #155)。そのためオフライン / CDN 障害 / ネットワーク制限下でも動作し、外部ホスト (jsdelivr 等) へのリクエストは発生しません。プレビュー HTML には `script-src 'self'` を含む Content-Security-Policy を付与しています。
 
-`dompurify` / `mermaid` はバージョン固定の devDependencies で、`public/vendor/*.js` は生成物としてコミットされています。**依存のバージョンを上げたときは bundle を再生成してコミットしてください**。
+`dompurify` / `mermaid` / `highlight.js` はバージョン固定の devDependencies で、`public/vendor/*.js` は生成物としてコミットされています。**依存のバージョンを上げたときは bundle を再生成してコミットしてください**。
+
+highlight.js は全部入り (190 言語超) ではなく、`src/util/text-ext.ts` の許可リストに出てくる言語だけを `scripts/vendor/highlight.js` で登録しています (151 KB)。**許可リストに言語を足したらここにも登録してください** —— 登録漏れは `tests/vendor-bundle.test.ts` が検出します（未登録の言語は例外にならず、静かに無色になるため）。
 
 ```bash
-bun run build   # public/vendor/dompurify.js / mermaid.js を再生成
+bun run build   # public/vendor/dompurify.js / mermaid.js / highlight.js を再生成
 ```
 
 CI は `bun run build` を実行してビルド健全性（CDN 参照・余計なチャンクの残存がないこと、生成物の未コミット/欠落がないこと）を検証します。
 
-なお **dependabot が `dompurify` / `mermaid` を上げた PR では、この再生成も自動で行われます**（次節）。手で `bun run build` が要るのは、自分でバージョンを上げたときだけです。
+なお **dependabot が `dompurify` / `mermaid` / `highlight.js` を上げた PR では、この再生成も自動で行われます**（次節）。手で `bun run build` が要るのは、自分でバージョンを上げたときだけです。
 
 ### dependabot と生成物 (Issue #72 / #75)
 
