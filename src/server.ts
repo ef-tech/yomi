@@ -583,9 +583,20 @@ async function handleFileRead(
     if (isExcludedPath(safe.rel, excludes)) {
       return excludedPathResponse(requested);
     }
+    // **解決後のパスにも許可リストを掛ける (Issue #156)。** 要求文字列と解決後の rel は
+    // symlink で食い違う。`note.md → secret.bin` のようなリンクがルート内にあると、
+    // 要求側の判定（`isViewableFile(requested)`）は通り、種別判定（`textLanguageOf`）は
+    // null を返すので、**許可リストに無い実体が Markdown としてレンダリングされて返る**。
+    // 除外判定を解決前と解決後の両方で掛けているのと同じ形にする（Issue #65）。
+    if (!isViewableFile(safe.rel)) {
+      return Response.json(
+        { error: "このファイルは表示できません", code: "not_viewable" },
+        { status: 400 },
+      );
+    }
     const buf = await readFile(safe.abs);
-    // **解決後のパスでも種別を引き直す。** 要求文字列と解決後の rel は symlink で
-    // 食い違いうるので、実際に読んだファイルの名前で判定する。
+    // **種別も解決後のパスで引く。** 実際に読んだファイルの名前で決めるので、
+    // `note.md → data.json` のリンクは（どちらも許可リスト内なので通り）テキストとして返る。
     const lang = textLanguageOf(safe.rel);
     if (lang !== null) {
       // **上限は Markdown に掛けない。** md は無制限で読めていた（既存の挙動を変えない）。
@@ -993,6 +1004,15 @@ async function handleArticleImagesZip(
     if (isExcludedPath(safe.rel, excludes)) {
       return excludedPathResponse(requested);
     }
+    // **解決後のパスでも Markdown であることを確かめる (Issue #156)。** 他の 2 経路と違い、
+    // ここは中身をそのまま返さない（返るのは参照された画像だけ）ので情報は漏れないが、
+    // **3 経路で関門の形を揃える** —— 1 つだけ緩いと、次に触る人がどれが正しいか判断できない。
+    if (!isMarkdownPath(safe.rel)) {
+      return Response.json(
+        { error: "Markdown ファイル以外は指定できません", code: "not_markdown" },
+        { status: 400 },
+      );
+    }
     markdown = (await readFile(safe.abs)).toString("utf-8");
   } catch (err) {
     if (err instanceof UnsafePathError) {
@@ -1242,6 +1262,13 @@ async function handleAssetRead(
     return excludedPathResponse(requested);
   }
 
+  // **解決後のパスにも許可リストを掛ける (Issue #156)。** `photo.png → secret.bin` のような
+  // symlink がルート内にあると、要求側の `isAssetExtension(requested)` は通るのに実体は
+  // 許可リスト外で、**中身がそのまま配信される**（下の `?? "application/octet-stream"` に落ちる）。
+  if (!isAssetExtension(safe.rel)) {
+    return Response.json({ error: "対応していない拡張子です" }, { status: 400 });
+  }
+
   // Issue #22: TOCTOU 対策 + 強 ETag (sha256 ベース)。
   // fd を先に取得して fstat → readFile を **同一 fd** から行うことで、
   // resolveSafe → stat → open の間に symlink swap されてもアクセス先は固定される。
@@ -1262,9 +1289,13 @@ async function handleAssetRead(
     const buffer = await fh.readFile();
     const etag = computeStrongEtag(buffer);
 
-    // safety net: handleAssetRead は前段で isAssetExtension をチェック済みなので、
-    // safe.rel の拡張子は必ず ASSET_CONTENT_TYPES に存在する。
-    // この `?? "application/octet-stream"` は事実上到達しないが、型安全のため残す。
+    // safety net: **解決後の `safe.rel` に対しても** isAssetExtension を通してあるので
+    // (Issue #156)、拡張子は必ず ASSET_CONTENT_TYPES に存在する。
+    //
+    // **以前は「要求側だけ検査すれば到達しない」と書いていたが、それは誤りだった** ——
+    // symlink で要求と実体が食い違うと、許可リスト外の実体がここへ来て
+    // `application/octet-stream` として配信されていた（#156）。いまは解決後にも
+    // 検査しているので到達しないが、その根拠が変わったことを残しておく。
     const contentType = assetContentType(safe.rel) ?? "application/octet-stream";
     const headers: Record<string, string> = {
       "Content-Type": contentType,
