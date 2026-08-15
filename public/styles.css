@@ -969,6 +969,12 @@ body {
   padding-left: max(2.5rem, calc((100% - 1024px) / 2));
   padding-right: max(2.5rem, calc((100% - 1024px) / 2));
 }
+/* **テキストは中央寄せしない (Issue #155)。** 上の 1024px 制限は「読み物」を読みやすい
+   行長に収めるためのもので、コードや JSON には逆に働く —— 折り返しが増えるうえ、
+   広い画面で左右に大きな余白が空く。幅を使い切る */
+.content-body[data-mode="preview"] .preview.is-text {
+  padding-inline: 2rem;
+}
 
 .content-body[data-mode="md"] {
   grid-template-columns: 1fr;
@@ -1651,8 +1657,9 @@ body {
     display: none;
   }
 
-  /* テキスト表示はスマホでも余白を詰める (Issue #155) */
-  .preview.is-text {
+  /* テキスト表示はスマホでも余白を詰める (Issue #155)。
+     preview モードの中央寄せ指定より詳細度を上げないと効かない */
+  .content-body[data-mode="preview"] .preview.is-text {
     padding: 1rem 1.1rem;
   }
 
