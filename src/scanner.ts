@@ -2,8 +2,8 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
-import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
+import { isViewableFile } from "./util/viewable.ts";
 
 export { DEFAULT_EXCLUDES };
 
@@ -26,7 +26,15 @@ export interface ScanOptions {
   maxDepth?: number;
 }
 
-export async function scanMarkdownTree(root: string, options: ScanOptions = {}): Promise<TreeNode> {
+/**
+ * ツリーを走査し、**開けるファイル**（Markdown + テキスト）だけを載せて返す。
+ *
+ * **Issue #155 で対象を広げた。** それまでは Markdown だけを載せていたので、
+ * 名前も `scanMarkdownTree` だった。判定は `isViewableFile` に一本化してあり、
+ * `watcher.ts` の監視対象と同じ集合になる（片方だけ広げると、ツリーに出るのに
+ * ライブリロードされないファイルが生まれる）。
+ */
+export async function scanViewableTree(root: string, options: ScanOptions = {}): Promise<TreeNode> {
   const excludes = options.excludes ?? DEFAULT_EXCLUDES;
   const followSymlinks = options.followSymlinks ?? false;
   const maxDepth = options.maxDepth;
@@ -96,7 +104,7 @@ async function walk(
         // 深さ境界 (childDepth === maxDepth): 中は見ないが dir ノードは残す (tree -L 準拠)
         truncatedDirs.add(dirNode);
       }
-    } else if (entry.isFile() && isMarkdownExtension(entry.name)) {
+    } else if (entry.isFile() && isViewableFile(entry.name)) {
       children.push({
         name: entry.name,
         path: relPath,
@@ -115,7 +123,7 @@ function pruneEmpty(node: TreeNode, truncatedDirs: WeakSet<TreeNode>): boolean {
     if (pruneEmpty(child, truncatedDirs)) kept.push(child);
   }
   node.children = kept;
-  // 深さ境界で truncate した dir は、中を見ていない (= 深い md があるかもしれない) ので
+  // 深さ境界で truncate した dir は、中を見ていない (= 深いところに開けるファイルがあるかもしれない) ので
   // 空でも残す。それ以外の本当に空の dir は従来どおり除去する。
   return kept.length > 0 || truncatedDirs.has(node) || node.path === "";
 }

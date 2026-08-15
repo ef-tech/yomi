@@ -122,16 +122,39 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
     await rm(root, { recursive: true, force: true });
   });
 
-  test("md 以外の拡張子のイベントは onChange を呼ばない", async () => {
+  test("ツリーに載らない拡張子のイベントは onChange を呼ばない (Issue #155)", async () => {
+    const calls: string[] = [];
+    const { watch, emit } = createFakeWatch();
+    const handle = createWatcher(root, (p) => calls.push(p), { watch });
+
+    try {
+      emit("change", "photo.png");
+      emit("change", "archive.zip");
+      emit("change", "keep.md");
+      await waitFor(() => calls.includes("keep.md"));
+      expect(calls).not.toContain("photo.png");
+      expect(calls).not.toContain("archive.zip");
+    } finally {
+      handle.close();
+    }
+  });
+
+  /**
+   * **監視対象は `scanner.ts` がツリーに載せる集合と同じ (Issue #155)。**
+   * ここが狭いと「ツリーに出るのにライブリロードされない」ファイルが生まれる。
+   */
+  test("テキストファイルの変更も onChange を呼ぶ (Issue #155)", async () => {
     const calls: string[] = [];
     const { watch, emit } = createFakeWatch();
     const handle = createWatcher(root, (p) => calls.push(p), { watch });
 
     try {
       emit("change", "note.txt");
-      emit("change", "keep.md");
-      await waitFor(() => calls.includes("keep.md"));
-      expect(calls).not.toContain("note.txt");
+      emit("change", "config.json");
+      emit("change", "Dockerfile");
+      await waitFor(() => calls.includes("Dockerfile"));
+      expect(calls).toContain("note.txt");
+      expect(calls).toContain("config.json");
     } finally {
       handle.close();
     }

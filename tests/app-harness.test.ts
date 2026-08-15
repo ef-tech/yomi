@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
+import { scanViewableTree, type TreeNode } from "../src/scanner.ts";
 import { bootApp, defaultTree, resetAppEnvironment } from "./helpers/app-harness.ts";
 
 afterEach(resetAppEnvironment);
@@ -94,7 +94,7 @@ describe("resetAppEnvironment", () => {
  * ## 実物に通して突き合わせる
  *
  * 並び順を自前で書き写すと「同じ勘違いで書いて読む」ことになるので、**fixture が挙げた
- * パスで実ファイルを作り、`scanMarkdownTree` に走らせた結果と比べる**。これなら
+ * パスで実ファイルを作り、`scanViewableTree` に走らせた結果と比べる**。これなら
  * 並び順（ディレクトリが先・名前順）だけでなく、`pruneEmpty` の意味論まで一度に守れる。
  */
 describe("defaultTree は実サーバの走査結果と一致する (Issue #145)", () => {
@@ -122,7 +122,7 @@ describe("defaultTree は実サーバの走査結果と一致する (Issue #145)
         await mkdir(dirname(abs), { recursive: true });
         await writeFile(abs, "# x\n");
       }
-      const scanned = await scanMarkdownTree(dir);
+      const scanned = await scanViewableTree(dir);
       // **root の `name` だけは比べない** —— fixture は `""`、scanner は `"."` を使う。
       // 見たいのは**子の並びと構造**なので、そこを揃えてから比較する
       expect(shape({ ...fixture, name: "." })).toEqual(shape(scanned));

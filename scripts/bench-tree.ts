@@ -12,7 +12,7 @@
  *
  * | 指標 | 測り方 | 何が効くか |
  * |---|---|---|
- * | スキャン時間 | `scanMarkdownTree` を直接呼ぶ | `readdir` の回数と除外判定 |
+ * | スキャン時間 | `scanViewableTree` を直接呼ぶ | `readdir` の回数と除外判定 |
  * | `/api/tree` の response size | 実サーバへ HTTP して byte 数 | ツリーの JSON 表現の冗長さ |
  * | DOM 更新時間 | jsdom 上で `renderTree` 相当を回す | ノード生成とイベント登録の回数 |
  *
@@ -35,7 +35,7 @@ import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import { applyTreeDiff } from "../public/tree-diff.js";
-import { scanMarkdownTree, type TreeNode } from "../src/scanner.ts";
+import { scanViewableTree, type TreeNode } from "../src/scanner.ts";
 import { createServer } from "../src/server.ts";
 import { BENCH_ROOT } from "./bench-fixture.ts";
 
@@ -102,7 +102,7 @@ async function buildFixture(dir: string, count: number) {
 
 /** 1) スキャン時間 */
 async function measureScan(dir: string): Promise<number[]> {
-  return bench(() => scanMarkdownTree(dir));
+  return bench(() => scanViewableTree(dir));
 }
 
 /**
@@ -548,7 +548,7 @@ async function main() {
     const api = await measureApi(dir);
 
     process.stderr.write(`[${count}] DOM 構築を計測中…\n`);
-    const tree = await scanMarkdownTree(dir);
+    const tree = await scanViewableTree(dir);
     const dom = stat(measureDom(tree));
 
     process.stderr.write(`[${count}] watcher イベントの反映を計測中 (末尾)…\n`);

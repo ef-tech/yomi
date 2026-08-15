@@ -3,8 +3,8 @@ import { relative, resolve } from "node:path";
 import { type FSWatcher, watch } from "chokidar";
 import { type SaveMark, sha256 } from "./save-mark.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
-import { isMarkdownExtension } from "./util/markdown-ext.ts";
 import { toPosix } from "./util/path-util.ts";
+import { isViewableFile } from "./util/viewable.ts";
 
 /**
  * 何が起きたか。
@@ -65,7 +65,8 @@ export function toChokidarDepth(treeDepth: number | undefined): number | undefin
 }
 
 /**
- * ディレクトリツリーを監視し、md ファイルの変更を通知する。
+ * ディレクトリツリーを監視し、**ツリーに載るファイル**（Markdown + テキスト。Issue #155）の
+ * 変更を通知する。
  *
  * 監視は chokidar に委譲する。`ignored` で除外ディレクトリ (node_modules 等) を
  * 走査・監視の前段で弾くため、Linux で `fs.inotify.max_user_watches` を枯渇させて
@@ -147,7 +148,9 @@ export function createWatcher(
 
   const emit = (kind: ChangeKind) => (absPath: string) => {
     const rel = toPosix(relative(rootDir, absPath));
-    if (!rel || !isMarkdownExtension(rel)) return;
+    // **ツリーに載る集合と同じものを見る (Issue #155)。** `scanner.ts` と判定を共有しないと、
+    // 「ツリーに出るのにライブリロードされない」ファイルが生まれる。
+    if (!rel || !isViewableFile(rel)) return;
     fire(rel, kind);
   };
 
