@@ -87,6 +87,27 @@ describe("テキストファイルの表示 (Issue #155)", () => {
     expect(h.q("#preview pre.text-view > code").className).toBe("language-json");
   });
 
+  test("登録済みの言語にはハイライトが当たる", async () => {
+    h = await boot();
+    h.click(h.treeItem("config.json"));
+    await h.flush();
+
+    const code = h.q("#preview pre.text-view > code");
+    // highlight.js は class 付き span で包む。**中身の文字は変えない**
+    expect(code.querySelectorAll("span.hljs-attr").length).toBeGreaterThan(0);
+    expect(code.textContent).toBe(JSON_RAW);
+  });
+
+  test("plaintext は色を付けず素のまま表示する", async () => {
+    h = await boot();
+    h.click(h.treeItem("notes.txt"));
+    await h.flush();
+
+    const code = h.q("#preview pre.text-view > code");
+    expect(code.children.length).toBe(0);
+    expect(code.textContent).toBe(TEXT_RAW);
+  });
+
   /**
    * **`innerHTML` を使っていないことの担保。** ここが `innerHTML` に戻ると、
    * ファイルの中身が HTML として解釈される（#21 / #59 が塞いだ経路が開く）。

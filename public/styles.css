@@ -16,6 +16,14 @@
   --diff-add-border: #2da44e;
   --diff-del-bg: #ffebe9;
   --diff-del-border: #cf222e;
+  /* シンタックスハイライト (Issue #155)。GitHub の配色に合わせる */
+  --hl-keyword: #cf222e;
+  --hl-entity: #8250df;
+  --hl-constant: #0550ae;
+  --hl-string: #0a3069;
+  --hl-comment: #59636e;
+  --hl-variable: #953800;
+  --hl-tag: #116329;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -35,6 +43,14 @@
     --diff-add-border: #3fb950;
     --diff-del-bg: #25171c;
     --diff-del-border: #f85149;
+    /* シンタックスハイライト (Issue #155)。GitHub の配色に合わせる */
+    --hl-keyword: #ff7b72;
+    --hl-entity: #d2a8ff;
+    --hl-constant: #79c0ff;
+    --hl-string: #a5d6ff;
+    --hl-comment: #9198a1;
+    --hl-variable: #ffa657;
+    --hl-tag: #7ee787;
   }
 }
 
@@ -56,6 +72,14 @@
   --diff-add-border: #2da44e;
   --diff-del-bg: #ffebe9;
   --diff-del-border: #cf222e;
+  /* シンタックスハイライト (Issue #155)。GitHub の配色に合わせる */
+  --hl-keyword: #cf222e;
+  --hl-entity: #8250df;
+  --hl-constant: #0550ae;
+  --hl-string: #0a3069;
+  --hl-comment: #59636e;
+  --hl-variable: #953800;
+  --hl-tag: #116329;
 }
 
 :root[data-theme="dark"] {
@@ -75,6 +99,14 @@
   --diff-add-border: #3fb950;
   --diff-del-bg: #25171c;
   --diff-del-border: #f85149;
+  /* シンタックスハイライト (Issue #155)。GitHub の配色に合わせる */
+  --hl-keyword: #ff7b72;
+  --hl-entity: #d2a8ff;
+  --hl-constant: #79c0ff;
+  --hl-string: #a5d6ff;
+  --hl-comment: #9198a1;
+  --hl-variable: #ffa657;
+  --hl-tag: #7ee787;
 }
 
 * {
@@ -827,6 +859,61 @@ body {
   font: inherit;
   background: none;
   padding: 0;
+}
+
+/* highlight.js のトークン (Issue #155)。**inline style を使わず class で色を付ける** ——
+   Issue #59 でサニタイズが `style` 属性を落とすようにしたので、色は CSS 側で持つ */
+.text-view .hljs-keyword,
+.text-view .hljs-selector-tag,
+.text-view .hljs-literal,
+.text-view .hljs-section,
+.text-view .hljs-doctag {
+  color: var(--hl-keyword);
+}
+.text-view .hljs-title,
+.text-view .hljs-title.class_,
+.text-view .hljs-title.function_,
+.text-view .hljs-built_in {
+  color: var(--hl-entity);
+}
+.text-view .hljs-number,
+.text-view .hljs-symbol,
+.text-view .hljs-meta,
+.text-view .hljs-type {
+  color: var(--hl-constant);
+}
+.text-view .hljs-string,
+.text-view .hljs-regexp,
+.text-view .hljs-addition {
+  color: var(--hl-string);
+}
+.text-view .hljs-comment,
+.text-view .hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.text-view .hljs-attr,
+.text-view .hljs-attribute,
+.text-view .hljs-variable,
+.text-view .hljs-template-variable,
+.text-view .hljs-params {
+  color: var(--hl-variable);
+}
+.text-view .hljs-name,
+.text-view .hljs-tag,
+.text-view .hljs-selector-id,
+.text-view .hljs-selector-class {
+  color: var(--hl-tag);
+}
+.text-view .hljs-emphasis {
+  font-style: italic;
+}
+.text-view .hljs-strong {
+  font-weight: 600;
+}
+/* diff は追加/削除が分かるよう既存の diff トークンに寄せる */
+.text-view .hljs-deletion {
+  color: var(--diff-del-border);
 }
 
 /* GFM タスクリストのチェックボックス (Issue #17): プレビュー内でクリック可能 */

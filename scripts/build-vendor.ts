@@ -1,7 +1,7 @@
 /**
- * ベンダー bundle 生成 (Issue #52)。
+ * ベンダー bundle 生成 (Issue #52、highlight.js は Issue #155)。
  *
- * DOMPurify と Mermaid を jsDelivr から実行時 import する代わりに、ローカルの
+ * DOMPurify・Mermaid・highlight.js を CDN から実行時 import する代わりに、ローカルの
  * `public/vendor/*.js` へ bundle して同梱する。これにより、
  * - オフライン / CDN 障害 / ネットワーク制限下でもプレビューと Mermaid が動く
  * - ブラウザが外部ホスト (jsdelivr 等) へリクエストしない (CSP `script-src 'self'`)
@@ -29,6 +29,7 @@ const banner = [
   " * yomi vendored bundle — Issue #52 (do not edit by hand; run `bun run build`)",
   ` * DOMPurify v${pkg.devDependencies.dompurify} — (c) Cure53, Apache-2.0 OR MPL-2.0 — https://github.com/cure53/DOMPurify`,
   ` * Mermaid v${pkg.devDependencies.mermaid} — MIT — https://github.com/mermaid-js/mermaid`,
+  ` * highlight.js v${pkg.devDependencies["highlight.js"]} — BSD-3-Clause — https://github.com/highlightjs/highlight.js`,
   " */",
 ].join("\n");
 
@@ -43,7 +44,11 @@ for (const name of await readdir(OUT_DIR).catch(() => [] as string[])) {
 }
 
 const result = await Bun.build({
-  entrypoints: ["scripts/vendor/dompurify.js", "scripts/vendor/mermaid.js"],
+  entrypoints: [
+    "scripts/vendor/dompurify.js",
+    "scripts/vendor/mermaid.js",
+    "scripts/vendor/highlight.js",
+  ],
   outdir: OUT_DIR,
   target: "browser",
   format: "esm",
@@ -80,8 +85,9 @@ if (offenders.length > 0) {
   throw new Error(`vendor bundle の検証に失敗:\n${offenders.join("\n")}`);
 }
 
-// 生成物が想定の 2 ファイルだけであること (余計なチャンクが出ていない)。
-const unexpected = files.filter((f) => f !== "dompurify.js" && f !== "mermaid.js");
+// 生成物が想定のファイルだけであること (余計なチャンクが出ていない)。
+const EXPECTED = new Set(["dompurify.js", "mermaid.js", "highlight.js"]);
+const unexpected = files.filter((f) => !EXPECTED.has(f));
 if (unexpected.length > 0) {
   throw new Error(`vendor bundle に想定外のファイル: ${unexpected.join(", ")}`);
 }

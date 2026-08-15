@@ -36,6 +36,7 @@
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.3",
     "dompurify": "3.4.13",
+    "highlight.js": "11.12.0",
     "jsdom": "^30.0.1",
     "mermaid": "11.16.1",
     "typescript": "^7.0.2"

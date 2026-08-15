@@ -13,7 +13,14 @@
  * Mermaid を初期化し直して再描画する必要があるため (描画と不可分)。
  */
 
-import { errorText, fetchJson, messageOf, THEME_MODES, VIEW_MODES } from "./app-context.js";
+import {
+  errorText,
+  fetchJson,
+  messageOf,
+  sanitize,
+  THEME_MODES,
+  VIEW_MODES,
+} from "./app-context.js";
 import { isTopOverlay } from "./app-overlays.js";
 import { t } from "./i18n.js";
 import { MERMAID_SECURE_KEYS } from "./mermaid-config.js";
@@ -21,6 +28,7 @@ import { prefs } from "./prefs.js";
 import { findHeadingLines, mapScrollTop } from "./scroll-sync.js";
 import { toggleTaskInMarkdown } from "./task-list.js";
 import { buildTocTree } from "./toc.js";
+import hljs from "./vendor/highlight.js";
 import mermaid from "./vendor/mermaid.js";
 
 /** @param {import("./app-context.js").Ctx} ctx */
@@ -86,7 +94,7 @@ export function createPreview(ctx) {
    * (`asset-ext.ts` が `isAssetExtension` を二重に掛けているのと同じ考え方)。
    *
    * @param {string | null} lang
-   * @returns {boolean}
+   * @returns {lang is string}
    */
   function isSafeLanguageId(lang) {
     return typeof lang === "string" && /^[a-z0-9+#-]{1,32}$/.test(lang);
@@ -99,15 +107,44 @@ export function createPreview(ctx) {
    * 理由がない（#21 / #59 の経緯。サニタイズに頼るより、そもそも解釈させないほうが強い）。
    * `textContent` に入れればブラウザは文字として扱う。
    *
-   * ハイライトは Issue #155 のコミット C で `code` 要素へ後から当てる。ここでは
-   * `language-*` クラスを付けるところまでを担う。
+   * ハイライトは {@link highlightTextView} が当てる。**先に `textContent` を入れてから**
+   * 当てるので、ハイライトが失敗しても素のテキストが残る。
    */
+  /**
+   * テキストにシンタックスハイライトを当てる (Issue #155)。
+   *
+   * **`highlight.js` の出力もサニタイズしてから入れる。** ライブラリは入力を
+   * エスケープして `<span class="hljs-*">` で包むだけなので本来は安全だが、
+   * **利用者のファイルの中身が `innerHTML` に至る唯一の経路**なので、#21 / #59 で
+   * 使っている DOMPurify を通してから入れる（`SANITIZE_CONFIG` は `class` を許可し
+   * `<style>` と `style` 属性を落とすので、色は付いたまま注入経路だけが塞がる）。
+   *
+   * 失敗したときは何もしない —— 呼び出し元が `textContent` を入れた後なので、
+   * **ハイライトが無いだけの素のテキスト**が残る。
+   *
+   * @param {HTMLElement} code
+   * @returns {void}
+   */
+  function highlightTextView(code) {
+    const lang = state.currentLang;
+    // plaintext (`.txt` / `.csv` / ログ) に文法は無い。未登録の言語も素通しする
+    if (!isSafeLanguageId(lang) || lang === "plaintext" || !hljs.getLanguage(lang)) return;
+    try {
+      const { value } = hljs.highlight(state.currentRaw, { language: lang, ignoreIllegals: true });
+      code.innerHTML = sanitize(value);
+    } catch (err) {
+      // 色が付かないだけなので、利用者に出さずログに留める
+      console.error("シンタックスハイライトに失敗しました:", messageOf(err));
+    }
+  }
+
   function renderTextFile() {
     const pre = document.createElement("pre");
     pre.className = "text-view";
     const code = document.createElement("code");
     if (isSafeLanguageId(state.currentLang)) code.className = `language-${state.currentLang}`;
     code.textContent = state.currentRaw;
+    highlightTextView(code);
     pre.appendChild(code);
     els.preview.replaceChildren(pre);
     els.preview.classList.add("is-text");
