@@ -2349,3 +2349,107 @@ describe("server - テキストのサイズ上限 (Issue #155)", () => {
     expect(res.status).toBe(200);
   });
 });
+
+/**
+ * Issue #156: symlink で「要求したパス」と「実際に読むファイル」が食い違うとき、
+ * **解決後のパスにも許可リストを掛ける**。
+ *
+ * 掛けていないと、`note.md → secret.bin` のようなリンクがルート内にあるだけで、
+ * 許可リストに無い実体が Markdown としてレンダリングされて返る（`/api/file`）か、
+ * `application/octet-stream` として配信される（`/api/asset`）。
+ *
+ * **`resolveSafe` はルート外を拒否するので影響はルート内に限られる**が、`.env` を
+ * 許可リストから外した判断（Issue #155）と噛み合わないので塞ぐ。
+ */
+describe("server - symlink 越しの許可リスト検査 (Issue #156)", () => {
+  let root: string;
+  let url: string;
+  let handle: ServerHandle;
+  /** symlink を作れない環境（Windows の一部・権限なし）ではテストを skip する */
+  let symlinkOk = true;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-symlink-allow-"));
+    // 実体（許可リスト外 / 内）
+    await writeFile(join(root, "secret.bin"), "BINARY-SECRET");
+    await writeFile(join(root, "data.json"), '{ "a": 1 }');
+    await writeFile(join(root, "real.md"), "# real\n");
+    await writeFile(join(root, "photo.png"), "PNG-BYTES");
+    try {
+      // 許可された名前 → 許可リスト外の実体
+      await symlink(join(root, "secret.bin"), join(root, "note.md"));
+      await symlink(join(root, "secret.bin"), join(root, "shot.png"));
+      // 許可された名前 → 許可された別種の実体（こちらは通ってよい）
+      await symlink(join(root, "data.json"), join(root, "alias.md"));
+      await symlink(join(root, "real.md"), join(root, "alias2.md"));
+      await symlink(join(root, "photo.png"), join(root, "alias.jpg"));
+    } catch {
+      symlinkOk = false;
+    }
+    const ctx = await startServer(root);
+    url = ctx.url;
+    handle = ctx.handle;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("`/api/file`: 許可リスト外の実体を指す symlink は 400 で拒否する", async () => {
+    if (!symlinkOk) return;
+    const res = await fetch(`${url}/api/file?path=note.md`);
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { code: string; raw?: string };
+    expect(json.code).toBe("not_viewable");
+    // **中身が漏れていないこと**まで見る（400 を返しつつ raw を載せていたら意味がない）
+    expect(json.raw).toBeUndefined();
+  });
+
+  test("`/api/file`: 許可リスト内どうしの symlink は開けて、種別は実体側で決まる", async () => {
+    if (!symlinkOk) return;
+    // `.md` という名前でも実体が `.json` なので text として返る
+    const res = await fetch(`${url}/api/file?path=alias.md`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { path: string; kind: string; lang: string; raw: string };
+    expect(json.kind).toBe("text");
+    expect(json.lang).toBe("json");
+    expect(json.raw).toBe('{ "a": 1 }');
+
+    // 実体も Markdown なら従来どおりレンダリングされる
+    const md = await fetch(`${url}/api/file?path=alias2.md`);
+    expect(md.status).toBe(200);
+    const mdJson = (await md.json()) as { kind: string; html: string };
+    expect(mdJson.kind).toBe("markdown");
+    expect(mdJson.html).toContain("<h1");
+  });
+
+  test("`/api/asset`: 許可リスト外の実体を指す symlink は 400 で拒否する", async () => {
+    if (!symlinkOk) return;
+    const res = await fetch(`${url}/api/asset?path=shot.png`);
+    expect(res.status).toBe(400);
+    // 中身を配信していないこと（`application/octet-stream` で素通ししない）
+    expect(res.headers.get("Content-Type") ?? "").not.toContain("octet-stream");
+    expect(await res.text()).not.toContain("BINARY-SECRET");
+  });
+
+  test("`/api/asset`: 許可リスト内どうしの symlink は従来どおり配信する", async () => {
+    if (!symlinkOk) return;
+    const res = await fetch(`${url}/api/asset?path=alias.jpg`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("PNG-BYTES");
+  });
+
+  test("`/api/images.zip`: 実体が Markdown でない symlink は 400 で拒否する", async () => {
+    if (!symlinkOk) return;
+    const res = await fetch(`${url}/api/images.zip?path=alias.md`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("not_markdown");
+  });
+
+  test("`/api/images.zip`: 実体が Markdown なら従来どおり動く", async () => {
+    if (!symlinkOk) return;
+    const res = await fetch(`${url}/api/images.zip?path=alias2.md`);
+    expect(res.status).toBe(200);
+  });
+});
