@@ -1886,3 +1886,155 @@ body {
     padding: 12px 14px;
   }
 }
+
+/* ===== 除外設定パネル (Issue #164) ===== */
+
+/* ツールバーの他 3 つと違い、常に押せる（ツリーが空でも除外を直せる必要がある） */
+.tree-yomiignore-btn {
+  margin-left: auto;
+}
+
+.yomiignore {
+  position: fixed;
+  inset: 0;
+  z-index: 65; /* クイックオープン (60) より上、競合ダイアログ (70) より下 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 16px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.yomiignore[hidden] {
+  display: none;
+}
+
+.yomiignore-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+  max-height: 90vh;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.yomiignore-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yomiignore-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.yomiignore-help {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.yomiignore-text {
+  flex: 1;
+  min-height: 240px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  resize: vertical;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.yomiignore-text:focus-visible {
+  border-color: var(--link);
+}
+
+.yomiignore-invalid {
+  max-height: 22vh;
+  margin: 0;
+  padding: 8px 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.yomiignore-invalid-item {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+/* 捨てた行と残した行を見分けられるようにする（残した行は除外としては生きている） */
+.yomiignore-invalid-item.is-dropped {
+  color: var(--diff-del-border);
+}
+
+.yomiignore-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.yomiignore-notice.is-ok {
+  color: var(--selected-text);
+}
+
+.yomiignore-notice.is-error {
+  color: var(--diff-del-border);
+}
+
+.yomiignore-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.yomiignore-action {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.yomiignore-action.is-primary {
+  color: #fff;
+  background: var(--link);
+  border-color: var(--link);
+}
+
+/* **`:disabled` ではなく `aria-disabled`。** `disabled` にするとフォーカストラップの
+   対象から外れ、押した本人のフォーカスが body へ落ちる（二重送信は JS 側で止める） */
+.yomiignore-action[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* スマホ幅では全画面に近づける（余白を削って textarea を確保する） */
+@media (max-width: 767px) {
+  .yomiignore {
+    padding: 0;
+  }
+
+  .yomiignore-panel {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+  }
+}

@@ -33,6 +33,10 @@ export const ERROR_CODES = [
   "parent_missing",
   "create_failed",
   "write_failed",
+  // Issue #164: `.yomiignore` は書けたが、読み直しに失敗して除外を差し替えられなかった。
+  // **`write_failed` と分ける** —— 書けているのに「保存に失敗」と言うと、利用者は
+  // もう一度保存しにいく（同じ結果になる）。直すべきはファイルの読み取り権限やリンク。
+  "reload_failed",
   "read_failed",
   "asset_failed",
   "zip_failed",

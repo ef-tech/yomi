@@ -79,6 +79,10 @@ export const OVERLAY_LAYERS = /** @type {const} */ ([
   // クイックオープンが Esc で閉じられなくなる** (Issue #135)
   { name: "tocPanel", priority: 58, blocksShortcuts: false },
   { name: "quickOpen", priority: 60, blocksShortcuts: true },
+  // 除外設定パネル (Issue #164)。全画面のモーダルなのでショートカットを塞ぐ ——
+  // 開いたまま `Ctrl/Cmd+P` でクイックオープンが背後に開くと、フォーカスだけが
+  // トラップの外へ出る (#112 が直した壊れ方そのもの)
+  { name: "yomiignorePanel", priority: 65, blocksShortcuts: true },
   { name: "conflictDiff", priority: 70, blocksShortcuts: true },
 ]);
 

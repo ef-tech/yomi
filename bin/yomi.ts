@@ -38,6 +38,7 @@ import {
   describeInvalidLines,
   loadYomiignore,
   resolveExcludes,
+  YOMIIGNORE_FILENAME,
   type YomiignoreParseResult,
 } from "../src/yomiignore.ts";
 
@@ -103,8 +104,31 @@ function describeYomiignore(parsed: YomiignoreParseResult): string | null {
   return parts.length > 0 ? `.yomiignore: ${parts.join(" / ")}` : null;
 }
 
+/**
+ * `.yomiignore` を読む。**起動を止めない**（Issue #164）。
+ *
+ * `loadYomiignore` は ENOENT 以外を投げるようになった（実効の除外が黙って既定へ戻る
+ * fail-open を塞ぐため）。**起動時の挙動は従来どおり空に倒す** —— ここで止めると、
+ * 権限や壊れた symlink 1 つで yomi がまったく起動しなくなる。ただし
+ * **黙って倒さない**: 何が起きて除外が効いていないのかを stderr に出す。
+ *
+ * **`/api/yomiignore` からの再読み込みは倒さない**（`src/server.ts` の `reloadExcludes`）。
+ * あちらは既に動いている除外を差し替える操作なので、読めないなら**差し替えないほうが安全**。
+ */
+async function loadYomiignoreOrWarn(rootDir: string): Promise<YomiignoreParseResult> {
+  try {
+    return await loadYomiignore(rootDir);
+  } catch (err) {
+    console.warn(
+      `警告: ${YOMIIGNORE_FILENAME} を読めませんでした。除外設定は既定のままです: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { excludes: new Set(), negations: new Set(), invalid: [] };
+  }
+}
+
 async function runForeground(options: CliOptions, rootDir: string, port: number) {
-  const yomiignore = await loadYomiignore(rootDir);
+  const yomiignore = await loadYomiignoreOrWarn(rootDir);
   const excludes = resolveExcludes(yomiignore);
   // **照合できない行は黙って捨てない。** 除外が読み書きの可否を決める今、
   // 「書いたのに効いていない」は「除外したつもりのファイルが読める」を意味する
@@ -208,7 +232,7 @@ async function runDetached(options: CliOptions, rootDir: string, port: number) {
   // **親でも `.yomiignore` を読んで警告する。** 実際に除外を適用するのは子 (runForeground) だが、
   // 子の stderr はログファイルへ流れるので、そこに出しても**利用者の端末には届かない**。
   // 「書いたのに効いていない」を知らせるのが目的なので、見える側にも出す。
-  const yomiignore = await loadYomiignore(rootDir);
+  const yomiignore = await loadYomiignoreOrWarn(rootDir);
   if (yomiignore.invalid.length > 0) console.warn(describeInvalidLines(yomiignore.invalid));
 
   let record: InstanceRecord;

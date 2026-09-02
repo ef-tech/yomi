@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { UnsafePathError } from "../src/safepath.ts";
 import { DEFAULT_EXCLUDES } from "../src/util/excludes.ts";
 import {
   describeInvalidLines,
@@ -167,11 +168,13 @@ describe("describeInvalidLines", () => {
 describe("loadYomiignore", () => {
   let root: string;
 
-  beforeAll(async () => {
+  // **テストごとに作り直す** —— `.yomiignore` を「通常ファイル / ディレクトリ / symlink」と
+  // 別の形で置くテストが並ぶので、共有すると後のテストが EEXIST で落ちる
+  beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-yomiignore-"));
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
@@ -190,10 +193,40 @@ describe("loadYomiignore", () => {
     expect(r.negations).toEqual(new Set(["build"]));
   });
 
-  test("存在しないディレクトリでも空でフォールバック", async () => {
-    // 実 EACCES は root で走る CI では作れないので、ENOENT で代表させる
-    const r = await loadYomiignore(join(root, "nonexistent-subdir"));
-    expect(r).toEqual({ excludes: new Set(), negations: new Set(), invalid: [] });
+  // **ここは Issue #164 で契約が変わった。** 以前は「読めなければ何であれ空」だったが、
+  // 画面から除外を差し替えられるようになったので、**読めなかったことを空に倒すと
+  // 実効の除外が黙って既定へ戻る**（利用者が足した除外が消える＝ fail-open）。
+  // ファイルが無いときだけ空にし、それ以外は投げて呼び出し側に決めさせる。
+  test("読めないときは投げる（空に倒さない）", async () => {
+    // 実 EACCES は root で走る CI では作れないので、**ディレクトリを置いて EISDIR** で代表させる。
+    // どちらも「ENOENT ではない読み取り失敗」で、扱いは同じ
+    await mkdir(join(root, YOMIIGNORE_FILENAME), { recursive: true });
+    await expect(loadYomiignore(root)).rejects.toThrow();
+  });
+
+  test("ルート外を指す symlink は投げる（起動時と画面で答えを揃える）", async () => {
+    // **素の readFile だと、サーバはルート外の設定を適用しているのに
+    // `/api/yomiignore` は 400 になり、画面から確認も修正もできない袋小路になる**
+    const outside = await mkdtemp(join(tmpdir(), "yomiignore-outside-"));
+    try {
+      await writeFile(join(outside, "x.txt"), "secret\n");
+      await symlink(join(outside, "x.txt"), join(root, YOMIIGNORE_FILENAME));
+      await expect(loadYomiignore(root)).rejects.toThrow(UnsafePathError);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("ルート内を指す symlink は従来どおり読める", async () => {
+    await writeFile(join(root, "src.txt"), "private\n");
+    await symlink(join(root, "src.txt"), join(root, YOMIIGNORE_FILENAME));
+    expect((await loadYomiignore(root)).excludes).toEqual(new Set(["private"]));
+  });
+
+  test("存在しないディレクトリでも起動は止まらない（呼び出し側が倒す）", async () => {
+    // `bin/yomi.ts` の `loadYomiignoreOrWarn` と同じ扱い。**投げること自体は正しく**、
+    // 起動経路がそれを警告つきで空へ倒す
+    await expect(loadYomiignore(join(root, "nonexistent-subdir"))).rejects.toThrow();
   });
 });
 
