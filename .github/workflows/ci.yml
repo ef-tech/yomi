@@ -35,9 +35,12 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     if: github.event.action != 'edited'
-    # **ジョブごとに別のロック。** 本文の編集で走った run に打ち切られないようにする
+    # **ジョブごとに別のロック。** 本文の編集で走った run に打ち切られないようにする。
+    # **matrix の値をグループに入れる** —— 入れないと ubuntu と macos が同じロックを取り合い、
+    # **後から起動したほうが先のほうを cancel する**（実測: run 33619361962 で
+    # `Test (macos-latest)` が `Test (ubuntu-latest)` に打ち切られた）。
     concurrency:
-      group: ci-test-${{ github.ref }}
+      group: ci-test-${{ matrix.os }}-${{ github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ${{ matrix.os }}
     strategy:
