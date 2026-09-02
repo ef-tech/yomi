@@ -162,6 +162,18 @@
             title="全て閉じる"
             disabled
           >⊟</button>
+          <!-- 除外設定 (Issue #164)。ツリーの見え方を決める設定なので、ツリーの上に置く。
+               他の 3 つと違い、ツリーの読み込み状態に関係なく押せる（除外を直せば
+               ツリーが空でなくなる、という場面がまさに直したいところ）。 -->
+          <button
+            type="button"
+            id="tree-yomiignore"
+            class="tree-toolbar-btn tree-yomiignore-btn"
+            data-i18n-aria-label="yomiignore.open.aria"
+            aria-label="除外設定 (.yomiignore) を編集"
+            data-i18n-title="yomiignore.open.title"
+            title="除外設定 (.yomiignore)"
+          >⚙</button>
         </div>
         <nav id="tree" class="tree" aria-busy="true" data-i18n="tree.loading">読み込み中…</nav>
       </aside>
@@ -429,6 +441,57 @@
         >
           一致するファイルがありません
         </p>
+      </div>
+    </div>
+
+    <!-- 除外設定パネル (Issue #164)。`.yomiignore` をテキストとして編集して保存する。
+         保存すると再起動なしでサーバの除外集合が差し替わり、ツリーが更新される。
+         `aria-modal` を宣言する以上、フォーカスも実際にここへ閉じ込める (app-yomiignore.js)。 -->
+    <div
+      id="yomiignore-panel"
+      class="yomiignore"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="yomiignore-title"
+      aria-describedby="yomiignore-help"
+      hidden
+    >
+      <div class="yomiignore-panel">
+        <div class="yomiignore-head">
+          <h2 id="yomiignore-title" class="yomiignore-title" data-i18n="yomiignore.title">
+            除外設定 (.yomiignore)
+          </h2>
+          <p id="yomiignore-help" class="yomiignore-help" data-i18n="yomiignore.help">
+            1 行 1 パターン。名前の完全一致で除外します。`#` はコメント、`!name` で既定の除外を解除できます。
+          </p>
+        </div>
+
+        <textarea
+          id="yomiignore-text"
+          class="yomiignore-text"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          data-i18n-aria-label="yomiignore.textarea.aria"
+          aria-label="除外パターン (1 行 1 パターン)"
+          data-i18n-placeholder="yomiignore.placeholder"
+          placeholder="node_modules&#10;!build"
+        ></textarea>
+
+        <!-- 照合できない行。**文言はサーバが組み立てたものをそのまま出す**
+             (判定も文言も `src/yomiignore.ts` が正本。ここに写しを置かない)。 -->
+        <ul id="yomiignore-invalid" class="yomiignore-invalid" role="status" hidden></ul>
+
+        <p id="yomiignore-notice" class="yomiignore-notice" role="status" hidden></p>
+
+        <div class="yomiignore-actions">
+          <button type="button" id="yomiignore-save" class="yomiignore-action is-primary" data-i18n="yomiignore.save">
+            保存して反映
+          </button>
+          <button type="button" id="yomiignore-close" class="yomiignore-action" data-i18n="common.close">
+            閉じる
+          </button>
+        </div>
       </div>
     </div>
 

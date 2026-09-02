@@ -185,6 +185,14 @@ export function createElements() {
     treeCollapseAll: /** @type {HTMLButtonElement} */ (byId("tree-collapse-all")),
     // 新規 md 作成 (Issue #6)
     treeNewFile: /** @type {HTMLButtonElement} */ (byId("tree-new-file")),
+    // 除外設定パネル (Issue #164)
+    treeYomiignore: /** @type {HTMLButtonElement} */ (byId("tree-yomiignore")),
+    yomiignorePanel: byId("yomiignore-panel"),
+    yomiignoreText: /** @type {HTMLTextAreaElement} */ (byId("yomiignore-text")),
+    yomiignoreInvalid: byId("yomiignore-invalid"),
+    yomiignoreNotice: byId("yomiignore-notice"),
+    yomiignoreSave: /** @type {HTMLButtonElement} */ (byId("yomiignore-save")),
+    yomiignoreClose: /** @type {HTMLButtonElement} */ (byId("yomiignore-close")),
     preview: byId("preview"),
     source: byId("source"),
     editor: /** @type {HTMLTextAreaElement} */ (byId("editor")),
@@ -447,5 +455,6 @@ export function createStatus(ctx) {
  *   ws: ReturnType<typeof import("./app-websocket.js").createWebSocketClient>,
  *   quickOpen: ReturnType<typeof import("./app-quick-open.js").createQuickOpen>,
  *   images: ReturnType<typeof import("./app-images.js").createImageDownload>,
+ *   yomiignore: ReturnType<typeof import("./app-yomiignore.js").createYomiignorePanel>,
  * }} Ctx
  */

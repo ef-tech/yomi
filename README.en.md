@@ -334,6 +334,13 @@ GFM task lists `- [ ] xxx` / `- [x] xxx` can be clicked directly in the preview 
 
 Placing a `.yomiignore` directly under the current directory lets you add to the default exclude patterns (`node_modules`, `.git`, `dist`, etc.). One directory/file name per line; lines starting with `#` are comments.
 
+**You can also edit it from the UI (Issue #164).** The ⚙ button above the left tree opens a settings panel where you edit `.yomiignore` directly; pressing "Save and apply" swaps the excludes **without restarting yomi**. The tree, file reads, asset delivery and the file watcher all pick up the new set at the same time.
+
+- The file is created on save if it does not exist yet
+- **Lines that cannot match are listed in the panel with their line numbers** (same judgement and same wording as the startup warning on stderr), so you can notice "I wrote it but it has no effect" without leaving the browser
+- `Ctrl/Cmd+Enter` also saves (`Esc` closes)
+- Saving refreshes the tree in every open browser
+
 ```
 # .yomiignore
 # Exclude personal notes
@@ -427,6 +434,7 @@ Adding editing means yomi now has a **writable endpoint**. As a CSRF defense, yo
 - On an **untrusted network** (public Wi-Fi, etc.), do not pass `--share`. Doing so exposes the read/write API to the LAN without authentication
 - Clients that do not send an `Origin` header (curl, Postman, etc.) are allowed. This is intended for API use and is outside the browser CSRF threat model
 - yomi has no authentication. LAN editing via `--share` is only valid on the assumption that "everyone on the LAN is trusted"
+- ⚠️ **While `--share` is on, viewers can rewrite the exclude settings (`.yomiignore`) from the UI (Issue #164).** Exclusions gate both reads and writes, so a negation such as `!node_modules` or `!.env` **widens what can be read under the launch directory**. This is treated the same as saving/creating Markdown and is covered by the "everyone on the LAN is trusted" assumption above. Do not use `--share` on a network that includes people you do not trust
 
 ### Viewing from the LAN
 
