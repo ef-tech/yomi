@@ -22,7 +22,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("コードブロックのボタンを押すと、その中身がクリップボードに入る", async ({ page }) => {
-  const button = page.locator("#preview pre.has-code-copy .code-copy-btn");
+  // **ボタンは `<pre>` の外**（スクロールしない `.code-block` の直下）。
+  // 中に入れると横に長い行でスクロールして流れる
+  const button = page.locator("#preview .code-block > .code-copy-btn");
   await expect(button).toHaveCount(1);
 
   // **ホバーで出る（PC 幅）。** `click` は自動で hover するので、そのまま押せる

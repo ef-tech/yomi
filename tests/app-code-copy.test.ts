@@ -60,10 +60,13 @@ describe("コードブロックのコピーボタン", () => {
   test("コードブロックごとにボタンが出る", async () => {
     h = await bootApp({ files: filesWithCode() });
     expect(copyButtons(h)).toHaveLength(1);
-    // **`<code>` の外・`<pre>` の直下**（中に入れるとラベルがコピー内容に混ざる）
+    // **`<pre>` の外（包みの直下）**。中に入れるとラベルがコピー内容に混ざり、
+    // 横に長い行でスクロールして流れる
     const button = copyButtons(h)[0];
-    expect(button?.parentElement?.tagName).toBe("PRE");
-    expect(h.q("#preview pre > code").contains(button as Node)).toBe(false);
+    expect(button?.parentElement?.className).toBe("code-block");
+    expect(h.q("#preview pre").contains(button as Node)).toBe(false);
+    // 包みは `<pre>` の位置に入れ替わる（文書内の順序は変わらない）
+    expect(h.q("#preview .code-block > pre > code")).toBeTruthy();
   });
 
   test("押すと生テキストがクリップボードへ入る（ハイライトの span が混ざらない）", async () => {
@@ -105,6 +108,44 @@ describe("コードブロックのコピーボタン", () => {
     await h.flush(4);
 
     expect(copyButtons(h)).toHaveLength(1);
+  });
+
+  test("横スクロールする pre でも、ボタンはスクロールしない包みの側にある", async () => {
+    // `.markdown-body pre` は `overflow-x: auto`。ボタンを `<pre>` の中に置くと、
+    // 右へスクロールした量だけ左へ流れて画面外に出る（実測で確認した）
+    h = await bootApp({ files: filesWithCode() });
+    const button = copyButtons(h)[0] as HTMLElement;
+    const wrap = button.parentElement as HTMLElement;
+    const pre = h.q("#preview .code-block > pre");
+
+    expect(wrap.classList.contains("code-block")).toBe(true);
+    // **ボタンとスクロールする要素が兄弟**であること（親子だと流れる）
+    expect(pre.parentElement).toBe(wrap);
+    expect(pre.contains(button)).toBe(false);
+  });
+
+  test("同じ class の要素が md に混ざっていても、本物のボタンは出る", async () => {
+    // **サニタイザは `<button class="…">` を通す**（落とすのは `<style>` / `style` /
+    // `data-i18n*` だけ）。DOM の class で「付与済み」を判定すると、**利用者が
+    // raw HTML で書いた偽物のせいで本物が出なくなる**
+    const files = defaultFiles();
+    files["README.md"] = {
+      raw: "# README\n",
+      html:
+        "<pre>" +
+        '<button class="code-copy-btn">にせもの</button>' +
+        "<code>real content\n</code></pre>",
+      sha: "sha-readme-spoof",
+    };
+    h = await bootApp({ files });
+
+    // 偽物 + 本物で 2 つ。本物は末尾（`appendChild`）で、押すとコピーできる
+    const buttons = copyButtons(h);
+    expect(buttons.length).toBe(2);
+    h.click(buttons[buttons.length - 1] as Element);
+    await h.flush(4);
+    // **偽物のラベルは混ざらない**（ボタンは `<code>` の外にある）
+    expect(h.clipboard).toEqual(["real content\n"]);
   });
 
   test("読み取り専用のテキストファイル表示にも出る", async () => {

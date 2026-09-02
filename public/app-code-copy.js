@@ -24,6 +24,19 @@ import { t } from "./i18n.js";
  * ボタンを出す**ほうが、特例を設けるより説明が要らない。「ファイル全体をコピー」は
  * 読み取り専用で開いたときにこそ欲しい操作でもある。
  *
+ * ## ボタンは `<pre>` の外に置く
+ *
+ * **`<pre>` の中に絶対配置すると、横に長い行で流れて見えなくなる。** `.markdown-body pre` は
+ * `overflow-x: auto` なので、`right: 6px` は**スクロールする内容側**に貼り付く ——
+ * 右へスクロールした量だけボタンが左へ動き、幅の広いブロックでは画面外へ出る（実測:
+ * `scrollLeft` を最大にすると `right` が 1626px → 1580px へ移動した）。
+ * スクロールしない包み（`.code-block`）を挟み、そこへ絶対配置すれば、
+ * **どこまでスクロールしても右上に留まる**。
+ *
+ * 既存の CSS はすべて子孫セレクタ（`.markdown-body pre` / `.text-view code` 等）なので、
+ * 1 段挟んでも当たり方は変わらない。Mermaid は `<code>` を持たないので包まない
+ * （`renderMermaid` の `els.preview.querySelectorAll("pre.mermaid")` もそのまま効く）。
+ *
  * ## 中身は `code.textContent` から取る
  *
  * ハイライト（`highlight.js` / `highlight.js` 由来の `<span class="hljs-*">`）が入っている
@@ -31,8 +44,16 @@ import { t } from "./i18n.js";
  * **生テキストのまま**取れる。ボタン自身は `<pre>` 直下（`<code>` の外）へ置くので、
  * ボタンのラベルが中身に混ざることもない。
  */
-/** ボタンに付けるクラス。**二重付与の判定にも使う**（再描画のたびに呼ばれるため）。 */
+/**
+ * ボタンに付けるクラス。**見た目と、言語切替で拾い直すためだけに使う。**
+ *
+ * **二重付与の判定には使わない** —— サニタイザが `<button class="…">` を通すので、
+ * 利用者の Markdown で同じ class の要素を作れてしまう（下の `decorated` を参照）。
+ */
 export const COPY_BUTTON_CLASS = "code-copy-btn";
+
+/** ボタンを右上に留めるための包み。**スクロールしないのが役目**。 */
+export const CODE_BLOCK_CLASS = "code-block";
 
 /**
  * コピー対象のコードブロックを DOM 順で返す。
@@ -51,8 +72,29 @@ export function copyableCodeBlocks(root) {
 export function createCodeCopy(ctx) {
   const { els } = ctx;
 
-  /** @type {Map<HTMLElement, ReturnType<typeof setTimeout>>} 表示中のフィードバック */
-  const feedbackTimers = new Map();
+  /**
+   * 表示中のフィードバック。**`WeakMap` にする** —— キーは再描画のたびに DOM ごと
+   * 捨てられるボタンなので、強参照で持つと外れた要素をタイマーが切れるまで掴む。
+   *
+   * @type {WeakMap<HTMLElement, ReturnType<typeof setTimeout>>}
+   */
+  const feedbackTimers = new WeakMap();
+
+  /**
+   * ボタンを付け終えた `<pre>`。**DOM の class で判定しない。**
+   *
+   * サニタイザは `USE_PROFILES: { html: true }` なので **`<button class="…">` を通す**
+   * （`public/sanitize-config.js` が落とすのは `<style>` / `style` / `data-i18n*` だけ）。
+   * つまり利用者が Markdown に raw HTML で `<pre><button class="code-copy-btn">` と書くと、
+   * **「もう付いている」と誤判定して本物のボタンが出なくなる**（実測で成立する）。
+   * 判定を JS 側に置けば、文書の中身では騙せない。
+   *
+   * `WeakSet` なので、再描画で `<pre>` ごと捨てられれば自動的に消える
+   * （＝新しい `<pre>` には改めて付く）。
+   *
+   * @type {WeakSet<HTMLElement>}
+   */
+  const decorated = new WeakSet();
 
   /**
    * 押した手応えを出す。**`app-document.js` の `flashCopied` と同じ見せ方**
@@ -96,9 +138,9 @@ export function createCodeCopy(ctx) {
    * プレビュー内のコードブロックにボタンを付ける。**描画のたびに呼ぶ。**
    *
    * `renderCurrentFile` は `innerHTML` の代入でプレビューを作り直すので、前回の
-   * ボタンは DOM ごと消えている。**それでも二重付与を防ぐ** —— テキスト表示
-   * (`renderTextFile`) は `replaceChildren` で作り直すが、将来ここが部分更新に
-   * 変わったときに黙って 2 つ並ぶのを避けたい。
+   * ボタンは DOM ごと消えている。**それでも二重付与を防ぐ** —— 将来ここが部分更新に
+   * 変わったときに黙って 2 つ並ぶのを避けたい。判定は上の `decorated`（`WeakSet`）で、
+   * **DOM の中身では騙せない**。
    *
    * @returns {void}
    */
@@ -106,8 +148,15 @@ export function createCodeCopy(ctx) {
     for (const code of copyableCodeBlocks(els.preview)) {
       const pre = code.parentElement;
       if (!pre) continue;
-      if (pre.querySelector(`:scope > .${COPY_BUTTON_CLASS}`)) continue;
-      pre.classList.add("has-code-copy");
+      if (decorated.has(pre)) continue;
+      decorated.add(pre);
+
+      // **スクロールしない包みを挟む**（上の「ボタンは `<pre>` の外に置く」）。
+      // `replaceWith` → `appendChild` の順にすると、`<pre>` は文書内の同じ位置に残る
+      const wrap = document.createElement("div");
+      wrap.className = CODE_BLOCK_CLASS;
+      pre.replaceWith(wrap);
+      wrap.appendChild(pre);
 
       const button = document.createElement("button");
       button.type = "button";
@@ -116,15 +165,14 @@ export function createCodeCopy(ctx) {
       // ここは描画のたびに作り直されるので、言語切替時は `refresh` が呼び直す
       button.setAttribute("aria-label", t("code.copy.aria"));
       button.title = t("code.copy.title");
-      // **アイコンは装飾。** ラベルは `aria-label` が持つ（読み上げで「⧉」と言わせない）
+      // **アイコンは装飾。** 読み上げ名は `aria-label` が持つので「⧉」とは言われない
       button.textContent = "⧉";
-      button.setAttribute("aria-hidden", "false");
       button.addEventListener("click", () => {
         void copyBlock(code, button);
       });
-      // **`<code>` の外・`<pre>` の直下に置く。** 中に入れるとラベルが
-      // `code.textContent` に混ざり、コピーした中身が汚れる
-      pre.appendChild(button);
+      // **`<pre>` の外（包みの直下）へ置く。** 中に入れると (1) ラベルが
+      // `code.textContent` に混ざって中身が汚れ、(2) 横スクロールで流れる
+      wrap.appendChild(button);
     }
   }
 
