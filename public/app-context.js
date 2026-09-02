@@ -456,5 +456,6 @@ export function createStatus(ctx) {
  *   quickOpen: ReturnType<typeof import("./app-quick-open.js").createQuickOpen>,
  *   images: ReturnType<typeof import("./app-images.js").createImageDownload>,
  *   yomiignore: ReturnType<typeof import("./app-yomiignore.js").createYomiignorePanel>,
+ *   codeCopy: ReturnType<typeof import("./app-code-copy.js").createCodeCopy>,
  * }} Ctx
  */

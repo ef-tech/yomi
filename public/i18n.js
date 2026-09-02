@@ -107,6 +107,11 @@ const MESSAGES = {
     "tree.newFileInput.placeholder": "新規ファイル名 (.md)",
     "tree.newFileInput.aria": "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)",
     // content header
+    // コードブロックのコピー (Issue #165)
+    "code.copy.aria": "このコードブロックをコピー",
+    // **言語が分かるときはこちら。** 同名のボタンが並ぶとどのブロックか区別できない
+    "code.copy.aria.lang": "{lang} のコードブロックをコピー",
+    "code.copy.title": "コードブロックをコピー",
     "path.copy.aria": "表示中のファイルパス。タップでコピー",
     "path.copy.title": "タップでパスをコピー",
     "dirty.indicator": "● 未保存",
@@ -175,6 +180,7 @@ const MESSAGES = {
     "status.openFailed": "{path} を開けませんでした: {msg}",
     "status.showing": "{path} を表示",
     "status.mermaidError": "Mermaid 描画エラー: {msg}",
+    "status.codeCopied": "コードブロックをコピーしました",
     "status.pathCopied": "パスをコピー: {path}",
     "status.copyFailed": "コピー失敗: {msg}",
     "status.saveNoFile": "保存失敗: 表示中のファイルがありません",
@@ -286,6 +292,10 @@ const MESSAGES = {
     "tree.newFileInput.placeholder": "New file name (.md)",
     "tree.newFileInput.aria": "New Markdown file name (Enter to create, Esc to cancel)",
     // content header
+    // Code block copy (Issue #165)
+    "code.copy.aria": "Copy this code block",
+    "code.copy.aria.lang": "Copy this {lang} code block",
+    "code.copy.title": "Copy code block",
     "path.copy.aria": "Current file path. Tap to copy.",
     "path.copy.title": "Tap to copy path",
     "dirty.indicator": "● Unsaved",
@@ -353,6 +363,7 @@ const MESSAGES = {
     "status.openFailed": "Could not open {path}: {msg}",
     "status.showing": "Showing {path}",
     "status.mermaidError": "Mermaid render error: {msg}",
+    "status.codeCopied": "Code block copied",
     "status.pathCopied": "Path copied: {path}",
     "status.copyFailed": "Copy failed: {msg}",
     "status.saveNoFile": "Save failed: no file is open",

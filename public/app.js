@@ -1,3 +1,4 @@
+import { createCodeCopy } from "./app-code-copy.js";
 import {
   createElements,
   createState,
@@ -40,6 +41,7 @@ import { prefs } from "./prefs.js";
  * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
  * | `app-images.js` | 記事の参照画像を zip でダウンロード |
  * | `app-yomiignore.js` | 除外設定 (`.yomiignore`) の編集パネル |
+ * | `app-code-copy.js` | プレビュー内のコードブロックのコピーボタン |
  * | `app-overlays.js` | 重なったオーバーレイの優先順位 (`Esc` とショートカットの門番) |
  * | `app-websocket.js` | ライブリロード |
  *
@@ -77,6 +79,7 @@ ctx.ws = createWebSocketClient(ctx);
 ctx.quickOpen = createQuickOpen(ctx);
 ctx.images = createImageDownload(ctx);
 ctx.yomiignore = createYomiignorePanel(ctx);
+ctx.codeCopy = createCodeCopy(ctx);
 
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
 // applyLang → setLang の中で発火するため、最初の applyLang より前に購読する。
@@ -210,6 +213,8 @@ function reapplyDynamicI18n() {
   // TOC の展開トグル + (表示中なら) 見出しツリーを再描画
   ctx.preview.updateExpandToggleUi();
   if (state.tocVisible) ctx.preview.refreshToc();
+  // コードブロックのコピーボタン（描画のたびに作り直されるので data-i18n が効かない）
+  ctx.codeCopy.refresh();
   // 競合の差分は件数と「N 行省略」を組み立てているので、開いていれば作り直す
   // (data-i18n では戻せない = applyI18n の対象外)
   if (ctx.editor.isConflictDiffOpen()) ctx.editor.renderConflictDiff();

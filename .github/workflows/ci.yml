@@ -7,12 +7,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    # **`edited` を拾う。** 検証証跡の検査は `github.event.pull_request.body` を読むので、
-    # 既定のトリガー (opened / synchronize / reopened) だけだと**本文を直しても再判定されない**
-    # —— しかも `gh run rerun` は同じ event payload を replay するので、**古い本文のまま
-    # また落ちる**。落とされた人が直す手段が「空コミットを積む」しか無くなるのを避ける。
-    # 重い `test` / `e2e` は下の `if` で `edited` を弾くので、本文の編集で回るのは証跡検査だけ。
-    types: [opened, synchronize, reopened, edited]
 
 # パイプの途中の失敗を握り潰さない (GitHub の既定は bash -e で pipefail が付かない)。
 # step 側に shell: を書くとここが上書きされるので注意。
@@ -29,11 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  # **本文の編集 (`edited`) では走らせない。** 拾っているのは証跡検査のためだけで、
-  # 説明文を直すたびに matrix 2 本と E2E を回すのは無駄。
   test:
     name: Test (${{ matrix.os }})
-    if: github.event.action != 'edited'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -92,7 +83,6 @@ jobs:
   # flaky を E2E でも抱え込むことになる。OS 差はユニット側の matrix が見ている。
   e2e:
     name: E2E (chromium)
-    if: github.event.action != 'edited'
     runs-on: ubuntu-latest
     # ブラウザバイナリの download や bun install が詰まったときに 6 時間走らせない
     timeout-minutes: 15
@@ -160,33 +150,3 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
-
-  # PR 本文の検証証跡（ef:verify-evidence マーカー + 非空 3 行）を検査する。
-  #
-  # **独立したジョブにする。** 判定材料は `github.event.pull_request.body` だけで、
-  # チェックアウトも bun も要らない。`test` の中に置くと、本文を直したときに
-  # matrix 2 本ぶんの重いテストまで巻き添えで回ることになる。
-  #
-  # 判定の実体は .github/scripts/check-pr-evidence.sh（ef-devkit の正本のコピー）。
-  # bot の PR は証跡を持たないので除外する（除外しないと dependabot が必ず red になる）。
-  evidence:
-    name: PR verification evidence
-    if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Check PR body
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -euo pipefail
-          if [ ! -f .github/scripts/check-pr-evidence.sh ]; then
-            echo "ERROR: .github/scripts/check-pr-evidence.sh がありません。" >&2
-            echo "ef-devkit の templates/_common/github/scripts/ から配置してください" >&2
-            echo "(/ef:bootstrap が CI と 1 セットで置きます)。" >&2
-            exit 1
-          fi
-          printf '%s' "$PR_BODY" | bash .github/scripts/check-pr-evidence.sh

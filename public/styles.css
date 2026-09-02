@@ -1887,6 +1887,96 @@ body {
   }
 }
 
+/* ===== コードブロックのコピーボタン (Issue #165) ===== */
+
+/* **ボタンは `<pre>` の外**（包みの直下）。中に入れると (1) ラベルがコピー内容に混ざり、
+   (2) `.markdown-body pre` が `overflow-x: auto` なので**横に長い行でスクロールして流れる**
+   （実測でボタンが画面外へ出る）。スクロールしない包みに絶対配置すれば右上に留まる。 */
+.preview .code-block {
+  position: relative;
+  /* 元の `<pre>` の既定（`margin: 1em 0`）を包みへ移す。値を変えない */
+  margin-block: 1em;
+}
+
+/* 包みが段落の余白を二重に取らないよう、中の `<pre>` の margin は外へ出した */
+.preview .code-block > pre {
+  margin-block: 0;
+}
+
+/* **テキスト表示 (#155) は詰めたまま保つ。** `.text-view { margin: 0 }` は
+   「テキストは行を追うので詰める」という判断で、包みがそれを打ち消さないようにする */
+.preview.is-text .code-block {
+  margin-block: 0;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  /* **スマホではホバーが無いので常に出す。** 下のメディアクエリで PC だけ
+     「ホバー・フォーカスで出す」に切り替える（#25 / #30 のレスポンシブ方針） */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* **ホバーが無い環境ではこれが唯一の操作手段**なので、当たりを大きく取る。
+     WCAG 2.2 の最小 (24x24) を余裕をもって超える。PC 側は下のメディアクエリで
+     32x32 に絞る（ホバーで出るものなので、そこまで大きくしなくてよい） */
+  min-width: 40px;
+  min-height: 40px;
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 1;
+  /* **選択に含めない。** 含めると `Ctrl+A` や複数ブロックにまたがるドラッグの
+     コピー結果に「⧉」が混ざる（`.diff-sign` が行番号で同じ対策をしているのに揃える）。
+     `opacity: 0` は選択対象から外さない */
+  user-select: none;
+  -webkit-user-select: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  opacity: 0.9;
+}
+
+.code-copy-btn:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.code-copy-btn:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+/* パスのコピー (#24) と同じ見せ方に揃える。
+   **`opacity` も上書きする** —— PC でマウスクリックすると `:focus-visible` が当たらず、
+   ポインタがブロックの外へ出た瞬間にフィードバックが 1 フレームも見えない */
+.code-copy-btn.is-copied {
+  color: #1a7f37;
+  background: #1a7f3711;
+  border-color: #1a7f3733;
+  opacity: 1;
+}
+
+/* **ホバーできる環境でだけ隠す。** `hover: hover` を見るので、タッチ端末では
+   上の既定（常時表示）が残る。フォーカス時は必ず出す（キーボード操作で見失わせない） */
+@media (hover: hover) and (pointer: fine) {
+  .code-copy-btn {
+    min-width: 32px;
+    min-height: 32px;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .code-block:hover .code-copy-btn,
+  .code-block:focus-within .code-copy-btn,
+  .code-copy-btn:focus-visible,
+  .code-copy-btn.is-copied {
+    opacity: 1;
+  }
+}
+
 /* ===== 除外設定パネル (Issue #164) ===== */
 
 /* ツールバーの他 3 つと違い、常に押せる（ツリーが空でも除外を直せる必要がある） */

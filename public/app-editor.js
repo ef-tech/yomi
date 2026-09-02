@@ -190,7 +190,9 @@ export function createEditor(ctx) {
       state.currentSha = data.sha;
       setDirty(false);
       if (state.viewMode !== "md") {
-        els.preview.innerHTML = state.currentHtml;
+        // **直に `innerHTML` を書かない (Issue #165)。** 差し込みのたびに要る後処理
+        // （コードブロックのコピーボタン）を呼び忘れないよう、入口は 1 つに集約してある
+        ctx.preview.setPreviewHtml(state.currentHtml);
         ctx.preview.renderMermaid().catch(() => {});
       }
       els.source.textContent = data.raw;
@@ -272,7 +274,7 @@ export function createEditor(ctx) {
     state.currentSha = snap.sha ?? null;
     els.editor.value = state.currentRaw;
     setDirty(false);
-    els.preview.innerHTML = state.currentHtml;
+    ctx.preview.setPreviewHtml(state.currentHtml);
     els.source.textContent = state.currentRaw;
     if (state.viewMode !== "md") ctx.preview.renderMermaid().catch(() => {});
     hideConflict();

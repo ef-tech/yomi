@@ -330,6 +330,15 @@ GFM task lists `- [ ] xxx` / `- [x] xxx` can be clicked directly in the preview 
 - Indented (nested) `  - [ ] subtask` and `*` / `+` bullets are supported
 - Task-like strings inside code fences (```...``` / `~~~...~~~`) are ignored
 
+### Copying code blocks (Issue #165)
+
+Hovering a code block in the preview reveals a **⧉** button in its top-right corner. Pressing it copies that block's contents **as raw text** (syntax-highlighting markup is not included).
+
+- **Always visible on phones and tablets** (there is no hover there). On desktop it appears on hover and on keyboard focus
+- **Not shown on Mermaid blocks** (they are rendered as diagrams)
+- **Also shown for read-only text files** (`.json` / `.ts` etc., Issue #155) — pressing it copies the whole file
+- Works when opened over plain HTTP from another device on the LAN via `--share` (it falls back for environments where `navigator.clipboard` is unavailable)
+
 ### Customizing exclude patterns (`.yomiignore`)
 
 Placing a `.yomiignore` directly under the current directory lets you add to the default exclude patterns (`node_modules`, `.git`, `dist`, etc.). One directory/file name per line; lines starting with `#` are comments.
