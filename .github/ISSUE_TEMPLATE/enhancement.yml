@@ -1,0 +1,51 @@
+name: 改善
+description: 既存機能の使い勝手・性能を良くする（振る舞いの拡張）
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        新機能の追加なら「機能追加」を選んでください。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: 今の不便と、どう変えるか
+      value: |
+        - 現状の不便:
+        - 改善案:
+        - 既存の振る舞いへの影響:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      value: |
+        - [ ]
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外:
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: 対象機能の docs/spec パス、または実装ファイルのパス
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: 運用で困った具体例など
+    validations:
+      required: true

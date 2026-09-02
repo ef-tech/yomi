@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { resolveSafe } from "./safepath.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
 
 export const YOMIIGNORE_FILENAME = ".yomiignore";
@@ -123,15 +123,61 @@ export function parseYomiignore(text: string): YomiignoreParseResult {
 
 /**
  * 指定ディレクトリ直下の `.yomiignore` を読み込む。
- * ファイルが存在しない、読めない場合は空の結果。
+ *
+ * **ファイルが無いときだけ空を返す。それ以外の失敗は投げる** (Issue #164)。
+ *
+ * 以前は**あらゆる読み取り失敗を空に倒して**いた。起動時はそれで実害が小さかった
+ * （`bin/yomi.ts` の `describeYomiignore` が「0 件追加」を出すので気づける）が、
+ * **画面から差し替えられるようになると話が変わる** —— 読めなかったときに実効の除外集合が
+ * 黙って `DEFAULT_EXCLUDES` ちょうどへ戻り、**利用者が足した除外が消える**。除外は #65 以降
+ * 「読み書きの可否を決めるゲート」なので、それは**塞いだはずのファイルが読めるようになる**
+ * ことを意味する（fail-open）。しかも応答は 200「保存しました」で、画面にも異常が出ない。
+ *
+ * `classifyInvalid` が glob 行を捨てない理由（このファイルの冒頭）と同じ判断を、
+ * 読み取り失敗にも適用して **fail-closed** にする。
+ *
+ * **ルート外を指す symlink も投げる。** `/api/yomiignore` は `resolveSafe` を通して 400 に
+ * するのに、こちらが素通しで読むと**「サーバはルート外の設定を適用しているのに、画面からは
+ * 確認も修正もできない」**という袋小路になる（2 経路が違う答えを出す）。
+ *
+ * @throws ルート外を指す symlink（`UnsafePathError`）、または ENOENT 以外の読み取り失敗
  */
 export async function loadYomiignore(rootDir: string): Promise<YomiignoreParseResult> {
+  // **`join` で組み立てて素で読まない** (Issue #156 / #164)。`.yomiignore` に置かれた
+  // symlink がルート外を指していれば、ここで `UnsafePathError` になる。
+  const safe = await resolveSafe(rootDir, YOMIIGNORE_FILENAME);
   try {
-    const text = await readFile(join(rootDir, YOMIIGNORE_FILENAME), "utf-8");
-    return parseYomiignore(text);
-  } catch {
-    return { excludes: new Set(), negations: new Set(), invalid: [] };
+    return parseYomiignore(await readFile(safe.abs, "utf-8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { excludes: new Set(), negations: new Set(), invalid: [] };
+    }
+    throw err;
   }
+}
+
+/**
+ * 理由ごとの説明文。**画面（設定パネル）と起動時の warn で同じ文言を使う** (Issue #164)。
+ *
+ * **クライアント側に写しを置かない。** 判定 (`classifyInvalid`) はここにしか無いので、
+ * 文言だけ向こうへ複製すると、**理由を 1 つ足したときに画面だけ「undefined」になる**
+ * （型で守れない。パネルはサーバの応答を描くだけなので、コンパイル時には気づけない）。
+ * サーバは行ごとに整形済みの文字列を返し、パネルはそれを表示する。
+ */
+export const INVALID_REASON_TEXT: Readonly<Record<InvalidReason, string>> = {
+  "path-separator":
+    "`/` を含む行は照合できません (セグメント名のみ指定できます)。この行は無視しました",
+  glob: "グロブ (`*` `?` `[]`) は展開されません。この名前そのものとの完全一致として扱います",
+  "empty-negation": "`!` の後ろに名前がありません。この行は無視しました",
+};
+
+/**
+ * 1 行ぶんの警告文 (`.yomiignore:12: docs/private — …`)。
+ *
+ * `describeInvalidLines` (stderr) と `/api/yomiignore` (画面) の**両方がこれを使う**。
+ */
+export function describeInvalidLine(v: InvalidYomiignoreLine): string {
+  return `${YOMIIGNORE_FILENAME}:${v.line}: ${v.text} — ${INVALID_REASON_TEXT[v.reason]}`;
 }
 
 /**
@@ -141,15 +187,7 @@ export async function loadYomiignore(rootDir: string): Promise<YomiignoreParseRe
  * グロブ文字を含む名前が**除外として生きている**ことが伝わらない。
  */
 export function describeInvalidLines(invalid: readonly InvalidYomiignoreLine[]): string {
-  const reasonText: Record<InvalidReason, string> = {
-    "path-separator":
-      "`/` を含む行は照合できません (セグメント名のみ指定できます)。この行は無視しました",
-    glob: "グロブ (`*` `?` `[]`) は展開されません。この名前そのものとの完全一致として扱います",
-    "empty-negation": "`!` の後ろに名前がありません。この行は無視しました",
-  };
-  const lines = invalid.map(
-    (v) => `  ${YOMIIGNORE_FILENAME}:${v.line}: ${v.text} — ${reasonText[v.reason]}`,
-  );
+  const lines = invalid.map((v) => `  ${describeInvalidLine(v)}`);
   const dropped = invalid.filter((v) => v.dropped).length;
   const kept = invalid.length - dropped;
   const counts = [dropped > 0 ? `無視 ${dropped} 件` : "", kept > 0 ? `注意 ${kept} 件` : ""]

@@ -19,6 +19,7 @@ import { createPreview } from "./app-preview.js";
 import { createQuickOpen } from "./app-quick-open.js";
 import { createTree } from "./app-tree.js";
 import { createWebSocketClient } from "./app-websocket.js";
+import { createYomiignorePanel } from "./app-yomiignore.js";
 import { applyI18n, onLangChange, resolveLang, setLang, t } from "./i18n.js";
 import { getHashFromUrl, seedNavCounter } from "./navigation.js";
 import { prefs } from "./prefs.js";
@@ -39,6 +40,7 @@ import { prefs } from "./prefs.js";
  * | `app-mobile.js` | sidebar overlay、⋮ メニュー、FAB、topbar 自動 hide、スワイプ |
  * | `app-quick-open.js` | クイックオープン (`Ctrl/Cmd+P` のファイル検索) |
  * | `app-images.js` | 記事の参照画像を zip でダウンロード |
+ * | `app-yomiignore.js` | 除外設定 (`.yomiignore`) の編集パネル |
  * | `app-code-copy.js` | プレビュー内のコードブロックのコピーボタン |
  * | `app-overlays.js` | 重なったオーバーレイの優先順位 (`Esc` とショートカットの門番) |
  * | `app-websocket.js` | ライブリロード |
@@ -76,6 +78,7 @@ ctx.mobile = createMobileUi(ctx);
 ctx.ws = createWebSocketClient(ctx);
 ctx.quickOpen = createQuickOpen(ctx);
 ctx.images = createImageDownload(ctx);
+ctx.yomiignore = createYomiignorePanel(ctx);
 ctx.codeCopy = createCodeCopy(ctx);
 
 // 言語変更のたびに静的 (data-i18n) + 動的 DOM 文言を再適用する (Issue #48)。
@@ -107,6 +110,7 @@ ctx.preview.wireTocActions();
 ctx.document.wireLinkNavigation();
 ctx.quickOpen.wire();
 ctx.images.wire();
+ctx.yomiignore.wire();
 ctx.editor.wireConflictDiff();
 wireKeyboard();
 ctx.editor.wireBeforeUnload();

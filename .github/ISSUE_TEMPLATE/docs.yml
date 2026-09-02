@@ -1,0 +1,52 @@
+name: ドキュメント
+description: ドキュメントの誤り・不足・古い記述を直す
+labels: ["docs"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        コードを直す必要があるなら「不具合」か「改善」を選んでください。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: どのドキュメントの、何が問題か
+      value: |
+        - 対象ドキュメント:
+        - 現状の問題:
+        - あるべき記述:
+        - 影響範囲:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      value: |
+        - [ ]
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外: コードの変更
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: 同じ内容を参照している他の docs・スキル
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: 読んでいて詰まった箇所、誤りに気づいた経緯
+    validations:
+      required: true
