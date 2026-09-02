@@ -176,6 +176,25 @@ export function createPreview(ctx) {
     }
   }
 
+  /**
+   * プレビューへ HTML を差し込む唯一の入口 (Issue #165)。
+   *
+   * **`els.preview.innerHTML = …` を直に書かない。** 差し込みのたびに
+   * `ctx.codeCopy.decorate()` が要るのに、書ける場所が散らばっていると**呼び忘れが起きる**
+   * —— 実際 `app-editor.js` の保存後 (`saveEdit`) とサーバ版の取り込み
+   * (`takeServerVersion`) が漏れており、**編集して保存した直後だけコピーボタンが消える**
+   * という気づきにくい壊れ方をしていた。入口を 1 つにすれば、呼び忘れる場所が無くなる。
+   *
+   * @param {string} html **サニタイズ済み**の HTML（呼び出し側が `sanitize()` を通す）
+   * @returns {void}
+   */
+  function setPreviewHtml(html) {
+    els.preview.innerHTML = html;
+    // **サニタイズ後の DOM に後付けする。** HTML 文字列へ混ぜると
+    // サニタイザ (#21 / #59) の許可設定を広げることになる
+    ctx.codeCopy.decorate();
+  }
+
   function renderCurrentFile() {
     els.source.textContent = state.currentRaw;
     els.source.scrollTop = 0;
@@ -189,10 +208,7 @@ export function createPreview(ctx) {
     }
 
     els.preview.classList.remove("is-text");
-    els.preview.innerHTML = state.currentHtml;
-    // **サニタイズ後の DOM に後付けする (Issue #165)。** HTML 文字列へ混ぜると
-    // サニタイザの許可設定を広げることになる
-    ctx.codeCopy.decorate();
+    setPreviewHtml(state.currentHtml);
     // テキストから戻ってきたときに、利用者が選んでいたモードへ復帰する
     els.contentBody.dataset.mode = state.viewMode;
     setViewToggleEnabled(true);
@@ -687,6 +703,7 @@ export function createPreview(ctx) {
   }
 
   return {
+    setPreviewHtml,
     initMermaid,
     renderMermaid,
     renderCurrentFile,

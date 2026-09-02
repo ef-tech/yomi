@@ -1894,15 +1894,19 @@ body {
    （実測でボタンが画面外へ出る）。スクロールしない包みに絶対配置すれば右上に留まる。 */
 .preview .code-block {
   position: relative;
+  /* 元の `<pre>` の既定（`margin: 1em 0`）を包みへ移す。値を変えない */
+  margin-block: 1em;
 }
 
-/* 包みが段落の余白を食わないよう、中の `<pre>` の margin をそのまま外へ出す */
+/* 包みが段落の余白を二重に取らないよう、中の `<pre>` の margin は外へ出した */
 .preview .code-block > pre {
   margin-block: 0;
 }
 
-.preview .code-block {
-  margin-block: 1rem;
+/* **テキスト表示 (#155) は詰めたまま保つ。** `.text-view { margin: 0 }` は
+   「テキストは行を追うので詰める」という判断で、包みがそれを打ち消さないようにする */
+.preview.is-text .code-block {
+  margin-block: 0;
 }
 
 .code-copy-btn {
@@ -1922,6 +1926,11 @@ body {
   padding: 4px 8px;
   font-size: 13px;
   line-height: 1;
+  /* **選択に含めない。** 含めると `Ctrl+A` や複数ブロックにまたがるドラッグの
+     コピー結果に「⧉」が混ざる（`.diff-sign` が行番号で同じ対策をしているのに揃える）。
+     `opacity: 0` は選択対象から外さない */
+  user-select: none;
+  -webkit-user-select: none;
   color: var(--text-muted);
   cursor: pointer;
   background: var(--bg);
@@ -1940,11 +1949,14 @@ body {
   outline-offset: 1px;
 }
 
-/* パスのコピー (#24) と同じ見せ方に揃える */
+/* パスのコピー (#24) と同じ見せ方に揃える。
+   **`opacity` も上書きする** —— PC でマウスクリックすると `:focus-visible` が当たらず、
+   ポインタがブロックの外へ出た瞬間にフィードバックが 1 フレームも見えない */
 .code-copy-btn.is-copied {
   color: #1a7f37;
   background: #1a7f3711;
   border-color: #1a7f3733;
+  opacity: 1;
 }
 
 /* **ホバーできる環境でだけ隠す。** `hover: hover` を見るので、タッチ端末では
@@ -1958,7 +1970,9 @@ body {
   }
 
   .code-block:hover .code-copy-btn,
-  .code-copy-btn:focus-visible {
+  .code-block:focus-within .code-copy-btn,
+  .code-copy-btn:focus-visible,
+  .code-copy-btn.is-copied {
     opacity: 1;
   }
 }
