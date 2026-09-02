@@ -1,0 +1,52 @@
+name: 基盤整備
+description: 依存更新・設定変更・環境準備など（機能の振る舞いは変えない）
+labels: ["chore"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        **キー・シークレットの値は書かないでください**（発行元と置き場所だけ書く）。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: 何を・なぜ変えるか
+      value: |
+        - 対象:
+        - 理由:
+        - 機能変更が無いことの確認方法:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      value: |
+        - [ ]
+        - [ ] 既存の test / lint が green のまま
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外: 機能の追加・変更
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: 関係する設定ファイル・docs のパス
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: この作業が必要になった背景
+    validations:
+      required: true

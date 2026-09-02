@@ -1,0 +1,52 @@
+name: リファクタリング
+description: 内部構造の整理（外部から見た挙動は変えない）
+labels: ["refactor"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        挙動が変わるなら「機能追加」か「不具合」を選んでください。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: 今の問題と、整理後の構造
+      value: |
+        - 現状の問題:
+        - 変更後の構造:
+        - 外部挙動を変えないことの確認方法:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      value: |
+        - [ ] 外部から見た挙動が変わっていない（既存テストが green のまま）
+        - [ ]
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外: 機能の追加・修正
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: 対象コードの docs/spec パス、または実装ファイルのパス
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: 実装中に踏んだ具体的な痛みなど
+    validations:
+      required: true

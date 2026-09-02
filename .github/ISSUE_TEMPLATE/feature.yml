@@ -1,0 +1,52 @@
+name: 機能追加
+description: 今ない機能を新しく追加する
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        埋められない欄はそのままで構いません（**経緯だけ必須**。残りは maintain が補います）。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: 背景・目的と、どう実現するか
+      value: |
+        - 背景・目的:
+        - 提案内容:
+        - 技術的な注意点:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      description: 何ができたら閉じてよいか。客観的に検証できる形で
+      value: |
+        - [ ]
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外:
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: docs/spec/design/features.md や architecture.md のパス、関係する ADR
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: なぜこの機能が欲しくなったか
+    validations:
+      required: true
