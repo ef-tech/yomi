@@ -18,6 +18,14 @@ import { textLanguageOf } from "./util/text-ext.ts";
 import { isViewableFile } from "./util/viewable.ts";
 import { createZip, type ZipEntry } from "./util/zip.ts";
 import { createWatcher, isStructuralChange, type WatcherHandle } from "./watcher.ts";
+import {
+  describeInvalidLine,
+  type InvalidYomiignoreLine,
+  loadYomiignore,
+  parseYomiignore,
+  resolveExcludes,
+  YOMIIGNORE_FILENAME,
+} from "./yomiignore.ts";
 
 const WS_TOPIC = "yomi:file-events";
 
@@ -36,6 +44,15 @@ const ASSET_TYPES: Record<string, string> = {
 
 /** 書き込み API の body サイズ上限 (bytes) */
 export const MAX_WRITE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * `.yomiignore` の書き込み上限 (bytes)。**md の 10MB とは別に、小さく取る** (Issue #164)。
+ *
+ * 中身は 1 行 1 パターンの名前だけで、実データは数十行に収まる。`MAX_WRITE_BYTES` を
+ * 使い回すと、**パースが 10MB の文字列を `split(/\r?\n/)` する経路**を画面から
+ * 開いてしまう（保存のたびに全行を再パースするので、そのコストが除外の差し替えに乗る）。
+ */
+export const MAX_YOMIIGNORE_BYTES = 64 * 1024;
 
 /**
  * テキストファイル (非 Markdown) を `/api/file` で返すときのサイズ上限 (bytes)。Issue #155。
@@ -122,7 +139,19 @@ export interface ServerHandle {
 }
 
 export function createServer(config: ServerConfig): ServerHandle {
-  const excludes = config.excludes ?? DEFAULT_EXCLUDES;
+  /**
+   * 実効の除外集合。**`let` で持つ** (Issue #164)。
+   *
+   * `.yomiignore` を画面から保存できるようになったので、**起動時の固定値ではなくなった**。
+   * 下の各ハンドラはこの変数をクロージャで読むので、ここを差し替えれば
+   * `/api/tree` / `/api/file` / `/api/asset` / `/api/images.zip` の**全経路が同時に
+   * 新しい集合を見る**（#65 で塞いだ迂回路を開け直さないための要）。
+   *
+   * **watcher だけは追随しない** —— `createWatcher` は生成時の集合を `ignored` の
+   * クロージャに捕まえ、chokidar は張り終えた watch を張り直さないので、
+   * `reloadExcludes` が watcher ごと作り直す。
+   */
+  let excludes: ReadonlySet<string> = config.excludes ?? DEFAULT_EXCLUDES;
 
   /**
    * `/api/tree` の直列化済み応答 (Issue #84)。
@@ -265,6 +294,21 @@ export function createServer(config: ServerConfig): ServerHandle {
         });
       }
 
+      if (url.pathname === "/api/yomiignore") {
+        if (req.method === "GET") {
+          return Response.json(await readYomiignoreState(config.rootDir));
+        }
+        if (req.method === "POST") {
+          if (!checkOrigin(req))
+            return forbidden("Origin が許可されていません", "origin_forbidden");
+          return handleYomiignoreWrite(config.rootDir, req, saveMark, reloadExcludes);
+        }
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, POST" },
+        });
+      }
+
       if (url.pathname === "/api/images.zip") {
         if (req.method === "GET" || req.method === "HEAD") {
           return handleArticleImagesZip(
@@ -320,7 +364,15 @@ export function createServer(config: ServerConfig): ServerHandle {
   });
 
   let watcher: WatcherHandle | null = null;
-  if (config.watch !== false) {
+  /**
+   * watcher を張る。**除外集合を差し替えたら張り直す** (Issue #164)。
+   *
+   * chokidar は `ignored` を生成時に受け取り、**既に張った watch を作り直さない**ので、
+   * 除外を解除しただけでは監視対象に戻らない（そのディレクトリはツリーに出るのに
+   * ライブリロードだけ効かない、という気づきにくい壊れ方をする）。作り直すのが確実。
+   */
+  const startWatcher = () => {
+    if (config.watch === false) return;
     watcher = createWatcher(
       config.rootDir,
       (path, kind) => {
@@ -345,7 +397,32 @@ export function createServer(config: ServerConfig): ServerHandle {
       },
       { excludes, saveMark, depth: config.maxDepth, onReady: config.onWatcherReady },
     );
-  }
+  };
+  startWatcher();
+
+  /**
+   * `.yomiignore` を読み直して除外集合を差し替える (Issue #164)。
+   *
+   * **`bin/yomi.ts` の起動時と同じ経路を通る** (`loadYomiignore` → `resolveExcludes`)。
+   * 「和集合 → 減算」の合成順が 2 か所に散ると、画面から保存したときだけ否定 (`!name`) の
+   * 効き方が変わる、という追いにくいずれ方をする。
+   *
+   * 差し替えたら:
+   * - **watcher を張り直す** (`startWatcher` の説明のとおり、解除したディレクトリを監視に戻す)
+   * - **ツリーのキャッシュを捨てて版を進める** (`invalidateTree`)
+   * - **全量取り直しを通知する。** 除外集合が丸ごと入れ替わるので、`add` / `remove` 1 件の
+   *   差分では表せない (`public/app-websocket.js` は `op` の無い `tree` を全量へ倒す)
+   */
+  const reloadExcludes = async (): Promise<InvalidYomiignoreLine[]> => {
+    const parsed = await loadYomiignore(config.rootDir);
+    excludes = resolveExcludes(parsed);
+    watcher?.close();
+    watcher = null;
+    startWatcher();
+    invalidateTree();
+    server.publish(WS_TOPIC, JSON.stringify({ type: "tree" }));
+    return parsed.invalid;
+  };
 
   return {
     server,
@@ -809,6 +886,122 @@ async function handleFileWrite(
     });
   }
   return Response.json({ path: safe.rel, raw: body, html, sha: newSha });
+}
+
+/** `/api/yomiignore` が返す 1 行ぶんの警告。**文言はサーバが組み立てる**。 */
+export interface YomiignoreInvalidLine extends InvalidYomiignoreLine {
+  /** `describeInvalidLine` の結果。画面はこれをそのまま出す (判定も文言も写さない) */
+  message: string;
+}
+
+export interface YomiignoreState {
+  /** `.yomiignore` の中身。ファイルが無ければ空文字 */
+  text: string;
+  invalid: YomiignoreInvalidLine[];
+}
+
+/**
+ * `.yomiignore` の現在の中身と警告を返す (Issue #164)。
+ *
+ * **`/api/file` では読ませない。** あちらは除外配下を拒否するので、
+ * `.yomiignore` に `.yomiignore` と書いた瞬間に**設定画面を開けなくなる**
+ * （自分で自分を締め出せてしまう）。設定は専用経路で、除外判定を通さない。
+ */
+export async function readYomiignoreState(rootDir: string): Promise<YomiignoreState> {
+  let text = "";
+  try {
+    text = await readFile(join(rootDir, YOMIIGNORE_FILENAME), "utf-8");
+  } catch (err) {
+    // **存在しないのは正常。** それ以外は読めなかったことを画面へ伝えず空として扱うが、
+    // ログには残す（権限などで読めていないのに「空です」と見えるのを追えるように）
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`${YOMIIGNORE_FILENAME} の読み取りに失敗しました:`, err);
+    }
+  }
+  return { text, invalid: describeParsed(text) };
+}
+
+function describeParsed(text: string): YomiignoreInvalidLine[] {
+  return parseYomiignore(text).invalid.map((v) => ({ ...v, message: describeInvalidLine(v) }));
+}
+
+interface YomiignoreWriteBody {
+  text?: unknown;
+}
+
+/**
+ * POST /api/yomiignore — `.yomiignore` を保存して除外集合を差し替える (Issue #164)。
+ *
+ * **`/api/file` (Markdown 保存) のゲートを緩めない。** あちらの `isMarkdownPath` は
+ * 「書けるのは md だけ」という約束で、ここを通すために広げると**任意のテキストファイルへの
+ * 書き込み経路**が開く。パスを取らない専用エンドポイントにすれば、書ける先は
+ * ルート直下の `.yomiignore` 1 つに固定される。
+ *
+ * **共有起動 (`--share`) でも編集できる。** 除外は #65 以降「読み書きの可否を決めるゲート」
+ * なので、`!node_modules` のような否定を書けば起動ディレクトリ配下を広く読めるようになる。
+ * README が `--share` を「LAN 内の全員が信頼できる前提」と宣言しているので、md の保存・
+ * 新規作成と同じ扱いに揃える (2026-08-30 の判断)。**権限で分けるなら別 Issue**。
+ */
+async function handleYomiignoreWrite(
+  rootDir: string,
+  req: Request,
+  saveMark: SaveMark,
+  reloadExcludes: () => Promise<InvalidYomiignoreLine[]>,
+): Promise<Response> {
+  const lengthHeader = req.headers.get("content-length");
+  if (lengthHeader && Number(lengthHeader) > MAX_YOMIIGNORE_BYTES) {
+    return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
+  }
+
+  let parsed: YomiignoreWriteBody;
+  try {
+    const raw = await req.text();
+    if (Buffer.byteLength(raw, "utf-8") > MAX_YOMIIGNORE_BYTES) {
+      return Response.json(
+        { error: "body が大きすぎます", code: "body_too_large" },
+        { status: 413 },
+      );
+    }
+    parsed = JSON.parse(raw) as YomiignoreWriteBody;
+  } catch {
+    return Response.json(
+      { error: "JSON の解析に失敗しました", code: "invalid_json" },
+      { status: 400 },
+    );
+  }
+
+  const { text } = parsed;
+  if (typeof text !== "string") {
+    return Response.json({ error: "text は string です", code: "invalid_json" }, { status: 400 });
+  }
+  if (Buffer.byteLength(text, "utf-8") > MAX_YOMIIGNORE_BYTES) {
+    return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
+  }
+
+  const buf = Buffer.from(text, "utf-8");
+  // **自己保存マークを立てる。** `.yomiignore` は `text-ext.ts` に載っていてツリーから
+  // 読めるので、これが無いと保存のたびに watcher が「他人の変更」として通知を撒く
+  // (Issue #120 と同じ理由。パスはルート相対なのでファイル名そのもの)
+  const newSha = sha256(buf);
+  saveMark.set(YOMIIGNORE_FILENAME, newSha);
+  try {
+    await writeFileAtomic(join(rootDir, YOMIIGNORE_FILENAME), buf);
+  } catch (err) {
+    saveMark.clear(YOMIIGNORE_FILENAME, newSha);
+    // 生のメッセージを返さない (Issue #99。一時ファイルの絶対パスと pid が載る)
+    console.error(`${YOMIIGNORE_FILENAME} の保存に失敗しました:`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json(
+      { error: `${YOMIIGNORE_FILENAME} の保存に失敗しました`, code: "write_failed" },
+      { status: 500 },
+    );
+  }
+
+  // **読み直しはディスクから行う** (いま書いた文字列を使い回さない)。書けた内容が
+  // 実際に読み直せることまで含めて「反映できた」なので、ここで経路を分けない
+  await reloadExcludes();
+  return Response.json({ text, invalid: describeParsed(text) } satisfies YomiignoreState);
 }
 
 interface FileCreateBody {

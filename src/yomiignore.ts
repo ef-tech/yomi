@@ -135,21 +135,37 @@ export async function loadYomiignore(rootDir: string): Promise<YomiignoreParseRe
 }
 
 /**
+ * 理由ごとの説明文。**画面（設定パネル）と起動時の warn で同じ文言を使う** (Issue #164)。
+ *
+ * **クライアント側に写しを置かない。** 判定 (`classifyInvalid`) はここにしか無いので、
+ * 文言だけ向こうへ複製すると、**理由を 1 つ足したときに画面だけ「undefined」になる**
+ * （型で守れない。パネルはサーバの応答を描くだけなので、コンパイル時には気づけない）。
+ * サーバは行ごとに整形済みの文字列を返し、パネルはそれを表示する。
+ */
+export const INVALID_REASON_TEXT: Readonly<Record<InvalidReason, string>> = {
+  "path-separator":
+    "`/` を含む行は照合できません (セグメント名のみ指定できます)。この行は無視しました",
+  glob: "グロブ (`*` `?` `[]`) は展開されません。この名前そのものとの完全一致として扱います",
+  "empty-negation": "`!` の後ろに名前がありません。この行は無視しました",
+};
+
+/**
+ * 1 行ぶんの警告文 (`.yomiignore:12: docs/private — …`)。
+ *
+ * `describeInvalidLines` (stderr) と `/api/yomiignore` (画面) の**両方がこれを使う**。
+ */
+export function describeInvalidLine(v: InvalidYomiignoreLine): string {
+  return `${YOMIIGNORE_FILENAME}:${v.line}: ${v.text} — ${INVALID_REASON_TEXT[v.reason]}`;
+}
+
+/**
  * 意図どおりに効かない行の警告文を組み立てる (起動時に stderr へ出す)。
  *
  * **捨てた行と残した行を書き分ける。** 「無視しました」で一括りにすると、
  * グロブ文字を含む名前が**除外として生きている**ことが伝わらない。
  */
 export function describeInvalidLines(invalid: readonly InvalidYomiignoreLine[]): string {
-  const reasonText: Record<InvalidReason, string> = {
-    "path-separator":
-      "`/` を含む行は照合できません (セグメント名のみ指定できます)。この行は無視しました",
-    glob: "グロブ (`*` `?` `[]`) は展開されません。この名前そのものとの完全一致として扱います",
-    "empty-negation": "`!` の後ろに名前がありません。この行は無視しました",
-  };
-  const lines = invalid.map(
-    (v) => `  ${YOMIIGNORE_FILENAME}:${v.line}: ${v.text} — ${reasonText[v.reason]}`,
-  );
+  const lines = invalid.map((v) => `  ${describeInvalidLine(v)}`);
   const dropped = invalid.filter((v) => v.dropped).length;
   const kept = invalid.length - dropped;
   const counts = [dropped > 0 ? `無視 ${dropped} 件` : "", kept > 0 ? `注意 ${kept} 件` : ""]
