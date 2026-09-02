@@ -1,0 +1,61 @@
+# PR 本文の検証証跡（`ef:verify-evidence` マーカー + 非空 3 行）を検査する。
+#
+# **CI とは別の workflow にする。** 判定材料は `github.event.pull_request.body` だけなので、
+# **本文を編集したら再判定する**必要がある（`gh run rerun` は同じ event payload を replay するので、
+# 古い本文のまま落ち続ける）。ところが `pull_request` の既定タイプに `edited` は無い。
+#
+# **`ci.yml` に `edited` を足す形は破綻する**（実測。この 2 つが同時に起きる）:
+#
+# 1. **走行中の CI を打ち切る。** `ci.yml` は workflow レベルの `concurrency` を持つので、
+#    本文を編集すると run 全体が新しいロックを取り、**push で走っていた run を丸ごと cancel** する
+#    （実測: run 33605377300 が push の 23 秒後に cancel された）。
+# 2. **skip した job が pass の記録を上書きする。** 重いジョブを `if: github.event.action != 'edited'`
+#    で飛ばしても、**skip された job は check-run を publish する**ので、
+#    `gh pr checks` の `E2E (chromium)` が `pass` から `skipping` へ置き換わり、
+#    `mergeStateStatus` が `BLOCKED` になる（実測）。
+#
+# **workflow を分ければどちらも起きない** —— `edited` で `ci.yml` はそもそも起動しないので、
+# test / e2e の結果は最後に走ったときのまま残る。
+
+name: PR evidence
+
+on:
+  pull_request:
+    # **`edited` を含めるのがこの workflow の存在理由**（本文を直したら再判定する）
+    types: [opened, synchronize, reopened, edited]
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -eo pipefail {0}
+
+# 本文を続けて編集したときは最新だけでよい（判定材料が本文そのもののため）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: PR verification evidence
+    # bot の PR は証跡を持たないので除外する（除外しないと dependabot が必ず red になる）
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .github/scripts/check-pr-evidence.sh ]; then
+            echo "ERROR: .github/scripts/check-pr-evidence.sh がありません。" >&2
+            echo "ef-devkit の templates/_common/github/scripts/ から配置してください" >&2
+            echo "(/ef:bootstrap が CI と 1 セットで置きます)。" >&2
+            exit 1
+          fi
+          printf '%s' "$PR_BODY" | bash .github/scripts/check-pr-evidence.sh
