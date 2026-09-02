@@ -1,6 +1,6 @@
 /*!
  * yomi vendored bundle — Issue #52 (do not edit by hand; run `bun run build`)
- * DOMPurify v3.4.13 — (c) Cure53, Apache-2.0 OR MPL-2.0 — https://github.com/cure53/DOMPurify
+ * DOMPurify v3.4.14 — (c) Cure53, Apache-2.0 OR MPL-2.0 — https://github.com/cure53/DOMPurify
  * Mermaid v11.17.2 — MIT — https://github.com/mermaid-js/mermaid
  * highlight.js v11.12.0 — BSD-3-Clause — https://github.com/highlightjs/highlight.js
  */
