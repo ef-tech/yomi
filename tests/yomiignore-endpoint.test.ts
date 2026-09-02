@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, MAX_YOMIIGNORE_BYTES, type ServerHandle } from "../src/server.ts";
@@ -166,6 +166,73 @@ describe("/api/yomiignore", () => {
     });
     expect(res.status).toBe(405);
     expect(res.headers.get("Allow")).toBe("GET, POST");
+  });
+
+  test("除外を差し替えると /api/images.zip にも同時に効く", async () => {
+    await writeFile(join(root, "article.md"), "# article\n\n![logo](build/logo.png)\n");
+    // `build` は DEFAULT_EXCLUDES なので、既定では zip に入らない
+    const before = await fetch(`${url}/api/images.zip?path=article.md`);
+    expect(before.status).toBe(200);
+    expect(Number(before.headers.get("X-Yomi-Images"))).toBe(0);
+
+    await save("!build\n");
+
+    const after = await fetch(`${url}/api/images.zip?path=article.md`);
+    expect(after.status).toBe(200);
+    expect(Number(after.headers.get("X-Yomi-Images"))).toBe(1);
+  });
+
+  test("root 外を指す symlink の .yomiignore は読めない（#156 の経路を開け直さない）", async () => {
+    // **`/api/file` は 400 で拒否するのに専用経路だけ素通り、という食い違いを作らない。**
+    // 実測でこの穴を踏んだ（`.yomiignore -> ../outside/secret.txt` で中身が返っていた）
+    const outside = await mkdtemp(join(tmpdir(), "yomi-ignore-outside-"));
+    try {
+      await writeFile(join(outside, "secret.txt"), "SECRET\n");
+      await symlink(join(outside, "secret.txt"), join(root, YOMIIGNORE_FILENAME));
+
+      const res = await fetch(`${url}/api/yomiignore`);
+      expect(res.status).toBe(400);
+      const data = (await res.json()) as { code: string };
+      expect(data.code).toBe("unsafe_path");
+      expect(JSON.stringify(data)).not.toContain("SECRET");
+
+      // `/api/file` と同じ答えになっていること（入口ごとに違わない）
+      const viaFile = await fetch(
+        `${url}/api/file?path=${encodeURIComponent(YOMIIGNORE_FILENAME)}`,
+      );
+      expect(viaFile.status).toBe(400);
+      expect((await viaFile.json()).code).toBe("unsafe_path");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("root 外を指す symlink の .yomiignore へは書き込めない（リンクも壊さない）", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "yomi-ignore-outside-"));
+    try {
+      await writeFile(join(outside, "secret.txt"), "SECRET\n");
+      await symlink(join(outside, "secret.txt"), join(root, YOMIIGNORE_FILENAME));
+
+      const res = await save("secret\n");
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("unsafe_path");
+      // **リンク先を上書きしていない**（拒否したつもりで書いていた、を防ぐ）
+      expect(await readFile(join(outside, "secret.txt"), "utf-8")).toBe("SECRET\n");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("root 内を指す symlink の .yomiignore は従来どおり読み書きできる", async () => {
+    // ルート内で完結する symlink まで拒否すると、正常な使い方を壊す
+    await writeFile(join(root, "ignore-src.txt"), "secret\n");
+    await symlink(join(root, "ignore-src.txt"), join(root, YOMIIGNORE_FILENAME));
+
+    const got = (await (await fetch(`${url}/api/yomiignore`)).json()) as { text: string };
+    expect(got.text).toBe("secret\n");
+    expect((await save("readme.md\n")).status).toBe(200);
+    // リンク先に書かれる（`/api/file` が safe.abs へ書くのと同じ挙動）
+    expect(await readFile(join(root, "ignore-src.txt"), "utf-8")).toBe("readme.md\n");
   });
 
   test("`.yomiignore` 自身を除外に書いても設定画面からは読み書きできる", async () => {

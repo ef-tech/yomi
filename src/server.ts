@@ -295,13 +295,21 @@ export function createServer(config: ServerConfig): ServerHandle {
       }
 
       if (url.pathname === "/api/yomiignore") {
-        if (req.method === "GET") {
-          return Response.json(await readYomiignoreState(config.rootDir));
-        }
-        if (req.method === "POST") {
-          if (!checkOrigin(req))
+        if (req.method === "GET" || req.method === "POST") {
+          if (req.method === "POST" && !checkOrigin(req))
             return forbidden("Origin が許可されていません", "origin_forbidden");
-          return handleYomiignoreWrite(config.rootDir, req, saveMark, reloadExcludes);
+          try {
+            return req.method === "GET"
+              ? Response.json(await readYomiignoreState(config.rootDir))
+              : await handleYomiignoreWrite(config.rootDir, req, saveMark, reloadExcludes);
+          } catch (err) {
+            // **ルート外を指す symlink は読み書きさせない (Issue #156)。**
+            // `/api/file` と同じ code / status に揃える（入口ごとに答えが違わないように）
+            if (err instanceof UnsafePathError) {
+              return Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 });
+            }
+            throw err;
+          }
         }
         return new Response("Method Not Allowed", {
           status: 405,
@@ -908,9 +916,16 @@ export interface YomiignoreState {
  * （自分で自分を締め出せてしまう）。設定は専用経路で、除外判定を通さない。
  */
 export async function readYomiignoreState(rootDir: string): Promise<YomiignoreState> {
+  // **symlink を解決してからルート内に収まっているか確かめる (Issue #156)。**
+  // `join(rootDir, …)` を素で `readFile` に渡すと、`.yomiignore` がルート外を指す
+  // symlink のとき**その中身をそのまま返してしまう** —— v0.22.1 で `/api/file` /
+  // `/api/asset` に塞いだ穴が、専用エンドポイントを足したことで別経路に開き直る
+  // （実測: `.yomiignore -> ../outside/secret.txt` で秘密が読めた）。
+  // **除外判定は通さない**（自分で自分を締め出さないため）が、**パスの安全性は通す**。
+  const abs = await resolveYomiignorePath(rootDir);
   let text = "";
   try {
-    text = await readFile(join(rootDir, YOMIIGNORE_FILENAME), "utf-8");
+    text = await readFile(abs, "utf-8");
   } catch (err) {
     // **存在しないのは正常。** それ以外は読めなかったことを画面へ伝えず空として扱うが、
     // ログには残す（権限などで読めていないのに「空です」と見えるのを追えるように）
@@ -919,6 +934,21 @@ export async function readYomiignoreState(rootDir: string): Promise<YomiignoreSt
     }
   }
   return { text, invalid: describeParsed(text) };
+}
+
+/**
+ * `.yomiignore` の実体パスを解決する (Issue #156 / #164)。
+ *
+ * **`resolveSafe` に通す。** パスは固定なので traversal は起きないが、**そこに置かれた
+ * symlink がルート外を指す**ことはあり、`/api/file` はそれを 400 で拒否している。
+ * この経路だけ素通しにすると、**同じファイルが片方の入口からは読めない・もう片方からは
+ * 読める**という食い違いになる。
+ *
+ * 解決できたパスは**ルート内**なので、読み書きの対象として使ってよい。
+ */
+async function resolveYomiignorePath(rootDir: string): Promise<string> {
+  const safe = await resolveSafe(rootDir, YOMIIGNORE_FILENAME);
+  return safe.abs;
 }
 
 function describeParsed(text: string): YomiignoreInvalidLine[] {
@@ -978,6 +1008,12 @@ async function handleYomiignoreWrite(
     return Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 });
   }
 
+  // **書き込み先も解決してから使う (Issue #156)。** ルート外を指す symlink なら
+  // ここで `UnsafePathError` になり、呼び出し側が 400 に変える。**素の `join` に書くと
+  // symlink を破壊してルート直下に実ファイルを作る**ので、「拒否した」ように見えて
+  // 実際には利用者のリンクを消している、という別の壊れ方をする
+  const abs = await resolveYomiignorePath(rootDir);
+
   const buf = Buffer.from(text, "utf-8");
   // **自己保存マークを立てる。** `.yomiignore` は `text-ext.ts` に載っていてツリーから
   // 読めるので、これが無いと保存のたびに watcher が「他人の変更」として通知を撒く
@@ -985,7 +1021,7 @@ async function handleYomiignoreWrite(
   const newSha = sha256(buf);
   saveMark.set(YOMIIGNORE_FILENAME, newSha);
   try {
-    await writeFileAtomic(join(rootDir, YOMIIGNORE_FILENAME), buf);
+    await writeFileAtomic(abs, buf);
   } catch (err) {
     saveMark.clear(YOMIIGNORE_FILENAME, newSha);
     // 生のメッセージを返さない (Issue #99。一時ファイルの絶対パスと pid が載る)

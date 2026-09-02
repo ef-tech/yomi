@@ -32,6 +32,11 @@ export function createYomiignorePanel(ctx) {
   let returnFocus = null;
   /** 保存中か。二重送信を防ぐ */
   let saving = false;
+  /**
+   * 取得中か。**`isOpen()` だけでは二重起動を防げない** —— パネルを出すのは取得できてから
+   * なので、応答が返るまでは閉じたままに見え、続けて押すと 2 本目の GET が飛ぶ
+   */
+  let opening = false;
 
   /** @returns {boolean} */
   function isOpen() {
@@ -74,7 +79,8 @@ export function createYomiignorePanel(ctx) {
   }
 
   async function open() {
-    if (isOpen()) return;
+    if (isOpen() || opening) return;
+    opening = true;
     returnFocus = /** @type {HTMLElement | null} */ (document.activeElement);
     // **開くのは取得できてから。** 先に開いて空の textarea を見せると、
     // 取得に失敗したときに「除外設定が空だ」と誤読して丸ごと書き直されうる
@@ -88,6 +94,8 @@ export function createYomiignorePanel(ctx) {
       ctx.setStatus("error", t("yomiignore.loadFailed", { msg: errorText(err) }));
       returnFocus = null;
       return;
+    } finally {
+      opening = false;
     }
     setNotice(null);
     els.yomiignorePanel.hidden = false;
@@ -125,7 +133,17 @@ export function createYomiignorePanel(ctx) {
       renderInvalid(data.invalid ?? []);
       // 上のクラスコメントのとおり、WebSocket の通知に依存せず自分でも取り直す
       await ctx.ws.refreshTree();
-      setNotice(t("yomiignore.saved"), "ok");
+      // **除外を狭めると、開いていたファイルが除外配下に入りうる。** `refreshTree` は
+      // `#status` にその旨を出すが、**topbar はこのパネルのスクリムの下**で見えないので、
+      // 保存した本人が気づけない（「保存しました」だけが見えて、裏で本文が孤立している）
+      const lostCurrent =
+        ctx.state.currentPath !== null && !ctx.state.fileButtons.has(ctx.state.currentPath);
+      setNotice(
+        lostCurrent
+          ? t("yomiignore.savedButCurrentExcluded", { path: ctx.state.currentPath ?? "" })
+          : t("yomiignore.saved"),
+        lostCurrent ? "error" : "ok",
+      );
     } catch (err) {
       setNotice(t("yomiignore.saveFailed", { msg: errorText(err) }), "error");
     } finally {

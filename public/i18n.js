@@ -72,13 +72,17 @@ const MESSAGES = {
     "yomiignore.open.aria": "除外設定 (.yomiignore) を編集",
     "yomiignore.open.title": "除外設定 (.yomiignore)",
     "yomiignore.title": "除外設定 (.yomiignore)",
+    // **バッククォートを使わない。** ここは HTML のテキストノードとして出るので、
+    // Markdown の記法がそのまま記号として画面に残る（実測）
     "yomiignore.help":
-      "1 行 1 パターン。名前の完全一致で除外します。`#` はコメント、`!name` で既定の除外を解除できます。",
+      "1 行 1 パターン。名前の完全一致で除外します。「#」で始まる行はコメント、「!name」で既定の除外を解除できます。",
     "yomiignore.textarea.aria": "除外パターン (1 行 1 パターン)",
     "yomiignore.placeholder": "node_modules\n!build",
     "yomiignore.save": "保存して反映",
     "yomiignore.saving": "保存しています…",
     "yomiignore.saved": "保存しました。除外を反映しました",
+    "yomiignore.savedButCurrentExcluded":
+      "保存しました。ただし表示中の {path} が除外配下になり、ツリーから消えました",
     "yomiignore.saveFailed": "除外設定の保存に失敗しました: {msg}",
     "yomiignore.loadFailed": "除外設定の読み込みに失敗しました: {msg}",
     "images.download": "画像 zip",
@@ -249,12 +253,14 @@ const MESSAGES = {
     "yomiignore.open.title": "Exclude settings (.yomiignore)",
     "yomiignore.title": "Exclude settings (.yomiignore)",
     "yomiignore.help":
-      "One pattern per line, matched against whole names. `#` starts a comment; `!name` re-includes a default exclude.",
+      'One pattern per line, matched against whole names. A line starting with "#" is a comment; "!name" re-includes a default exclude.',
     "yomiignore.textarea.aria": "Exclude patterns (one per line)",
     "yomiignore.placeholder": "node_modules\n!build",
     "yomiignore.save": "Save and apply",
     "yomiignore.saving": "Saving…",
     "yomiignore.saved": "Saved. Excludes applied.",
+    "yomiignore.savedButCurrentExcluded":
+      "Saved, but the open file {path} is now excluded and disappeared from the tree.",
     "yomiignore.saveFailed": "Failed to save exclude settings: {msg}",
     "yomiignore.loadFailed": "Failed to load exclude settings: {msg}",
     "images.download": "Images zip",

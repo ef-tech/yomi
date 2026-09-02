@@ -222,6 +222,38 @@ describe("除外設定パネル", () => {
     expect(h.el("yomiignore-panel").hidden).toBe(false);
   });
 
+  test("表示中のファイルが除外配下になったらパネル上で伝える", async () => {
+    // **topbar の `#status` はこのパネルのスクリムの下で見えない。** 「保存しました」だけが
+    // 見えて、裏で本文が孤立している状態を作らない
+    h = await bootApp();
+    stubYomiignore(h, { get: { text: "", invalid: [] }, post: { text: "docs\n", invalid: [] } });
+    // 保存後のツリーから `docs/` を丸ごと落とす（除外した状態のサーバ応答を模す）
+    const openPath = h.el("current-path").textContent ?? "";
+    expect(openPath).not.toBe("");
+
+    h.click(h.el("tree-yomiignore"));
+    await h.flush(4);
+    h.tree = { type: "dir", name: "", path: "", children: [] };
+    h.click(h.el("yomiignore-save"));
+    await h.flush(6);
+
+    expect(h.el("yomiignore-notice").className).toContain("is-error");
+    expect(h.el("yomiignore-notice").textContent).toContain(openPath);
+  });
+
+  test("取得中に連打しても GET は 1 本しか飛ばない", async () => {
+    h = await bootApp();
+    stubYomiignore(h, { get: { text: "", invalid: [] } });
+
+    // **`isOpen()` だけでは防げない** —— 応答が返るまでパネルは閉じたままに見える
+    h.click(h.el("tree-yomiignore"));
+    h.click(h.el("tree-yomiignore"));
+    await h.flush(6);
+
+    expect(ignoreCalls(h, "GET")).toHaveLength(1);
+    expect(h.el("yomiignore-panel").hidden).toBe(false);
+  });
+
   test("Tab は端で折り返してパネル内に留まる", async () => {
     h = await bootApp();
     stubYomiignore(h, { get: { text: "", invalid: [] } });
