@@ -1,7 +1,7 @@
 /*!
  * yomi vendored bundle — Issue #52 (do not edit by hand; run `bun run build`)
  * DOMPurify v3.4.13 — (c) Cure53, Apache-2.0 OR MPL-2.0 — https://github.com/cure53/DOMPurify
- * Mermaid v11.16.1 — MIT — https://github.com/mermaid-js/mermaid
+ * Mermaid v11.17.2 — MIT — https://github.com/mermaid-js/mermaid
  * highlight.js v11.12.0 — BSD-3-Clause — https://github.com/highlightjs/highlight.js
  */
 var SQ=Object.create;var{getPrototypeOf:OQ,defineProperty:jJ,getOwnPropertyNames:yQ}=Object;var gQ=Object.prototype.hasOwnProperty;function LQ(Q){return this[Q]}var sQ,AQ,h0=(Q,q,Z)=>{var B=Q!=null&&typeof Q==="object";if(B){var z=q?sQ??=new WeakMap:AQ??=new WeakMap,b=z.get(Q);if(b)return b}Z=Q!=null?SQ(OQ(Q)):{};let k=q||!Q||!Q.__esModule?jJ(Z,"default",{value:Q,enumerable:!0}):Z;for(let i of yQ(Q))if(!gQ.call(k,i))jJ(k,i,{get:LQ.bind(Q,i),enumerable:!0});if(B)z.set(Q,k);return k};var H0=(Q,q)=>()=>(q||Q((q={exports:{}}).exports,q),q.exports);var mQ=(Q)=>Q;function lQ(Q,q){this[Q]=mQ.bind(null,q)}var C0=(Q,q)=>{for(var Z in q)jJ(Q,Z,{get:q[Z],enumerable:!0,configurable:!0,set:lQ.bind(q,Z)})};var iQ=(Q,q)=>()=>(Q&&(q=Q(Q=0)),q);function sJ(Q,q){(q==null||q>Q.length)&&(q=Q.length);for(var Z=0,B=Array(q);Z<q;Z++)B[Z]=Q[Z];return B}function _Q(Q){if(Array.isArray(Q))return Q}function uQ(Q,q){var Z=Q==null?null:typeof Symbol<"u"&&Q[Symbol.iterator]||Q["@@iterator"];if(Z!=null){var B,z,b,k,i=[],y=!0,Bj=!1;try{if(b=(Z=Z.call(Q)).next,q===0);else for(;!(y=(B=b.call(Z)).done)&&(i.push(B.value),i.length!==q);y=!0);}catch(yj){Bj=!0,z=yj}finally{try{if(!y&&Z.return!=null&&(k=Z.return(),Object(k)!==k))return}finally{if(Bj)throw z}}return i}}function EQ(){throw TypeError(`Invalid attempt to destructure non-iterable instance.
