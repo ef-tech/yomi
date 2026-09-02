@@ -1,0 +1,59 @@
+name: 不具合
+description: 既存機能が仕様どおり動かない（不具合・エラー・データ不整合）
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        起票後に `/ef:maintain` を通すと、この内容が `## 仕様確定` / `## 経緯` の形式へ整形され、priority ラベルが付きます。
+        埋められない欄はそのままで構いません（**経緯だけ必須**。残りは maintain が補います）。
+
+        ⚠️ ログやエラーメッセージを貼るときは、**トークン・接続文字列・個人情報をマスク**してください（public repo では誰でも読めます）。
+  - type: textarea
+    id: memo
+    attributes:
+      label: 実装メモ
+      description: 再現手順・期待する挙動・実際の挙動・環境
+      value: |
+        - 再現手順:
+          1.
+          2.
+        - 期待する挙動:
+        - 実際の挙動:
+        - 環境:
+        - 原因の当たり: 未調査
+        - 修正方針:
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: 完了条件（DoD）
+      value: |
+        - [ ] 再現手順どおりに操作しても現象が起きない
+        - [ ] 同じ壊れ方を検出する回帰テストを追加した
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ / 対象外
+      value: |
+        - 対象:
+        - 対象外:
+    validations:
+      required: false
+  - type: textarea
+    id: refs
+    attributes:
+      label: 関連設計
+      description: 関係する docs/spec のパス。無ければ実装ファイルのパス
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: 経緯
+      description: いつ・どういう状況で気づいたか
+    validations:
+      required: true
