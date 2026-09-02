@@ -227,18 +227,56 @@ describe("除外設定パネル", () => {
     // 見えて、裏で本文が孤立している状態を作らない
     h = await bootApp();
     stubYomiignore(h, { get: { text: "", invalid: [] }, post: { text: "docs\n", invalid: [] } });
-    // 保存後のツリーから `docs/` を丸ごと落とす（除外した状態のサーバ応答を模す）
     const openPath = h.el("current-path").textContent ?? "";
     expect(openPath).not.toBe("");
 
     h.click(h.el("tree-yomiignore"));
     await h.flush(4);
+    // 保存後のツリーから丸ごと落とす（除外した状態のサーバ応答を模す）
     h.tree = { type: "dir", name: "", path: "", children: [] };
     h.click(h.el("yomiignore-save"));
     await h.flush(6);
 
     expect(h.el("yomiignore-notice").className).toContain("is-error");
     expect(h.el("yomiignore-notice").textContent).toContain(openPath);
+  });
+
+  test("保存前から表示中ファイルが消えていたら、除外のせいにしない", async () => {
+    // **保存後の状態だけを見ると原因を取り違える。** 外部で削除された / WS が切れている間に
+    // 消えた場合にも「除外配下になりました」と言うと、利用者は自分の設定を疑って直しにいく
+    h = await bootApp();
+    stubYomiignore(h, { get: { text: "", invalid: [] }, post: { text: "x\n", invalid: [] } });
+
+    // 開く前にツリーを空にし、取り直させて「表示中ファイルが既に居ない」状態を作る
+    h.tree = { type: "dir", name: "", path: "", children: [] };
+    h.ws.emit({ type: "tree" });
+    await h.flush(4);
+    expect(h.el("current-path").textContent).not.toBe("");
+
+    h.click(h.el("tree-yomiignore"));
+    await h.flush(4);
+    h.click(h.el("yomiignore-save"));
+    await h.flush(6);
+
+    // 保存自体は成功しているので `is-ok`（除外のせいにしない）
+    expect(h.el("yomiignore-notice").className).toContain("is-ok");
+  });
+
+  test("保存中も保存ボタンがフォーカストラップに残る（aria-disabled）", async () => {
+    // `disabled` にすると `button:not([disabled])` から外れ、押した本人のフォーカスが
+    // `<body>` へ落ちてトラップの文脈が飛ぶ
+    h = await bootApp();
+    stubYomiignore(h, { get: { text: "", invalid: [] }, post: { text: "x\n", invalid: [] } });
+
+    h.click(h.el("tree-yomiignore"));
+    await h.flush(4);
+    h.click(h.el("yomiignore-save"));
+    // 保存が解決する前の状態を見る
+    expect(h.el("yomiignore-save").getAttribute("aria-disabled")).toBe("true");
+    expect(h.el<HTMLButtonElement>("yomiignore-save").disabled).toBe(false);
+
+    await h.flush(6);
+    expect(h.el("yomiignore-save").hasAttribute("aria-disabled")).toBe(false);
   });
 
   test("取得中に連打しても GET は 1 本しか飛ばない", async () => {

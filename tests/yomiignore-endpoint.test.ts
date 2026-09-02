@@ -168,6 +168,29 @@ describe("/api/yomiignore", () => {
     expect(res.headers.get("Allow")).toBe("GET, POST");
   });
 
+  test("並行 POST でも、最後に書かれた内容がディスクと実効の除外の両方で一致する", async () => {
+    // **保存は `await` を跨ぐので交差しうる。** 直列化しないと「ディスクは B・
+    // メモリの excludes は A」で確定し、除外したつもりの集合が効かないまま残る
+    // （除外はゲートなので、そのぶん読めてはいけないものが読める）
+    const results = await Promise.all([save("secret\n"), save("build\n"), save("secret\n")]);
+    for (const r of results) expect(r.status).toBe(200);
+
+    const onDisk = await readFile(join(root, YOMIIGNORE_FILENAME), "utf-8");
+    // ディスクの内容と実効の除外が一致していること（どちらが最後に勝ったかは問わない）
+    const excludesSecret = onDisk.includes("secret");
+    const read = await fetch(`${url}/api/file?path=secret/note.md`);
+    expect(read.status).toBe(excludesSecret ? 400 : 200);
+    // 応答が返す text もディスクと一致する（リクエスト本文の echo ではない）
+    const got = (await (await fetch(`${url}/api/yomiignore`)).json()) as { text: string };
+    expect(got.text).toBe(onDisk);
+  });
+
+  test("保存の応答はディスクを読み直した内容（リクエスト本文の echo ではない）", async () => {
+    const res = await save("secret\n");
+    const data = (await res.json()) as { text: string };
+    expect(data.text).toBe(await readFile(join(root, YOMIIGNORE_FILENAME), "utf-8"));
+  });
+
   test("除外を差し替えると /api/images.zip にも同時に効く", async () => {
     await writeFile(join(root, "article.md"), "# article\n\n![logo](build/logo.png)\n");
     // `build` は DEFAULT_EXCLUDES なので、既定では zip に入らない

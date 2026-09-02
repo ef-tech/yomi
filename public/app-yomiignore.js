@@ -120,7 +120,15 @@ export function createYomiignorePanel(ctx) {
   async function save() {
     if (saving) return;
     saving = true;
-    els.yomiignoreSave.disabled = true;
+    // **`disabled` にしない (a11y)。** `focusables()` は `button:not([disabled])` で集めるので、
+    // 押した本人のフォーカスが `<body>` へ落ちてトラップの文脈が飛ぶ。二重送信は上の
+    // `saving` ガードが止めるので、見た目と支援技術向けの状態だけ変える
+    els.yomiignoreSave.setAttribute("aria-disabled", "true");
+    // **保存「前」に、表示中のファイルがツリーに居たかを控える。** 保存後の状態だけを見ると、
+    // **元から消えていた**（外部で削除された / WS が切れている間に消えた）場合にも
+    // 「除外配下になった」と言ってしまい、利用者は自分の除外設定を疑って直しにいく
+    const hadCurrent =
+      ctx.state.currentPath !== null && ctx.state.fileButtons.has(ctx.state.currentPath);
     setNotice(t("yomiignore.saving"));
     try {
       const data = /** @type {{ text: string, invalid: any[] }} */ (
@@ -137,7 +145,9 @@ export function createYomiignorePanel(ctx) {
       // `#status` にその旨を出すが、**topbar はこのパネルのスクリムの下**で見えないので、
       // 保存した本人が気づけない（「保存しました」だけが見えて、裏で本文が孤立している）
       const lostCurrent =
-        ctx.state.currentPath !== null && !ctx.state.fileButtons.has(ctx.state.currentPath);
+        hadCurrent &&
+        ctx.state.currentPath !== null &&
+        !ctx.state.fileButtons.has(ctx.state.currentPath);
       setNotice(
         lostCurrent
           ? t("yomiignore.savedButCurrentExcluded", { path: ctx.state.currentPath ?? "" })
@@ -148,7 +158,7 @@ export function createYomiignorePanel(ctx) {
       setNotice(t("yomiignore.saveFailed", { msg: errorText(err) }), "error");
     } finally {
       saving = false;
-      els.yomiignoreSave.disabled = false;
+      els.yomiignoreSave.removeAttribute("aria-disabled");
     }
   }
 

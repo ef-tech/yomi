@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { resolveSafe } from "./safepath.ts";
 import { DEFAULT_EXCLUDES } from "./util/excludes.ts";
 
 export const YOMIIGNORE_FILENAME = ".yomiignore";
@@ -123,14 +123,36 @@ export function parseYomiignore(text: string): YomiignoreParseResult {
 
 /**
  * 指定ディレクトリ直下の `.yomiignore` を読み込む。
- * ファイルが存在しない、読めない場合は空の結果。
+ *
+ * **ファイルが無いときだけ空を返す。それ以外の失敗は投げる** (Issue #164)。
+ *
+ * 以前は**あらゆる読み取り失敗を空に倒して**いた。起動時はそれで実害が小さかった
+ * （`bin/yomi.ts` の `describeYomiignore` が「0 件追加」を出すので気づける）が、
+ * **画面から差し替えられるようになると話が変わる** —— 読めなかったときに実効の除外集合が
+ * 黙って `DEFAULT_EXCLUDES` ちょうどへ戻り、**利用者が足した除外が消える**。除外は #65 以降
+ * 「読み書きの可否を決めるゲート」なので、それは**塞いだはずのファイルが読めるようになる**
+ * ことを意味する（fail-open）。しかも応答は 200「保存しました」で、画面にも異常が出ない。
+ *
+ * `classifyInvalid` が glob 行を捨てない理由（このファイルの冒頭）と同じ判断を、
+ * 読み取り失敗にも適用して **fail-closed** にする。
+ *
+ * **ルート外を指す symlink も投げる。** `/api/yomiignore` は `resolveSafe` を通して 400 に
+ * するのに、こちらが素通しで読むと**「サーバはルート外の設定を適用しているのに、画面からは
+ * 確認も修正もできない」**という袋小路になる（2 経路が違う答えを出す）。
+ *
+ * @throws ルート外を指す symlink（`UnsafePathError`）、または ENOENT 以外の読み取り失敗
  */
 export async function loadYomiignore(rootDir: string): Promise<YomiignoreParseResult> {
+  // **`join` で組み立てて素で読まない** (Issue #156 / #164)。`.yomiignore` に置かれた
+  // symlink がルート外を指していれば、ここで `UnsafePathError` になる。
+  const safe = await resolveSafe(rootDir, YOMIIGNORE_FILENAME);
   try {
-    const text = await readFile(join(rootDir, YOMIIGNORE_FILENAME), "utf-8");
-    return parseYomiignore(text);
-  } catch {
-    return { excludes: new Set(), negations: new Set(), invalid: [] };
+    return parseYomiignore(await readFile(safe.abs, "utf-8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { excludes: new Set(), negations: new Set(), invalid: [] };
+    }
+    throw err;
   }
 }
 

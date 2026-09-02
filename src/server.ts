@@ -118,7 +118,15 @@ export interface ServerConfig {
    * 本番では未指定。
    */
   onWatcherReady?: () => void;
-  /** 除外するディレクトリ/ファイル名 (省略時は DEFAULT_EXCLUDES) */
+  /**
+   * 除外するディレクトリ/ファイル名の**起動時の初期値** (省略時は DEFAULT_EXCLUDES)。
+   *
+   * **`.yomiignore` を画面から保存すると破棄される** (Issue #164)。`reloadExcludes` は
+   * `DEFAULT_EXCLUDES` + ファイルの内容 − 否定 で**作り直す**ので、ここに渡した集合は
+   * 最初の保存で失われる。いまは `bin/yomi.ts` が同じ式で組み立てているので本番では
+   * 一致するが、**その一致は偶然の同型であって型でも規約でも守られていない** ——
+   * 埋め込み用途で狭い集合を渡すと、保存 1 回で除外が緩む（＝読み取り範囲が広がる）。
+   */
   excludes?: ReadonlySet<string>;
   /** 走査/監視する階層の上限 (Issue #44, tree -L 相当)。省略時は無制限。 */
   maxDepth?: number;
@@ -301,7 +309,9 @@ export function createServer(config: ServerConfig): ServerHandle {
           try {
             return req.method === "GET"
               ? Response.json(await readYomiignoreState(config.rootDir))
-              : await handleYomiignoreWrite(config.rootDir, req, saveMark, reloadExcludes);
+              : await runYomiignoreWrite(() =>
+                  handleYomiignoreWrite(config.rootDir, req, saveMark, reloadExcludes),
+                );
           } catch (err) {
             // **ルート外を指す symlink は読み書きさせない (Issue #156)。**
             // `/api/file` と同じ code / status に揃える（入口ごとに答えが違わないように）
@@ -421,7 +431,12 @@ export function createServer(config: ServerConfig): ServerHandle {
    * - **全量取り直しを通知する。** 除外集合が丸ごと入れ替わるので、`add` / `remove` 1 件の
    *   差分では表せない (`public/app-websocket.js` は `op` の無い `tree` を全量へ倒す)
    */
-  const reloadExcludes = async (): Promise<InvalidYomiignoreLine[]> => {
+  const reloadExcludes = async (): Promise<YomiignoreState> => {
+    // **ディスクから読み直す**（保存した文字列を使い回さない）。書けた内容が実際に
+    // 読み直せることまで含めて「反映できた」なので、応答もここで作った値から組む。
+    // **読めなかったら差し替えない**（`loadYomiignore` が投げる。fail-closed）——
+    // 黙って `DEFAULT_EXCLUDES` へ戻すと、利用者が足した除外が消えて読み取り範囲が広がる。
+    const state = await readYomiignoreState(config.rootDir);
     const parsed = await loadYomiignore(config.rootDir);
     excludes = resolveExcludes(parsed);
     watcher?.close();
@@ -429,7 +444,28 @@ export function createServer(config: ServerConfig): ServerHandle {
     startWatcher();
     invalidateTree();
     server.publish(WS_TOPIC, JSON.stringify({ type: "tree" }));
-    return parsed.invalid;
+    return state;
+  };
+
+  /**
+   * `.yomiignore` の保存を**直列化する** (Issue #164)。
+   *
+   * 保存は `await` を跨ぐので、2 本が交差すると「ディスクは B・メモリの `excludes` は A」で
+   * 確定しうる（後から代入したほうが勝つ）。除外はゲートなので、**除外したつもりの集合が
+   * 効いていない状態が次の保存まで残る**。2 タブ・`Ctrl+Enter` の連打・再送で現実に交差する
+   * （クライアントの `saving` フラグはそのタブ内の二重送信しか防がない）。
+   *
+   * **`Promise` の鎖 1 本で足りる**（サーバは単一プロセスで、書き込み先はこの 1 ファイル）。
+   */
+  let yomiignoreChain: Promise<unknown> = Promise.resolve();
+  const runYomiignoreWrite = <T>(task: () => Promise<T>): Promise<T> => {
+    // **前段の失敗を引き継がない**（1 本落ちたら以降が全部落ちる、を避ける）
+    const next = yomiignoreChain.then(task, task);
+    yomiignoreChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   };
 
   return {
@@ -922,10 +958,10 @@ export async function readYomiignoreState(rootDir: string): Promise<YomiignoreSt
   // `/api/asset` に塞いだ穴が、専用エンドポイントを足したことで別経路に開き直る
   // （実測: `.yomiignore -> ../outside/secret.txt` で秘密が読めた）。
   // **除外判定は通さない**（自分で自分を締め出さないため）が、**パスの安全性は通す**。
-  const abs = await resolveYomiignorePath(rootDir);
+  const safe = await resolveYomiignore(rootDir);
   let text = "";
   try {
-    text = await readFile(abs, "utf-8");
+    text = await readFile(safe.abs, "utf-8");
   } catch (err) {
     // **存在しないのは正常。** それ以外は読めなかったことを画面へ伝えず空として扱うが、
     // ログには残す（権限などで読めていないのに「空です」と見えるのを追えるように）
@@ -945,10 +981,15 @@ export async function readYomiignoreState(rootDir: string): Promise<YomiignoreSt
  * 読める**という食い違いになる。
  *
  * 解決できたパスは**ルート内**なので、読み書きの対象として使ってよい。
+ *
+ * **`rel` も返す。** `saveMark` と watcher は**実体側の名前**で噛み合う必要がある
+ * （`ResolvedPath.rel` の JSDoc）。`.yomiignore` がルート内の別ファイルを指す symlink だと
+ * watcher は `ignore-src.txt` の `change` を emit するので、マークを `.yomiignore` の
+ * リテラルで立てると当たらず、**保存のたびに余計なリロードが飛ぶ**（#120 が塞いだ壊れ方）。
+ * `handleFileWrite` が `safe.rel` を使っているのに揃える。
  */
-async function resolveYomiignorePath(rootDir: string): Promise<string> {
-  const safe = await resolveSafe(rootDir, YOMIIGNORE_FILENAME);
-  return safe.abs;
+async function resolveYomiignore(rootDir: string): Promise<{ rel: string; abs: string }> {
+  return resolveSafe(rootDir, YOMIIGNORE_FILENAME);
 }
 
 function describeParsed(text: string): YomiignoreInvalidLine[] {
@@ -976,7 +1017,7 @@ async function handleYomiignoreWrite(
   rootDir: string,
   req: Request,
   saveMark: SaveMark,
-  reloadExcludes: () => Promise<InvalidYomiignoreLine[]>,
+  reloadExcludes: () => Promise<YomiignoreState>,
 ): Promise<Response> {
   const lengthHeader = req.headers.get("content-length");
   if (lengthHeader && Number(lengthHeader) > MAX_YOMIIGNORE_BYTES) {
@@ -1012,18 +1053,19 @@ async function handleYomiignoreWrite(
   // ここで `UnsafePathError` になり、呼び出し側が 400 に変える。**素の `join` に書くと
   // symlink を破壊してルート直下に実ファイルを作る**ので、「拒否した」ように見えて
   // 実際には利用者のリンクを消している、という別の壊れ方をする
-  const abs = await resolveYomiignorePath(rootDir);
+  const safe = await resolveYomiignore(rootDir);
 
   const buf = Buffer.from(text, "utf-8");
   // **自己保存マークを立てる。** `.yomiignore` は `text-ext.ts` に載っていてツリーから
   // 読めるので、これが無いと保存のたびに watcher が「他人の変更」として通知を撒く
-  // (Issue #120 と同じ理由。パスはルート相対なのでファイル名そのもの)
+  // (Issue #120 と同じ理由)。**`safe.rel` を使う** —— watcher が emit するのは
+  // **解決後の実体の名前**なので、リテラルで立てると symlink 経由で噛み合わない
   const newSha = sha256(buf);
-  saveMark.set(YOMIIGNORE_FILENAME, newSha);
+  saveMark.set(safe.rel, newSha);
   try {
-    await writeFileAtomic(abs, buf);
+    await writeFileAtomic(safe.abs, buf);
   } catch (err) {
-    saveMark.clear(YOMIIGNORE_FILENAME, newSha);
+    saveMark.clear(safe.rel, newSha);
     // 生のメッセージを返さない (Issue #99。一時ファイルの絶対パスと pid が載る)
     console.error(`${YOMIIGNORE_FILENAME} の保存に失敗しました:`, {
       error: err instanceof Error ? err.message : String(err),
@@ -1034,10 +1076,29 @@ async function handleYomiignoreWrite(
     );
   }
 
-  // **読み直しはディスクから行う** (いま書いた文字列を使い回さない)。書けた内容が
-  // 実際に読み直せることまで含めて「反映できた」なので、ここで経路を分けない
-  await reloadExcludes();
-  return Response.json({ text, invalid: describeParsed(text) } satisfies YomiignoreState);
+  // **応答は読み直した内容から組む** (Issue #164)。リクエスト本文を echo すると、
+  // 並行保存や外部エディタの割り込みがあったときに**画面が自分の書いた内容を
+  // 「保存された現在値」として表示し続ける**。`reloadExcludes` が読み直すので、
+  // その結果をそのまま返せば経路が 1 本になる
+  try {
+    return Response.json(await reloadExcludes());
+  } catch (err) {
+    // **ルート外 symlink は呼び出し側が 400 にする**（`/api/file` と揃えるため）
+    if (err instanceof UnsafePathError) throw err;
+    // **「書けたが反映できなかった」を `write_failed` と混ぜない。** 書けているのに
+    // 「保存に失敗」と言うと、利用者は同じ操作を繰り返すことになる。**除外は
+    // 差し替えていない**（fail-closed）ので、いま効いているのは 1 つ前の集合
+    console.error(`${YOMIIGNORE_FILENAME} の読み直しに失敗しました:`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json(
+      {
+        error: `${YOMIIGNORE_FILENAME} は保存しましたが、読み直せなかったため除外を差し替えていません`,
+        code: "reload_failed",
+      },
+      { status: 500 },
+    );
+  }
 }
 
 interface FileCreateBody {

@@ -27,6 +27,7 @@ export const ERROR_CODE_KEYS = {
   // **`write_failed` は Issue #101 で code を足したのに、この対応表へ入れ忘れていた** ——
   // 対応が無いと `errorText` がサーバの文言へフォールバックし、翻訳が効かない
   write_failed: "error.write_failed",
+  reload_failed: "error.reload_failed",
   read_failed: "error.read_failed",
   asset_failed: "error.asset_failed",
   zip_failed: "error.zip_failed",
@@ -208,6 +209,7 @@ const MESSAGES = {
     "error.parent_missing": "親ディレクトリが存在しません",
     "error.create_failed": "ファイルの作成に失敗しました",
     "error.write_failed": "ファイルの保存に失敗しました",
+    "error.reload_failed": "保存はできましたが、読み直せなかったため除外を差し替えていません",
     "error.read_failed": "ファイルの読み取りに失敗しました",
     "error.asset_failed": "ファイルの読み取りに失敗しました",
     "error.zip_failed": "zip の作成に失敗しました",
@@ -385,6 +387,8 @@ const MESSAGES = {
     "error.parent_missing": "Parent directory does not exist",
     "error.create_failed": "Failed to create the file",
     "error.write_failed": "Failed to save the file",
+    "error.reload_failed":
+      "Saved, but the excludes were not swapped because the file could not be read back",
     "error.read_failed": "Failed to read the file",
     "error.asset_failed": "Failed to read the file",
     "error.zip_failed": "Failed to create the zip",

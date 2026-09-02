@@ -16,7 +16,15 @@ import { treeItem } from "./helpers.ts";
  * （`user-flows.e2e.ts` と同じ流儀。本文の末尾に置くと、途中で落ちたとき後続まで巻き添え）。
  */
 
-/** 除外設定を API 経由で書き戻す（パネルを開かずに済ませる後始末用）。 */
+/**
+ * 除外設定を API 経由で空へ戻す（パネルを開かずに済ませる後始末用）。
+ *
+ * **fixture には空の `.yomiignore` を置いてある。** `.yomiignore` は `text-ext.ts` に
+ * 載っていてツリーに出るので、ここで新規作成する形にすると**後続テストのツリーに
+ * 突然現れる**（`workers: 1` で fixture を共有するため）。いま当たらないのは
+ * このファイルが実行順で最後だからで、テストを 1 本足した瞬間に壊れる。
+ * 「あるのが既定」に固定して、後始末が本当に元の状態へ戻るようにしている。
+ */
 async function resetYomiignore(page: import("@playwright/test").Page) {
   await page.evaluate(async () => {
     const res = await fetch("/api/yomiignore", {
