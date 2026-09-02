@@ -20,10 +20,11 @@ defaults:
   run:
     shell: bash --noprofile --norc -eo pipefail {0}
 
-# 同じブランチへの push が連続したとき、走行中のジョブはキャンセル (PR は最新のみ)
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# **concurrency は job 単位に置く。** workflow レベルに置くと、**run 全体が 1 つのロックを取る**ので、
+# `edited`（PR 本文の編集）で走った run が**走行中の push run を丸ごと打ち切る**。しかも `edited` の run は
+# 下の `if` で test / e2e を skip するので、**実テストが 1 度も走っていないのに「成功した run」が最新になる**
+# （実測: run 33605377300 が push の 23 秒後に cancel され、代わりに test/e2e を skip した run が success で残った）。
+# job 単位なら **skip された job はロックを取らない**ので、証跡検査だけが打ち切り合いをする。
 
 permissions:
   contents: read
@@ -34,6 +35,10 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     if: github.event.action != 'edited'
+    # **ジョブごとに別のロック。** 本文の編集で走った run に打ち切られないようにする
+    concurrency:
+      group: ci-test-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -93,6 +98,9 @@ jobs:
   e2e:
     name: E2E (chromium)
     if: github.event.action != 'edited'
+    concurrency:
+      group: ci-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # ブラウザバイナリの download や bun install が詰まったときに 6 時間走らせない
     timeout-minutes: 15
@@ -172,6 +180,10 @@ jobs:
   evidence:
     name: PR verification evidence
     if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+    # ここだけは本文を編集するたびに打ち切り合ってよい（判定材料が本文そのものなので、最新だけが要る）
+    concurrency:
+      group: ci-evidence-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
