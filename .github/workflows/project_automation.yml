@@ -1,0 +1,86 @@
+name: project_automation
+# P0〜P9 ラベル（label = source of truth）→ GitHub Project(V2) の Priority フィールドを従属更新する。
+# bootstrap が 38 / ef-tech を埋めて配置する。
+# 前提: PAT を repo secret PROJECT_TOKEN に登録すること（既定の GITHUB_TOKEN では Project 書き込み不可）。
+#   スコープ: classic PAT は **repo + project**（下で Issue を REST 取得するため private repo では repo scope も必須。
+#   project だけだと private repo で Issue 取得に失敗し Priority 同期が一度も動かない）。
+#   fine-grained PAT なら Issues:read + Projects:write + 対象 repository access。
+on:
+  issues:
+    types: [opened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+# Issue 単位で直列化（短時間の label 連続変更で古いイベントが後から Project 値を巻き戻すのを防ぐ）
+concurrency:
+  group: priority-sync-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  sync-priority:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Project Priority from P0-P9 label
+        uses: actions/github-script@v7
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: "38"
+          PROJECT_OWNER: "ef-tech"
+        with:
+          github-token: ${{ env.PROJECT_TOKEN }}
+          script: |
+            const owner = process.env.PROJECT_OWNER;
+            const number = parseInt(process.env.PROJECT_NUMBER, 10);
+            const issue = context.payload.issue;
+            if (!issue) return;
+
+            // 競合対策: payload の古い label ではなく、実行時に API から最新の label を再取得する。
+            const cur = await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number });
+            // Priority ラベルを全部集める。契約は P0/P1/P2/P9 の4種のみ（許可リストで判定。P3〜P8 は採用しない）。
+            // ALLOWED は優先度降順（P0>P1>P2>P9）。複数付与時も API 返却順に依存せず ALLOWED 順で最優先を決定的に選ぶ
+            // （ラベルの返却順は優先度の契約ではないため、prios[0] だと P0/P2 併存時に P2 を採用し得る）。
+            const ALLOWED = ['P0', 'P1', 'P2', 'P9'];
+            const prios = (cur.data.labels || []).map(l => (typeof l === 'string' ? l : l.name)).filter(n => ALLOWED.includes(n));
+            const prio = ALLOWED.find(p => prios.includes(p));   // 最優先（prios が空なら undefined）
+            if (prios.length > 1) core.warning(`複数の Priority ラベル ${prios.join(',')} が付与されています。単一にしてください（最優先 ${prio} を採用）`);
+
+            // user/org 両対応: repositoryOwner(login) は User/Organization どちらにも解決する interface。
+            // 旧実装は user と organization を同時問い合わせしていたが、owner が個人なら organization、組織なら
+            // user が必ず NOT_FOUND となり github.graphql() が reject して同期全体が止まる。ProjectV2Owner
+            // 経由の単一問い合わせにして、owner 種別に依らず解決させる。
+            const q = `query($owner:String!, $number:Int!){
+              repositoryOwner(login:$owner){
+                ... on ProjectV2Owner { projectV2(number:$number){ id field(name:"Priority"){ ... on ProjectV2SingleSelectField { id options { id name } } } } }
+              }
+            }`;
+            const r = await github.graphql(q, { owner, number });
+            const proj = r.repositoryOwner && r.repositoryOwner.projectV2;
+            if (!proj) { core.setFailed('Project が見つかりません'); return; }
+            // Priority フィールド（Single Select）の存在を検証。削除済み/型不一致だと field が null になり、
+            // 以降の proj.field.id 参照が TypeError で異常終了するため、ここで明示的に失敗させる（bootstrap で再作成を促す）。
+            if (!proj.field || !proj.field.id) { core.setFailed('Project に Single Select フィールド "Priority" がありません（削除された/型が異なる）。bootstrap で再作成してください'); return; }
+
+            // issue を project に追加（既存なら既存 item を返す）
+            const add = await github.graphql(
+              `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p, contentId:$c}){ item { id } } }`,
+              { p: proj.id, c: issue.node_id });
+            const itemId = add.addProjectV2ItemById.item.id;
+
+            if (prios.length === 0) {
+              // Priority ラベルが無い → フィールドをクリア（label = source of truth。古い値を残さない）
+              await github.graphql(
+                `mutation($p:ID!,$i:ID!,$f:ID!){ clearProjectV2ItemFieldValue(input:{projectId:$p, itemId:$i, fieldId:$f}){ projectV2Item { id } } }`,
+                { p: proj.id, i: itemId, f: proj.field.id });
+              core.info(`Issue #${issue.number}: Priority ラベル無し → Project の Priority をクリア`);
+              return;
+            }
+
+            const opt = (proj.field.options || []).find(o => o.name === prio);
+            // option 欠落で warning のみだとラベルは付いたのに Project 値が古いまま残り、label=正本の契約が崩れる。
+            // field 欠落と同様に明示失敗させ、bootstrap の option 補完を促す。
+            if (!opt) { core.setFailed(`Project の Priority に option "${prio}" がありません。bootstrap で option を補完してください`); return; }
+            await github.graphql(
+              `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p, itemId:$i, fieldId:$f, value:{ singleSelectOptionId:$o }}){ projectV2Item { id } } }`,
+              { p: proj.id, i: itemId, f: proj.field.id, o: opt.id });
+            core.info(`Issue #${issue.number}: Priority=${prio} を Project #${number} に同期`);
