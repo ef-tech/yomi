@@ -225,9 +225,11 @@ test("新規 Markdown を作るとツリーに現れ、そのまま編集モー�
   // ルート直下にファイルが 1 つ増えるだけで、ディレクトリ優先の並びは崩れない
   // （`.tree-item` にはディレクトリのボタンも含まれるので、先頭は `docs`）
   await expect(page.locator("#tree .tree-item").first()).toHaveAttribute("title", "docs");
+  // **`docs/` の中で名前順に最初のファイル。** fixture を足すとここは変わる
+  // （Issue #165 で `docs/code.md` を足したので `docs/guide.md` から移った）
   await expect(page.locator("#tree .tree-item.is-file").first()).toHaveAttribute(
     "title",
-    "docs/guide.md",
+    "docs/code.md",
   );
 });
 

@@ -447,5 +447,6 @@ export function createStatus(ctx) {
  *   ws: ReturnType<typeof import("./app-websocket.js").createWebSocketClient>,
  *   quickOpen: ReturnType<typeof import("./app-quick-open.js").createQuickOpen>,
  *   images: ReturnType<typeof import("./app-images.js").createImageDownload>,
+ *   codeCopy: ReturnType<typeof import("./app-code-copy.js").createCodeCopy>,
  * }} Ctx
  */

@@ -32,7 +32,14 @@ import {
   seedNavCounter,
 } from "./navigation.js";
 
-const COPY_FEEDBACK_MS = 1500;
+/**
+ * コピー成功のフィードバックを出しておく時間 (ms)。
+ *
+ * **`app-code-copy.js` と共有する** (Issue #164 → #165)。パスのコピー (#24) と
+ * コードブロックのコピーで見せ方が揃っていないと、同じ「押した」操作なのに
+ * 手応えの長さだけ違う、という説明のつかない差になる。
+ */
+export const COPY_FEEDBACK_MS = 1500;
 
 /**
  * ルート直下の README として扱うファイル名 (Issue #150)。

@@ -89,6 +89,10 @@ const MESSAGES = {
     "tree.newFileInput.placeholder": "新規ファイル名 (.md)",
     "tree.newFileInput.aria": "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)",
     // content header
+    // コードブロックのコピー (Issue #165)
+    "code.copy.aria": "このコードブロックをコピー",
+    "code.copy.title": "コードブロックをコピー",
+    "code.copied": "コードブロックをコピーしました",
     "path.copy.aria": "表示中のファイルパス。タップでコピー",
     "path.copy.title": "タップでパスをコピー",
     "dirty.indicator": "● 未保存",
@@ -252,6 +256,10 @@ const MESSAGES = {
     "tree.newFileInput.placeholder": "New file name (.md)",
     "tree.newFileInput.aria": "New Markdown file name (Enter to create, Esc to cancel)",
     // content header
+    // Code block copy (Issue #165)
+    "code.copy.aria": "Copy this code block",
+    "code.copy.title": "Copy code block",
+    "code.copied": "Code block copied",
     "path.copy.aria": "Current file path. Tap to copy.",
     "path.copy.title": "Tap to copy path",
     "dirty.indicator": "● Unsaved",

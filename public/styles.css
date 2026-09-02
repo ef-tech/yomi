@@ -1886,3 +1886,65 @@ body {
     padding: 12px 14px;
   }
 }
+
+/* ===== コードブロックのコピーボタン (Issue #165) ===== */
+
+/* **ボタンは `<pre>` の直下・`<code>` の外**（中に入れるとラベルがコピー内容に混ざる）。
+   位置決めのために親を relative にするので、ボタンが付いた pre だけに class を足す。 */
+.preview pre.has-code-copy {
+  position: relative;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  /* **スマホではホバーが無いので常に出す。** 下のメディアクエリで PC だけ
+     「ホバー・フォーカスで出す」に切り替える（#25 / #30 のレスポンシブ方針） */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* タップ領域を 44x44 相当まで確保する（見た目は小さく、当たりは大きく） */
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  opacity: 0.9;
+}
+
+.code-copy-btn:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.code-copy-btn:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+/* パスのコピー (#24) と同じ見せ方に揃える */
+.code-copy-btn.is-copied {
+  color: #1a7f37;
+  background: #1a7f3711;
+  border-color: #1a7f3733;
+}
+
+/* **ホバーできる環境でだけ隠す。** `hover: hover` を見るので、タッチ端末では
+   上の既定（常時表示）が残る。フォーカス時は必ず出す（キーボード操作で見失わせない） */
+@media (hover: hover) and (pointer: fine) {
+  .code-copy-btn {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  pre.has-code-copy:hover .code-copy-btn,
+  .code-copy-btn:focus-visible {
+    opacity: 1;
+  }
+}

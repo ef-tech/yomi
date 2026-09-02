@@ -149,6 +149,9 @@ export function createPreview(ctx) {
     highlightTextView(code);
     pre.appendChild(code);
     els.preview.replaceChildren(pre);
+    // **テキスト表示にもコピーボタンを出す (Issue #165)。** DOM の形は Markdown 内の
+    // コードブロックと同じ `pre > code` なので、同じ扱いにする
+    ctx.codeCopy.decorate();
     els.preview.classList.add("is-text");
     // **表示モードは preview に固定する。** split / md は「ソースとプレビュー」を
     // 出し分けるものなので、raw しか無いテキストでは同じ中身が 2 つ並ぶだけになる。
@@ -187,6 +190,9 @@ export function createPreview(ctx) {
 
     els.preview.classList.remove("is-text");
     els.preview.innerHTML = state.currentHtml;
+    // **サニタイズ後の DOM に後付けする (Issue #165)。** HTML 文字列へ混ぜると
+    // サニタイザの許可設定を広げることになる
+    ctx.codeCopy.decorate();
     // テキストから戻ってきたときに、利用者が選んでいたモードへ復帰する
     els.contentBody.dataset.mode = state.viewMode;
     setViewToggleEnabled(true);
