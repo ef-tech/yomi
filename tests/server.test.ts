@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { sha256 } from "../src/save-mark.ts";
 import {
+  countDeletable,
   createServer,
   MAX_ASSET_BYTES,
   MAX_TEXT_BYTES,
@@ -2588,6 +2589,20 @@ describe("削除 (Issue #171)", () => {
     };
     // `node_modules` は除外されているのにツリーに出ない `dep.js` まで数える
     expect([json.markdown, json.other, json.dirs]).toEqual([1, 1, 1]);
+  });
+
+  test("走査上限を超えたら truncated を立てる", async () => {
+    await mkdir(join(root, "many"), { recursive: true });
+    for (const name of ["a.md", "b.md", "c.md", "d.md"]) {
+      await writeFile(join(root, "many", name), name);
+    }
+    // 上限は**テストのためだけに開けてある**。20,000 件を実際に作らずに経路を確かめる
+    const limited = await countDeletable(join(root, "many"), 2);
+    expect(limited.truncated).toBe(true);
+    expect(limited.markdown).toBe(2);
+
+    const full = await countDeletable(join(root, "many"));
+    expect(full).toEqual({ markdown: 4, other: 0, dirs: 0, truncated: false });
   });
 
   test("ファイルを /api/dir/delete に渡すと not_a_dir (GET / POST とも)", async () => {

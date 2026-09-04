@@ -5,7 +5,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectArticleImages } from "./article-images.ts";
 import { renderMarkdown } from "./renderer.ts";
-import { isMarkdownPath, resolveSafe, UnsafePathError } from "./safepath.ts";
+import { isMarkdownPath, isOutsideRoot, resolveSafe, UnsafePathError } from "./safepath.ts";
 import { SaveMark, sha256 } from "./save-mark.ts";
 import { scanViewableTree } from "./scanner.ts";
 import { assetContentType, assetDisposition, isAssetExtension } from "./util/asset-ext.ts";
@@ -1313,7 +1313,11 @@ async function readDeletePath(req: Request): Promise<{ path: string } | { res: R
 }
 
 interface DeleteTarget {
-  /** クライアントへ返す相対パス (`resolveSafe` の `rel`)。 */
+  /**
+   * クライアントへ返す相対パス。**要求の綴り**を正規化したもので、`resolveSafe` の
+   * `rel` ではない（あちらは leaf も realpath 済みなので、symlink だとリンク先の名前に
+   * なる）。除外の判定には `resolveSafe` の `rel` を使ってある。
+   */
   rel: string;
   /** 実際に消す絶対パス。**leaf を realpath しない** (下記)。 */
   abs: string;
@@ -1386,6 +1390,18 @@ async function resolveDeleteTarget(
   } catch {
     // 親が無い = 対象も無い。`lstat` を待たずにここで 404 にする
     return { ok: false, res: deleteNotFoundResponse(requested) };
+  }
+  // **親がルート内かをここでも見る。** `resolveSafe` が同じ判定を済ませているので
+  // 通常は素通りするが、**消すのはこの後に組み立てるパス**なので、依存を残さず
+  // 自分で確かめる（`resolveSafe` の実装が変わっても、削除がルート外へ出ない）。
+  if (isOutsideRoot(relative(rootAbs, parentReal))) {
+    return {
+      ok: false,
+      res: Response.json(
+        { error: "ルートディレクトリの外を参照しています", code: "unsafe_path" },
+        { status: 400 },
+      ),
+    };
   }
   return {
     ok: true,
@@ -1485,8 +1501,14 @@ interface DeleteCount {
  * **除外設定 (`.yomiignore` / `DEFAULT_EXCLUDES`) は適用しない。** ここで数えるのは
  * 「消えるもの」であって「ツリーに出るもの」ではない —— 除外されたファイルも
  * ディレクトリごと消えるので、数から落とすと**確認ダイアログが実態より少なく見える**。
+ *
+ * `limit` は**テストのためだけに開けてある**（既定の 20,000 件を実際に作らずに
+ * `truncated` の経路を確かめるため）。本番の呼び出しは既定値のまま使う。
  */
-async function countDeletable(absDir: string): Promise<DeleteCount> {
+export async function countDeletable(
+  absDir: string,
+  limit: number = DELETE_PREVIEW_MAX_ENTRIES,
+): Promise<DeleteCount> {
   const count: DeleteCount = { markdown: 0, other: 0, dirs: 0, truncated: false };
   const stack: string[] = [absDir];
   let seen = 0;
@@ -1502,7 +1524,7 @@ async function countDeletable(absDir: string): Promise<DeleteCount> {
       continue;
     }
     for (const entry of entries) {
-      if (++seen > DELETE_PREVIEW_MAX_ENTRIES) {
+      if (++seen > limit) {
         count.truncated = true;
         return count;
       }
