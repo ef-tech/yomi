@@ -184,6 +184,20 @@ export function renderTreeInto(
     ul.style.display = open ? "" : "none";
   };
 
+  /** 削除ボタン (Issue #171)。これを落とすと要素数が実物と食い違う */
+  const deleteButton = (node: TreeNode): HTMLElement => {
+    const delBtn = document.createElement("button");
+    delBtn.setAttribute("type", "button");
+    delBtn.className = `tree-del-btn${node.type === "dir" ? " is-in-dir" : ""}`;
+    delBtn.textContent = "×";
+    delBtn.dataset.delPath = node.path;
+    delBtn.dataset.delName = node.name;
+    delBtn.title = `${node.path} を削除`;
+    delBtn.setAttribute("aria-label", `${node.name} を削除`);
+    delBtn.addEventListener("click", NOOP);
+    return delBtn;
+  };
+
   const renderNode = (node: TreeNode): HTMLElement => {
     const li = document.createElement("li");
     li.dataset.nodeKey = `${node.type}:${node.path}`;
@@ -223,10 +237,12 @@ export function renderTreeInto(
         addBtn.addEventListener("click", NOOP);
         li.insertBefore(addBtn, ul);
       }
+      li.insertBefore(deleteButton(node), ul);
     } else {
       fileButtons.set(node.path, button);
       rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul: null });
       button.addEventListener("click", NOOP);
+      li.appendChild(deleteButton(node));
     }
     return li;
   };

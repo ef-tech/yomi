@@ -203,6 +203,12 @@ function reapplyDynamicI18n() {
       t("tree.newFileInDir.aria", { name: btn.dataset.dirName ?? "" }),
     );
   }
+  // ツリーの削除ボタンのツールチップ (Issue #171)
+  for (const el of els.tree.querySelectorAll(".tree-del-btn")) {
+    const btn = /** @type {HTMLElement} */ (el);
+    btn.title = t("tree.delete.title", { path: btn.dataset.delPath ?? "" });
+    btn.setAttribute("aria-label", t("tree.delete.aria", { name: btn.dataset.delName ?? "" }));
+  }
   // 開いているインライン新規ファイル入力欄
   if (state.newFileInput) {
     state.newFileInput.input.placeholder = t("tree.newFileInput.placeholder");

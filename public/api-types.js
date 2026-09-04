@@ -78,6 +78,34 @@
  */
 
 /**
+ * `POST /api/file/delete` / `POST /api/dir/delete` の 200 応答 (Issue #171)。
+ *
+ * `symlink` はディレクトリ側だけが返す —— 対象が symlink だったので**リンク 1 個だけ**を
+ * 消した、という意味。ファイル側は種類で分岐しないので載せていない。
+ *
+ * @typedef {{
+ *   path: string,
+ *   symlink?: boolean,
+ * }} DeleteResponse
+ */
+
+/**
+ * `GET /api/dir/delete` の 200 応答 —— **消さずに**内訳だけを返すプレビュー (Issue #171)。
+ *
+ * 数は**除外設定を適用していない**（消えるものを数えるので、`.yomiignore` で隠れている
+ * ファイルも入る）。`truncated` は走査上限に当たって数え切れなかったことを表す。
+ *
+ * @typedef {{
+ *   path: string,
+ *   symlink: boolean,
+ *   markdown: number,
+ *   other: number,
+ *   dirs: number,
+ *   truncated: boolean,
+ * }} DirDeletePreview
+ */
+
+/**
  * `POST /api/file` の 409 (競合) 応答。
  *
  * **`raw` は null になりうる。** 保存しようとした間にサーバ側でファイルが消えていると、

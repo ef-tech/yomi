@@ -122,6 +122,10 @@ export function createTree(ctx) {
         });
         li.insertBefore(addBtn, ul);
       }
+      // Issue #171: 削除は**中を読み込んでいないディレクトリにも出す**。「＋」を出さない
+      // 理由（深さ超過の場所に作るとツリーに現れない）は削除には当てはまらず、消える件数は
+      // サーバが実際に数えて返す (`GET /api/dir/delete`)
+      li.insertBefore(createDeleteButton(node), ul);
     } else {
       state.fileButtons.set(node.path, button);
       rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul: null });
@@ -130,6 +134,7 @@ export function createTree(ctx) {
           ctx.setStatus("error", errorText(err));
         });
       });
+      li.appendChild(createDeleteButton(node)); // Issue #171
     }
 
     return li;
@@ -562,6 +567,110 @@ export function createTree(ctx) {
     }
   }
 
+  /* ===== 削除 (Issue #171) ===== */
+
+  /**
+   * ツリーの各行に出す削除ボタン。ディレクトリには「＋」が並ぶので、CSS で左へずらす。
+   *
+   * @param {TreeNode} node
+   * @returns {HTMLButtonElement}
+   */
+  function createDeleteButton(node) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `tree-del-btn${node.type === "dir" ? " is-in-dir" : ""}`;
+    btn.textContent = "×";
+    // 言語切替時に再翻訳できるよう path / name を data 属性で保持 (reapplyDynamicI18n)
+    btn.dataset.delPath = node.path;
+    btn.dataset.delName = node.name;
+    btn.title = t("tree.delete.title", { path: node.path });
+    btn.setAttribute("aria-label", t("tree.delete.aria", { name: node.name }));
+    btn.addEventListener("click", (e) => {
+      // ファイルを開く / ディレクトリを開閉する側へ流さない
+      e.stopPropagation();
+      requestDelete(node.type, node.path).catch((err) => {
+        ctx.setStatus("error", t("status.deleteFailed", { path: node.path, msg: errorText(err) }));
+      });
+    });
+    return btn;
+  }
+
+  /**
+   * 確認を取ってから削除する。
+   *
+   * **ディレクトリは先にサーバへ内訳を聞く** (`GET /api/dir/delete`) —— 手元のツリーは
+   * 除外設定と `--depth` の適用後なので、**実際に消える量とは一致しない**。数えた結果を
+   * 確認ダイアログに出してから消す。
+   *
+   * @param {"file" | "dir"} type
+   * @param {string} path
+   * @returns {Promise<void>}
+   */
+  async function requestDelete(type, path) {
+    if (!(await confirmDelete(type, path))) return;
+
+    /** @type {import("./api-types.js").DeleteResponse} */
+    const deleted = await fetchJson(type === "dir" ? "/api/dir/delete" : "/api/file/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    await afterDelete(deleted.path);
+  }
+
+  /**
+   * 何が消えるかを見せて確認を取る。**押されるまで何も消さない**。
+   *
+   * @param {"file" | "dir"} type
+   * @param {string} path
+   * @returns {Promise<boolean>}
+   */
+  async function confirmDelete(type, path) {
+    if (type !== "dir") {
+      return window.confirm(t("confirm.deleteFile", { path }));
+    }
+    /** @type {import("./api-types.js").DirDeletePreview} */
+    const preview = await fetchJson(`/api/dir/delete?path=${encodeURIComponent(path)}`);
+    // symlink は配下を持たない (消えるのはリンク 1 個)
+    if (preview.symlink) return window.confirm(t("confirm.deleteSymlink", { path }));
+    const counted = preview.markdown + preview.other + preview.dirs;
+    return window.confirm(
+      t("confirm.deleteDir", {
+        path,
+        markdown: preview.markdown,
+        other: preview.other,
+        dirs: preview.dirs,
+        more: preview.truncated ? t("confirm.deleteMore", { limit: counted }) : "",
+      }),
+    );
+  }
+
+  /**
+   * 削除の後始末。ツリーを取り直し、**消したものを開いていたら**それを伝える。
+   *
+   * watcher の `unlink` でもツリーは更新されるが、debounce のぶん遅れる。新規作成
+   * (`submitNewFile`) と同じく、自分の操作の結果は待たずに自分で反映する。
+   *
+   * @param {string} path
+   * @returns {Promise<void>}
+   */
+  async function afterDelete(path) {
+    const { root, gen } = await fetchTree();
+    renderTree(root, gen);
+
+    // **配下を開いていたときも当てはまる** (ディレクトリごと消したケース)
+    const current = state.currentPath;
+    const hitCurrent = current !== null && (current === path || current.startsWith(`${path}/`));
+    if (!hitCurrent) {
+      ctx.setStatus("ok", t("status.deleted", { path }));
+      return;
+    }
+    // **編集モードは黙って抜ける。** ファイルはもう無いので、そのまま保存すると
+    // `writeFileAtomic` が作り直す（消したはずのものが戻る）
+    if (state.editing) ctx.editor.exitEditMode();
+    ctx.setStatus("error", t("status.deletedCurrent", { path }));
+  }
+
   /* ===== 選択状態 ===== */
 
   /**
@@ -599,6 +708,7 @@ export function createTree(ctx) {
     updateTreeToolbarState,
     openNewFileInput,
     closeNewFileInput,
+    requestDelete,
     highlightSelected,
     expandAncestors,
     saveOpenDirs,

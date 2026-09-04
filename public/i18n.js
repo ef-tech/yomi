@@ -24,6 +24,10 @@ export const ERROR_CODE_KEYS = {
   already_exists: "error.already_exists",
   parent_missing: "error.parent_missing",
   create_failed: "error.create_failed",
+  // Issue #171: 削除の対象が期待した種類でなかった / 削除そのものに失敗した
+  not_a_file: "error.not_a_file",
+  not_a_dir: "error.not_a_dir",
+  delete_failed: "error.delete_failed",
   // **`write_failed` は Issue #101 で code を足したのに、この対応表へ入れ忘れていた** ——
   // 対応が無いと `errorText` がサーバの文言へフォールバックし、翻訳が効かない
   write_failed: "error.write_failed",
@@ -104,6 +108,8 @@ const MESSAGES = {
     "tree.expandAll": "全て開く",
     "tree.collapseAll": "全て閉じる",
     "tree.loading": "読み込み中…",
+    "tree.delete.title": "{path} を削除",
+    "tree.delete.aria": "{name} を削除",
     "tree.newFileInput.placeholder": "新規ファイル名 (.md)",
     "tree.newFileInput.aria": "新規 Markdown ファイル名 (Enter で作成、Esc でキャンセル)",
     // content header
@@ -195,12 +201,22 @@ const MESSAGES = {
     "status.fileUpdatedElsewhere": "ファイルが他で更新されています",
     "status.reloaded": "{path} を再読込",
     "status.fileDeleted": "ファイルが削除されました: {path}",
+    "status.deleted": "{path} を削除しました",
+    "status.deletedCurrent": "{path} を削除しました (表示していたものです)",
+    "status.deleteFailed": "{path} の削除に失敗しました: {msg}",
     "status.treeFetchFailed": "ツリー再取得失敗: {msg}",
     "task.on": "ON",
     "task.off": "OFF",
     // 確認ダイアログ
     "confirm.discardEditEnd": "未保存の変更を破棄して編集を終了しますか?",
     "confirm.unsavedContinue": "未保存の変更があります。破棄して続行しますか?",
+    // Issue #171: 削除は取り消せないので、**何が消えるか**を数で示してから確認する
+    "confirm.deleteFile": "{path} を削除しますか?\n\nこの操作は取り消せません。",
+    "confirm.deleteDir":
+      "{path} を配下ごと削除しますか?\n\nMarkdown: {markdown} 件\nその他のファイル: {other} 件\nディレクトリ: {dirs} 件{more}\n\n除外設定で画面に出ていないファイルも一緒に消えます。この操作は取り消せません。",
+    "confirm.deleteMore": "\n({limit} 件まで数えた時点の値です。実際はこれより多くあります)",
+    "confirm.deleteSymlink":
+      "{path} はシンボリックリンクです。\n\nリンクだけを削除します (リンク先は消えません)。この操作は取り消せません。",
     // API エラー (サーバ code → 翻訳)
     "error.invalid_json": "JSON の解析に失敗しました",
     "error.path_required": "path が必要です",
@@ -214,6 +230,9 @@ const MESSAGES = {
     "error.already_exists": "既に存在します",
     "error.parent_missing": "親ディレクトリが存在しません",
     "error.create_failed": "ファイルの作成に失敗しました",
+    "error.not_a_file": "ディレクトリです (ファイルとして削除できません)",
+    "error.not_a_dir": "ディレクトリではありません",
+    "error.delete_failed": "削除に失敗しました",
     "error.write_failed": "ファイルの保存に失敗しました",
     "error.reload_failed": "保存はできましたが、読み直せなかったため除外を差し替えていません",
     "error.read_failed": "ファイルの読み取りに失敗しました",
@@ -289,6 +308,8 @@ const MESSAGES = {
     "tree.expandAll": "Expand all",
     "tree.collapseAll": "Collapse all",
     "tree.loading": "Loading…",
+    "tree.delete.title": "Delete {path}",
+    "tree.delete.aria": "Delete {name}",
     "tree.newFileInput.placeholder": "New file name (.md)",
     "tree.newFileInput.aria": "New Markdown file name (Enter to create, Esc to cancel)",
     // content header
@@ -378,12 +399,21 @@ const MESSAGES = {
     "status.fileUpdatedElsewhere": "The file was updated elsewhere",
     "status.reloaded": "Reloaded {path}",
     "status.fileDeleted": "File was deleted: {path}",
+    "status.deleted": "Deleted {path}",
+    "status.deletedCurrent": "Deleted {path} (it was the one you had open)",
+    "status.deleteFailed": "Failed to delete {path}: {msg}",
     "status.treeFetchFailed": "Failed to refetch tree: {msg}",
     "task.on": "ON",
     "task.off": "OFF",
     // confirm dialogs
     "confirm.discardEditEnd": "Discard unsaved changes and end editing?",
     "confirm.unsavedContinue": "You have unsaved changes. Discard and continue?",
+    "confirm.deleteFile": "Delete {path}?\n\nThis cannot be undone.",
+    "confirm.deleteDir":
+      "Delete {path} and everything inside it?\n\nMarkdown: {markdown}\nOther files: {other}\nDirectories: {dirs}{more}\n\nFiles hidden by the excludes are deleted too. This cannot be undone.",
+    "confirm.deleteMore": "\n(counted up to {limit}; there are more)",
+    "confirm.deleteSymlink":
+      "{path} is a symbolic link.\n\nOnly the link is deleted (its target is kept). This cannot be undone.",
     // API errors (server code -> translation)
     "error.invalid_json": "Failed to parse JSON",
     "error.path_required": "path is required",
@@ -397,6 +427,9 @@ const MESSAGES = {
     "error.already_exists": "Already exists",
     "error.parent_missing": "Parent directory does not exist",
     "error.create_failed": "Failed to create the file",
+    "error.not_a_file": "This is a directory (cannot be deleted as a file)",
+    "error.not_a_dir": "Not a directory",
+    "error.delete_failed": "Failed to delete",
     "error.write_failed": "Failed to save the file",
     "error.reload_failed":
       "Saved, but the excludes were not swapped because the file could not be read back",
