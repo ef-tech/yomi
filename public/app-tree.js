@@ -452,6 +452,22 @@ export function createTree(ctx) {
     els.treeNewFile.addEventListener("click", () => {
       openNewFileInput("", els.treeNewFile);
     });
+
+    // Issue #171: 削除は**ツリー全体で 1 つのリスナ**に委譲する（行ごとに張ると
+    // 10,000 ノードで初回描画が 1.5 倍になる。{@link createDeleteButton}）。
+    // **`.tree-item` の兄弟なので、行のクリックとは経路が別**（開く / 開閉は起きない）
+    els.tree.addEventListener("click", (e) => {
+      const btn = /** @type {Element | null} */ (e.target)?.closest?.(".tree-del-btn");
+      if (!btn) return;
+      const target = deleteTargetOf(btn);
+      if (!target) return;
+      requestDelete(target.type, target.path).catch((err) => {
+        ctx.setStatus(
+          "error",
+          t("status.deleteFailed", { path: target.path, msg: errorText(err) }),
+        );
+      });
+    });
   }
 
   /* ===== 新規 Markdown ファイル作成 (Issue #6) ===== */
@@ -572,6 +588,12 @@ export function createTree(ctx) {
   /**
    * ツリーの各行に出す削除ボタン。ディレクトリには「＋」が並ぶので、CSS で左へずらす。
    *
+   * **リスナも `data-*` も持たせない。** これは**全ノードに 1 個ずつ**付くので、
+   * ここでの数十バイト・1 リスナが 10,000 ノードぶん積み上がる（実測: 行ごとに
+   * `addEventListener` + `dataset` 2 つを付けた版は、10,000 ノードの DOM 構築が
+   * **218ms → 334ms**。`docs/bench/tree-baseline.md` と同じ測り方）。クリックは
+   * {@link wireTreeToolbar} の 1 つのリスナに委譲し、対象は `li` の `nodeKey` から引く。
+   *
    * @param {TreeNode} node
    * @returns {HTMLButtonElement}
    */
@@ -580,19 +602,26 @@ export function createTree(ctx) {
     btn.type = "button";
     btn.className = `tree-del-btn${node.type === "dir" ? " is-in-dir" : ""}`;
     btn.textContent = "×";
-    // 言語切替時に再翻訳できるよう path / name を data 属性で保持 (reapplyDynamicI18n)
-    btn.dataset.delPath = node.path;
-    btn.dataset.delName = node.name;
     btn.title = t("tree.delete.title", { path: node.path });
     btn.setAttribute("aria-label", t("tree.delete.aria", { name: node.name }));
-    btn.addEventListener("click", (e) => {
-      // ファイルを開く / ディレクトリを開閉する側へ流さない
-      e.stopPropagation();
-      requestDelete(node.type, node.path).catch((err) => {
-        ctx.setStatus("error", t("status.deleteFailed", { path: node.path, msg: errorText(err) }));
-      });
-    });
     return btn;
+  }
+
+  /**
+   * 削除ボタンの `li` から対象を引く。鍵は `${type}:${path}`（`renderNode` が振る）。
+   *
+   * **`data-*` を別に持たない**のは上の理由（全ノードぶん積み上がる）。鍵は差分更新の
+   * ために必ず振られているので、そこから読めば増やさずに済む。
+   *
+   * @param {Element} btn
+   * @returns {{ type: "file" | "dir", path: string } | null}
+   */
+  function deleteTargetOf(btn) {
+    const li = /** @type {HTMLElement | null} */ (btn.closest("li"));
+    const key = li?.dataset.nodeKey;
+    if (!key) return null;
+    const sep = key.indexOf(":");
+    return { type: key.slice(0, sep) === "dir" ? "dir" : "file", path: key.slice(sep + 1) };
   }
 
   /**

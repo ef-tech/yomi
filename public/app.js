@@ -203,11 +203,14 @@ function reapplyDynamicI18n() {
       t("tree.newFileInDir.aria", { name: btn.dataset.dirName ?? "" }),
     );
   }
-  // ツリーの削除ボタンのツールチップ (Issue #171)
+  // ツリーの削除ボタンのツールチップ (Issue #171)。**パスは `li` の `nodeKey` から引く**
+  // —— 全ノードに付くボタンなので、`data-*` を持たせると 10,000 ノードぶん積み上がる
   for (const el of els.tree.querySelectorAll(".tree-del-btn")) {
     const btn = /** @type {HTMLElement} */ (el);
-    btn.title = t("tree.delete.title", { path: btn.dataset.delPath ?? "" });
-    btn.setAttribute("aria-label", t("tree.delete.aria", { name: btn.dataset.delName ?? "" }));
+    const key = /** @type {HTMLElement | null} */ (btn.closest("li"))?.dataset.nodeKey ?? "";
+    const path = key.slice(key.indexOf(":") + 1);
+    btn.title = t("tree.delete.title", { path });
+    btn.setAttribute("aria-label", t("tree.delete.aria", { name: path.split("/").pop() ?? path }));
   }
   // 開いているインライン新規ファイル入力欄
   if (state.newFileInput) {
