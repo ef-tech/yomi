@@ -475,3 +475,187 @@ describe("ツリーの差分更新 (Issue #84)", () => {
     expect(h.treeItem("README.md").classList.contains("is-dir")).toBe(true);
   });
 });
+
+describe("削除 (Issue #171)", () => {
+  /** ツリーの行から削除ボタンを引く */
+  function delBtn(harness: AppHarness, path: string): HTMLElement {
+    const btn = harness.treeItem(path).closest("li")?.querySelector(".tree-del-btn");
+    if (!btn) throw new Error(`削除ボタンが見つかりません: ${path}`);
+    return btn as HTMLElement;
+  }
+
+  /** 削除に成功する応答を返す interceptor（プレビューの内訳も渡せる） */
+  function deleteOk(preview?: Partial<{ markdown: number; other: number; dirs: number }>) {
+    return (url: string, method: string, body: Record<string, unknown> | null) => {
+      if (url.startsWith("/api/dir/delete") && method === "GET") {
+        return {
+          status: 200,
+          body: {
+            path: new URL(url, "http://x").searchParams.get("path"),
+            symlink: false,
+            markdown: preview?.markdown ?? 0,
+            other: preview?.other ?? 0,
+            dirs: preview?.dirs ?? 0,
+            truncated: false,
+          },
+        };
+      }
+      if (url === "/api/dir/delete" || url === "/api/file/delete") {
+        return { status: 200, body: { path: body?.path, symlink: false } };
+      }
+      return undefined;
+    };
+  }
+
+  test("ファイル・ディレクトリの両方に削除ボタンが出る", async () => {
+    h = await boot();
+    expect(delBtn(h, "README.md").classList.contains("is-in-dir")).toBe(false);
+    // ディレクトリは「＋」と並ぶので、重ならないようずらす側のクラスが付く
+    expect(delBtn(h, "docs").classList.contains("is-in-dir")).toBe(true);
+    expect(delBtn(h, "docs").getAttribute("aria-label")).toContain("docs");
+  });
+
+  test("確認して OK ならファイルを削除し、ツリーを取り直す", async () => {
+    h = await boot();
+    h.intercept = deleteOk();
+    h.confirmResult = true;
+    h.tree = {
+      type: "dir",
+      name: "",
+      path: "",
+      children: [{ type: "file", name: "README.md", path: "README.md" }],
+    };
+
+    h.click(delBtn(h, "docs/guide.md"));
+    await h.flush(8);
+
+    expect(h.confirmMessages).toHaveLength(1);
+    expect(h.confirmMessages[0]).toContain("docs/guide.md");
+
+    const del = h.fetchCalls.find((c) => c.url === "/api/file/delete");
+    expect(del?.method).toBe("POST");
+    expect(del?.body).toEqual({ path: "docs/guide.md" });
+    // 削除直後に取り直す（watcher の通知を待たない）
+    expect(h.fetchCalls.filter((c) => c.url.startsWith("/api/tree"))).toHaveLength(2);
+    expect(h.el("status").classList.contains("is-ok")).toBe(true);
+  });
+
+  test("確認をキャンセルしたら何も消さない", async () => {
+    h = await boot();
+    h.intercept = deleteOk();
+    h.confirmResult = false;
+
+    h.click(delBtn(h, "docs/guide.md"));
+    await h.flush(4);
+
+    expect(h.confirmMessages).toHaveLength(1);
+    expect(h.fetchCalls.filter((c) => c.url === "/api/file/delete")).toHaveLength(0);
+    expect(h.fetchCalls.filter((c) => c.url.startsWith("/api/tree"))).toHaveLength(1);
+  });
+
+  test("ディレクトリは先に内訳を数え、その件数を確認に出す", async () => {
+    h = await boot();
+    h.intercept = deleteOk({ markdown: 2, other: 3, dirs: 1 });
+    h.confirmResult = true;
+    h.tree = {
+      type: "dir",
+      name: "",
+      path: "",
+      children: [{ type: "file", name: "README.md", path: "README.md" }],
+    };
+
+    h.click(delBtn(h, "docs"));
+    await h.flush(8);
+
+    // **消す前に GET で数える**（手元のツリーは除外と --depth の適用後で当てにならない）
+    const counted = h.fetchCalls.find((c) => c.url.startsWith("/api/dir/delete?"));
+    expect(counted?.method).toBe("GET");
+    const message = h.confirmMessages[0] ?? "";
+    expect(message).toContain("docs");
+    expect(message).toContain("2");
+    expect(message).toContain("3");
+    // 非 Markdown も消えることが読み取れる文言になっていること
+    expect(message).toContain("その他のファイル");
+
+    const del = h.fetchCalls.find((c) => c.url === "/api/dir/delete" && c.method === "POST");
+    expect(del?.body).toEqual({ path: "docs" });
+  });
+
+  test("キャンセルならディレクトリの内訳は数えても消さない", async () => {
+    h = await boot();
+    h.intercept = deleteOk({ markdown: 2 });
+    h.confirmResult = false;
+
+    h.click(delBtn(h, "docs"));
+    await h.flush(4);
+
+    expect(h.fetchCalls.filter((c) => c.url.startsWith("/api/dir/delete?"))).toHaveLength(1);
+    expect(
+      h.fetchCalls.filter((c) => c.url === "/api/dir/delete" && c.method === "POST"),
+    ).toHaveLength(0);
+  });
+
+  test("開いていたファイルを消したらそれを伝え、編集モードを抜ける", async () => {
+    h = await boot();
+    h.click(h.el("edit-btn"));
+    await h.flush();
+    expect(h.el("content-body").classList.contains("is-editing")).toBe(true);
+
+    h.intercept = deleteOk();
+    h.confirmResult = true;
+    h.tree = {
+      type: "dir",
+      name: "",
+      path: "",
+      children: [
+        {
+          type: "dir",
+          name: "docs",
+          path: "docs",
+          children: [{ type: "file", name: "guide.md", path: "docs/guide.md" }],
+        },
+      ],
+    };
+
+    h.click(delBtn(h, "README.md"));
+    await h.flush(8);
+
+    expect(h.el("status").classList.contains("is-error")).toBe(true);
+    // **編集モードを抜けている。** 残すと、保存で消したファイルが作り直される
+    expect(h.el("content-body").classList.contains("is-editing")).toBe(false);
+  });
+
+  test("開いていたファイルの親ディレクトリを消したときも伝える", async () => {
+    h = await bootApp({ url: "http://localhost:3944/?path=docs/guide.md" });
+    h.intercept = deleteOk({ markdown: 2 });
+    h.confirmResult = true;
+    h.tree = {
+      type: "dir",
+      name: "",
+      path: "",
+      children: [{ type: "file", name: "README.md", path: "README.md" }],
+    };
+
+    h.click(delBtn(h, "docs"));
+    await h.flush(8);
+
+    expect(h.el("status").classList.contains("is-error")).toBe(true);
+  });
+
+  test("削除に失敗したら status がエラーになり、ツリーは取り直さない", async () => {
+    h = await boot();
+    h.intercept = (url) =>
+      url === "/api/file/delete"
+        ? { status: 400, body: { error: "excluded", code: "excluded_path" } }
+        : undefined;
+    h.confirmResult = true;
+
+    h.click(delBtn(h, "docs/guide.md"));
+    await h.flush(6);
+
+    expect(h.el("status").classList.contains("is-error")).toBe(true);
+    expect(h.fetchCalls.filter((c) => c.url.startsWith("/api/tree"))).toHaveLength(1);
+    // ツリーからは消えていない（サーバが拒否したので）
+    expect(h.treeItem("docs/guide.md")).toBeTruthy();
+  });
+});
