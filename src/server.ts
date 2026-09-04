@@ -1,6 +1,7 @@
+import type { Dirent, Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import { open, readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { lstat, open, readdir, readFile, realpath, rm, unlink } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectArticleImages } from "./article-images.ts";
 import { renderMarkdown } from "./renderer.ts";
@@ -14,6 +15,7 @@ import type { ErrorCode } from "./util/error-codes.ts";
 import { computeStrongEtag } from "./util/etag.ts";
 import { DEFAULT_EXCLUDES, isExcludedPath } from "./util/excludes.ts";
 import { IMAGE_CONTENT_TYPES, isImageExtension } from "./util/image-ext.ts";
+import { toPosix } from "./util/path-util.ts";
 import { textLanguageOf } from "./util/text-ext.ts";
 import { isViewableFile } from "./util/viewable.ts";
 import { createZip, type ZipEntry } from "./util/zip.ts";
@@ -299,6 +301,39 @@ export function createServer(config: ServerConfig): ServerHandle {
         return new Response("Method Not Allowed", {
           status: 405,
           headers: { Allow: "POST" },
+        });
+      }
+
+      if (url.pathname === "/api/file/delete") {
+        // 作成 (`/api/file/create`) と同じ理由でキャッシュを先に捨てる。watcher の
+        // `unlink` は debounce のぶん遅れるので、待つと**消したファイルが残るツリー**を返す
+        invalidateTree();
+        if (req.method === "POST") {
+          if (!checkOrigin(req))
+            return forbidden("Origin が許可されていません", "origin_forbidden");
+          return handleFileDelete(config.rootDir, req, excludes);
+        }
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "POST" },
+        });
+      }
+
+      if (url.pathname === "/api/dir/delete") {
+        // **GET は数えるだけ**（消える内訳のプレビュー）。ツリーは変わらないので
+        // キャッシュを捨てない —— 捨てると、確認ダイアログを開くたびに全走査が走る
+        if (req.method === "GET") {
+          return handleDirDeletePreview(config.rootDir, url.searchParams.get("path"), excludes);
+        }
+        if (req.method === "POST") {
+          if (!checkOrigin(req))
+            return forbidden("Origin が許可されていません", "origin_forbidden");
+          invalidateTree();
+          return handleDirDelete(config.rootDir, req, excludes);
+        }
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, POST" },
         });
       }
 
@@ -1208,6 +1243,393 @@ async function handleFileCreate(
   saveMark.set(safe.rel, sha256(Buffer.from("")));
 
   return Response.json({ path: safe.rel });
+}
+
+/* ===== 削除 (Issue #171) ===== */
+
+/**
+ * 削除プレビュー (`GET /api/dir/delete`) が走査するエントリ数の上限。
+ *
+ * 確認ダイアログに出す数のためだけの走査なので、`node_modules` を抱えたディレクトリで
+ * 何十万エントリも歩かない。超えたら `truncated: true` を返し、クライアントは
+ * 「これ以上」と示す（**消す処理は上限を持たない** —— 数え切れなくても消すものは消す）。
+ */
+const DELETE_PREVIEW_MAX_ENTRIES = 20000;
+
+interface DeleteBody {
+  path?: unknown;
+}
+
+/** 削除対象が見つからない (`/api/file/delete` / `/api/dir/delete`)。 */
+function deleteNotFoundResponse(requested: string): Response {
+  return Response.json(
+    { error: `見つかりません: ${requested}`, code: "not_found" },
+    { status: 404 },
+  );
+}
+
+/**
+ * 削除リクエストの body から `path` を取り出す。
+ *
+ * body は `{path}` のみだが、上限なしだと巨大ボディで LAN クライアントがメモリを
+ * 枯渇させられる。`handleFileCreate` と同じく `MAX_WRITE_BYTES` で上限を課す。
+ */
+async function readDeletePath(req: Request): Promise<{ path: string } | { res: Response }> {
+  const lengthHeader = req.headers.get("content-length");
+  if (lengthHeader && Number(lengthHeader) > MAX_WRITE_BYTES) {
+    return {
+      res: Response.json({ error: "body が大きすぎます", code: "body_too_large" }, { status: 413 }),
+    };
+  }
+
+  let parsed: DeleteBody;
+  try {
+    const text = await req.text();
+    if (Buffer.byteLength(text, "utf-8") > MAX_WRITE_BYTES) {
+      return {
+        res: Response.json(
+          { error: "body が大きすぎます", code: "body_too_large" },
+          { status: 413 },
+        ),
+      };
+    }
+    parsed = JSON.parse(text) as DeleteBody;
+  } catch {
+    return {
+      res: Response.json(
+        { error: "JSON の解析に失敗しました", code: "invalid_json" },
+        { status: 400 },
+      ),
+    };
+  }
+
+  const { path } = parsed;
+  if (typeof path !== "string" || path.length === 0) {
+    return {
+      res: Response.json({ error: "path が必要です", code: "path_required" }, { status: 400 }),
+    };
+  }
+  return { path };
+}
+
+interface DeleteTarget {
+  /** クライアントへ返す相対パス (`resolveSafe` の `rel`)。 */
+  rel: string;
+  /** 実際に消す絶対パス。**leaf を realpath しない** (下記)。 */
+  abs: string;
+}
+
+/**
+ * 削除対象を検証して、消してよい絶対パスを返す (Issue #171)。
+ *
+ * ## `resolveSafe` の `abs` をそのまま消さない
+ *
+ * `resolveSafe` は leaf が実在すると **realpath 済みの絶対パス**を返す
+ * (`safepath.ts` の `ResolvedPath.abs`)。symlink を渡すとリンク先の実体を指すので、
+ * それを消すと**実体が消えてリンクだけが残る** —— 利用者がツリーで見ていたものと
+ * 違うものが消える。ルート内の symlink はルート内の別ファイルも指せるので実害が出る。
+ *
+ * そこで**親までを解決して leaf は綴りのまま繋ぐ**。親の realpath がルート内に
+ * 収まっていることは `resolveSafe` が既に検証している (ここでも同じ計算をする) ので、
+ * ルート外へ抜ける経路は増えない。
+ *
+ * ## 除外の判定は 2 段
+ *
+ * 解決前の字句 (`isRequestExcluded`) と解決後の `rel` (`isExcludedPath`) の両方を見る。
+ * `excludedPathResponse` のコメントにある理由 (存在オラクルと symlink 除外名の
+ * すり抜け) がそのまま当てはまる。
+ */
+async function resolveDeleteTarget(
+  rootDir: string,
+  requested: string,
+  excludes: ReadonlySet<string>,
+): Promise<{ ok: true; target: DeleteTarget } | { ok: false; res: Response }> {
+  if (isRequestExcluded(requested, excludes)) {
+    return { ok: false, res: excludedPathResponse(requested) };
+  }
+
+  let safe: { rel: string; abs: string };
+  try {
+    safe = await resolveSafe(rootDir, requested);
+  } catch (err) {
+    if (err instanceof UnsafePathError) {
+      return {
+        ok: false,
+        res: Response.json({ error: err.message, code: "unsafe_path" }, { status: 400 }),
+      };
+    }
+    throw err;
+  }
+
+  // **ルート自身を消させない。** `resolveSafe` は `.` を通す (root の内側なので
+  // `isOutsideRoot` に掛からず `rel` が空になる)。ここで止めないと、`{"path":"."}`
+  // ひとつで**閲覧しているディレクトリごと消える**。
+  if (safe.rel === "" || safe.rel === ".") {
+    return {
+      ok: false,
+      res: Response.json(
+        { error: "ルートディレクトリは削除できません", code: "unsafe_path" },
+        { status: 400 },
+      ),
+    };
+  }
+
+  if (isExcludedPath(safe.rel, excludes)) {
+    return { ok: false, res: excludedPathResponse(requested) };
+  }
+
+  const rootAbs = await realpath(rootDir);
+  const requestedAbs = resolve(rootAbs, requested);
+  let parentReal: string;
+  try {
+    parentReal = await realpath(dirname(requestedAbs));
+  } catch {
+    // 親が無い = 対象も無い。`lstat` を待たずにここで 404 にする
+    return { ok: false, res: deleteNotFoundResponse(requested) };
+  }
+  return {
+    ok: true,
+    target: {
+      // **応答に載せるのは要求の綴り。** `resolveSafe` の `rel` は leaf も realpath 済みで、
+      // symlink だと**リンク先の名前**になる (`link-dir` を消したのに `real-dir` を返す)。
+      // クライアントはこれをツリーの path と突き合わせて「開いていたものが消えたか」を
+      // 見るので、実体名を返すと**消したものを見失う**。除外の判定には解決後の
+      // `safe.rel` を使ってあるので、ここを要求側にしても判定は緩まない。
+      rel: toPosix(relative(rootAbs, requestedAbs)),
+      abs: join(parentReal, basename(requestedAbs)),
+    },
+  };
+}
+
+/** 想定外の FS エラー。**生メッセージを返さない** (絶対パスが載る。Issue #99)。 */
+function deleteFailedResponse(rel: string, err: unknown): Response {
+  console.error(`削除に失敗しました (${rel}):`, err);
+  return Response.json({ error: "削除に失敗しました", code: "delete_failed" }, { status: 500 });
+}
+
+/**
+ * POST /api/file/delete — ファイル 1 個を削除する (Issue #171)。
+ *
+ * **ツリーに出るファイルだけを消せる** (`isViewableFile`)。ツリーに出ないもの
+ * (`.env` のような非表示ファイル) まで画面越しに消せると、**見えないものが消える**。
+ * ディレクトリ側 (`/api/dir/delete`) は配下の全部を対象にするが、あちらは
+ * 「配下ごと消える」ことを確認ダイアログで示してから消す。
+ */
+async function handleFileDelete(
+  rootDir: string,
+  req: Request,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
+  const body = await readDeletePath(req);
+  if ("res" in body) return body.res;
+  const requested = body.path;
+
+  if (!isViewableFile(requested)) {
+    return Response.json(
+      { error: "このファイルは削除できません", code: "not_viewable" },
+      { status: 400 },
+    );
+  }
+
+  const resolved = await resolveDeleteTarget(rootDir, requested, excludes);
+  if (!resolved.ok) return resolved.res;
+  const { rel, abs } = resolved.target;
+
+  let stat: Stats;
+  try {
+    // **`stat` ではなく `lstat`。** symlink を辿ると、リンク先の種類で分岐してしまう
+    stat = await lstat(abs);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return deleteNotFoundResponse(requested);
+    return deleteFailedResponse(rel, err);
+  }
+  if (stat.isDirectory()) {
+    return Response.json(
+      { error: `ディレクトリです: ${rel}`, code: "not_a_file" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    // symlink なら**リンクだけ**が消える (`unlink` は辿らない)
+    await unlink(abs);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return deleteNotFoundResponse(requested);
+    return deleteFailedResponse(rel, err);
+  }
+  return Response.json({ path: rel });
+}
+
+/** `GET /api/dir/delete` が返す内訳。 */
+interface DeleteCount {
+  /** 配下の Markdown ファイル数。 */
+  markdown: number;
+  /** 配下のそれ以外のファイル数 (画像・テキスト・symlink など)。 */
+  other: number;
+  /** 配下のディレクトリ数 (対象自身は含まない)。 */
+  dirs: number;
+  /** 走査上限に当たって数え切れなかった。 */
+  truncated: boolean;
+}
+
+/**
+ * 削除したときに消えるものを数える (Issue #171)。
+ *
+ * **symlink は辿らない。** `readdir` の dirent は `lstat` 相当なので、symlink は
+ * `isDirectory()` が false になり「その他のファイル 1 個」として数える。辿ると
+ * ルート外まで数えることになり、**実際に消える量と食い違う** (`rm --recursive` も
+ * リンクとして消す)。
+ *
+ * **除外設定 (`.yomiignore` / `DEFAULT_EXCLUDES`) は適用しない。** ここで数えるのは
+ * 「消えるもの」であって「ツリーに出るもの」ではない —— 除外されたファイルも
+ * ディレクトリごと消えるので、数から落とすと**確認ダイアログが実態より少なく見える**。
+ */
+async function countDeletable(absDir: string): Promise<DeleteCount> {
+  const count: DeleteCount = { markdown: 0, other: 0, dirs: 0, truncated: false };
+  const stack: string[] = [absDir];
+  let seen = 0;
+
+  while (stack.length > 0) {
+    const dir = stack.pop() as string;
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      // **読めないディレクトリは数えない。** 消す処理も同じところで失敗するので、
+      // 数に入れて多く見せるより実態に近い
+      continue;
+    }
+    for (const entry of entries) {
+      if (++seen > DELETE_PREVIEW_MAX_ENTRIES) {
+        count.truncated = true;
+        return count;
+      }
+      if (entry.isDirectory()) {
+        count.dirs++;
+        stack.push(join(dir, entry.name));
+      } else if (isMarkdownPath(entry.name)) {
+        count.markdown++;
+      } else {
+        count.other++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * GET /api/dir/delete — **消さずに**、消える内訳だけを返す (Issue #171)。
+ *
+ * 確認ダイアログに出す数をクライアントが自前で数えられないため置いている ——
+ * ツリーは除外設定と `--depth` の適用後なので、**実際に消える量とは一致しない**。
+ *
+ * 読み取りしかしないので `checkOrigin` は掛けない (`/api/tree` と同じ扱い)。
+ */
+async function handleDirDeletePreview(
+  rootDir: string,
+  requested: string | null,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
+  if (!requested) {
+    return Response.json({ error: "path が必要です", code: "path_required" }, { status: 400 });
+  }
+
+  const resolved = await resolveDeleteTarget(rootDir, requested, excludes);
+  if (!resolved.ok) return resolved.res;
+  const { rel, abs } = resolved.target;
+
+  let stat: Stats;
+  try {
+    stat = await lstat(abs);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return deleteNotFoundResponse(requested);
+    return deleteFailedResponse(rel, err);
+  }
+
+  // **symlink は中を数えない。** 消えるのはリンク 1 個だけ
+  if (stat.isSymbolicLink()) {
+    return Response.json({
+      path: rel,
+      symlink: true,
+      markdown: 0,
+      other: 0,
+      dirs: 0,
+      truncated: false,
+    });
+  }
+  if (!stat.isDirectory()) {
+    return Response.json(
+      { error: `ディレクトリではありません: ${rel}`, code: "not_a_dir" },
+      { status: 400 },
+    );
+  }
+
+  return Response.json({ path: rel, symlink: false, ...(await countDeletable(abs)) });
+}
+
+/**
+ * POST /api/dir/delete — ディレクトリを**配下ごと**削除する (Issue #171)。
+ *
+ * 配下の非 Markdown ファイル・除外設定で隠れているファイルも一緒に消える。
+ * 消える内訳は `GET /api/dir/delete` で先に取れるので、クライアントはそれを
+ * 確認ダイアログに出してから叩く。
+ */
+async function handleDirDelete(
+  rootDir: string,
+  req: Request,
+  excludes: ReadonlySet<string>,
+): Promise<Response> {
+  const body = await readDeletePath(req);
+  if ("res" in body) return body.res;
+  const requested = body.path;
+
+  const resolved = await resolveDeleteTarget(rootDir, requested, excludes);
+  if (!resolved.ok) return resolved.res;
+  const { rel, abs } = resolved.target;
+
+  let stat: Stats;
+  try {
+    stat = await lstat(abs);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return deleteNotFoundResponse(requested);
+    return deleteFailedResponse(rel, err);
+  }
+
+  // **ディレクトリへの symlink はリンクだけを消す。** `rm --recursive` に渡すと
+  // 実装によってはリンク先を歩きうる。ここで分けておけば、**ルート外を指すリンクでも
+  // 消えるのはリンク 1 個**であることが読んで分かる
+  if (stat.isSymbolicLink()) {
+    try {
+      await unlink(abs);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return deleteNotFoundResponse(requested);
+      return deleteFailedResponse(rel, err);
+    }
+    return Response.json({ path: rel, symlink: true });
+  }
+
+  if (!stat.isDirectory()) {
+    return Response.json(
+      { error: `ディレクトリではありません: ${rel}`, code: "not_a_dir" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    // `recursive` は**配下の symlink を辿らない** (リンクとして消す)。
+    // `force` は付けない —— 消えていたら 404 で知らせたい
+    await rm(abs, { recursive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return deleteNotFoundResponse(requested);
+    return deleteFailedResponse(rel, err);
+  }
+  return Response.json({ path: rel, symlink: false });
 }
 
 /**
