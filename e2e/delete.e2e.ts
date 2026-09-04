@@ -34,6 +34,19 @@ test.beforeEach(async ({ page }) => {
   await expect(treeItem(page, "README.md")).toBeVisible();
 });
 
+test("ディレクトリ行では「＋」と「×」が重ならない", async ({ page }) => {
+  // **実 CSS でしか出ない**（jsdom はレイアウトを計算しない）。`is-in-dir` のずらし量が
+  // 「＋」の幅より小さいと 1px 単位で重なり、「×」の右端が押せなくなる（実際に踏んだ）
+  const boxes = await page.evaluate(() => {
+    const li = document.querySelector('.tree-item[title="docs"]')?.closest("li");
+    const add = li?.querySelector(":scope > .dir-new-btn")?.getBoundingClientRect();
+    const del = li?.querySelector(":scope > .tree-del-btn")?.getBoundingClientRect();
+    return add && del ? { addLeft: add.left, delRight: del.right } : null;
+  });
+  expect(boxes).not.toBeNull();
+  expect(boxes?.delRight).toBeLessThanOrEqual(boxes?.addLeft ?? 0);
+});
+
 test("新規作成したファイルを、確認してから削除できる", async ({ page }) => {
   await createFile(page, "e2e-delete-target");
 

@@ -697,7 +697,10 @@ export function createTree(ctx) {
     // **編集モードは黙って抜ける。** ファイルはもう無いので、そのまま保存すると
     // `writeFileAtomic` が作り直す（消したはずのものが戻る）
     if (state.editing) ctx.editor.exitEditMode();
-    ctx.setStatus("error", t("status.deletedCurrent", { path }));
+    // **文言は watcher 通知と同じものを使う** (`app-websocket.js` の `afterTreeUpdate`)。
+    // 削除の少し後に `unlink` の通知が届き、そちらが同じ状態を見て status を書くので、
+    // ここだけ別の文言にすると**一瞬だけ違う文が出て置き換わる**（実機で確認した）
+    ctx.setStatus("error", t("status.fileDeleted", { path }));
   }
 
   /* ===== 選択状態 ===== */
