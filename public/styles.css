@@ -1054,7 +1054,8 @@ body {
    display:none だとフォーカス不能でタブ順から外れ、キーボード/スクリーンリーダーから
    到達できなくなる。opacity:0 で視覚的にのみ隠してフォーカス可能なまま残し、
    pointer-events:none で非表示時のマウスクリックは行へ透過させる。 */
-.dir-new-btn {
+.dir-new-btn,
+.tree-del-btn {
   opacity: 0;
   pointer-events: none;
   position: absolute;
@@ -1070,19 +1071,34 @@ body {
   border-radius: 4px;
 }
 
+/* Issue #171: 削除の「×」は「＋」と同じ見せ方。ディレクトリでは両方が並ぶので、
+   「＋」(right: 0.3rem) と重ならないよう左へずらす。ファイルには「＋」が無いので
+   ずらさない (`is-in-dir` が付かない)。
+
+   **ずらす量は「＋」の幅より大きく取る。** ボタンの幅は「全角 1 文字 (1em) +
+   padding 0.7rem」≒ 1.7rem で、`font: inherit` と root 14px のとき実測 23.8px。
+   `1.9rem` (26.6px) では差が 1.6rem = 22.4px しかなく、**1.4px 重なっていた**
+   (実ブラウザで計測。`e2e/delete.e2e.ts` が回帰を見る)。 */
+.tree-del-btn.is-in-dir {
+  right: 2.2rem;
+}
+
 @media (hover: hover) and (pointer: fine) {
-  .tree li:hover > .dir-new-btn {
+  .tree li:hover > .dir-new-btn,
+  .tree li:hover > .tree-del-btn {
     opacity: 1;
     pointer-events: auto;
   }
-  .dir-new-btn:hover {
+  .dir-new-btn:hover,
+  .tree-del-btn:hover {
     background: var(--bg-emphasis);
     color: var(--text);
   }
 }
 
 /* キーボード Tab フォーカス時に表示してクリック可能にする (hover の無い環境でも到達可能) */
-.dir-new-btn:focus-visible {
+.dir-new-btn:focus-visible,
+.tree-del-btn:focus-visible {
   opacity: 1;
   pointer-events: auto;
   outline: 2px solid var(--accent, #0969da);

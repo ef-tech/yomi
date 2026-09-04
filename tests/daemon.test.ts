@@ -444,20 +444,33 @@ describe("フォアグラウンド起動 → 停止 (結合・Issue #90)", () =>
     });
     spawned.push(proc);
     const deadline = Date.now() + 15_000;
+    let listened = false;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://127.0.0.1:${port}/api/tree`);
-        if (res.status === 200) return proc;
+        listened ||= res.status === 200;
+        // **listen だけでは足りない。** `bin/yomi.ts` は**記録を `createServer` より後**に
+        // 書く（二重起動が先行インスタンスの記録を上書きしないため）。しかも
+        // `saveInstance` は `processStartedAt` で `ps` を起動するので、listen から記録まで
+        // 実測で数百 ms 空く。ここを待たずに返すと、呼び出し側の
+        // `readInstances()` が 0 件になり「起動していない」と誤判定する
+        // （macOS の CI で間欠 fail していた原因。Linux では速すぎて表面化しなかった）。
+        if (listened && (await readInstances(paths)).some((rec) => rec.port === port)) {
+          return proc;
+        }
       } catch {
         // まだ listen していない
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     // **子の stderr を添える。** 捨てると、起動を拒否された理由（「既に yomi が
-    // 起動しています」等）が一切出ず、15 秒待った末に「listen しなかった」しか分からない
+    // 起動しています」等）が一切出ず、15 秒待った末に「listen しなかった」しか分からない。
+    // **どこまで進んだか（listen したか）も添える** —— 「listen しない」と
+    // 「listen したが記録が現れない」は原因が別で、後者は記録側の退行を指す
     const stderr = await new Response(proc.stderr).text();
     throw new Error(
-      `フォアグラウンド起動が ${port} で listen しませんでした\n子の stderr: ${stderr}`,
+      `フォアグラウンド起動が ${port} で ${listened ? "listen したがレジストリに記録されませんでした" : "listen しませんでした"}\n` +
+        `子の stderr: ${stderr}`,
     );
   }
 

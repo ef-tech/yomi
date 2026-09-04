@@ -20,6 +20,7 @@ A local Markdown viewer. A command-line tool that recursively collects the `.md`
 - GitHub-style CSS, follows the system dark/light setting
 - Local-only by default (`127.0.0.1`); use `--share` to view from other devices on the same LAN
 - In-browser Markdown editing (save with Ctrl/Cmd+S)
+- Delete files and directories from the left tree (with a confirmation dialog showing what disappears)
 - Table of contents (TOC) panel generated from headings (with scroll-following highlight)
 - Link navigation inside the preview: relative md jumps within yomi, external URLs get a warning
 - Browser back/forward support; reload restore and URL sharing via `?path=foo.md`
@@ -434,6 +435,18 @@ You can create a new Markdown file in place from the left tree.
 - On success the new file is selected and opened directly in edit mode (if you cancel the discard confirmation while editing another file with unsaved changes, only the file is created and the editor does not switch)
 - A name collision (existing file) is rejected with 409, and the error is shown in the header
 - Path traversal, disallowed extensions, and creation under excluded directories (`node_modules` etc., including `.yomiignore`) are rejected server-side
+
+#### Deleting (Issue #171)
+
+You can delete files and directories from the left tree. **This cannot be undone** (nothing goes to the OS trash).
+
+- **The "×" on a row**: shown on hover with the mouse, and via `Tab` focus for keyboard (same as the "＋")
+- **Files**: a confirmation dialog shows the path; OK deletes it
+- **Directories**: everything inside is deleted too. The confirmation dialog shows **what will disappear** (counts of Markdown files, other files, and directories). **Files hidden by the excludes (`.yomiignore`) are deleted as well**, so the counts reflect what is actually removed rather than what the tree shows (counted up to 20,000; beyond that the dialog says so)
+- **Symbolic links: only the link is removed** (its target is kept). That holds for links to directories too — their contents are untouched
+- If you had the deleted item open, the header says so, and edit mode is exited
+- Paths under excluded directories (`node_modules` etc., including `.yomiignore`), outside the start directory, and the start directory itself are rejected server-side
+- Extensions that do not appear in the tree (images and so on) cannot be deleted individually; they are removed when the directory containing them is deleted
 
 #### Security when editing over the LAN
 

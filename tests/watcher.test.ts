@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +39,23 @@ async function waitFor(
       throw new Error("waitFor: 条件が時間内に満たされませんでした");
     await wait(interval);
   }
+}
+
+/**
+ * 実 chokidar を使う統合テストのタイムアウト。**フェイク経路より桁で長く取る。**
+ *
+ * macOS の FSEvents は「ready の後でもストリームが立ち上がるまで配信されない」ことがあり、
+ * 既定の 3 秒では**届いていないだけ**を失敗と誤判定していた（CI で間欠 fail。落ちるテストが
+ * 毎回入れ替わるのが特徴だった）。**退行は届かないことで検出できる**ので、上限を伸ばしても
+ * 検出力は落ちない —— 落ちるのが遅くなるだけ。
+ */
+const FS_EVENT_TIMEOUT_MS = 10_000;
+/** 上の待ちが尽きる前に Bun のテストタイムアウトが来ないようにする。 */
+const INTEGRATION_TIMEOUT_MS = 20_000;
+
+/** 実 FS 統合テスト用の {@link waitFor}。macOS の配信遅延を見込んで長く待つ。 */
+function waitForFs(predicate: () => boolean): Promise<void> {
+  return waitFor(predicate, { timeout: FS_EVENT_TIMEOUT_MS });
 }
 
 /**
@@ -430,183 +447,218 @@ describe("createWatcher — 決定論的ユニット (フェイクイベント)"
 describe("createWatcher — chokidar 統合 (実ファイル監視)", () => {
   let root: string;
 
-  beforeAll(async () => {
+  // **テストごとに新しい root を取る。** 共有すると前のテストが置いたファイル・
+  // ディレクトリが積み上がり、chokidar の初期スキャンと FSEvents の配送が回を追うごとに
+  // 重くなる（macOS で後半のテストだけ間欠 fail していた原因のひとつ）。
+  beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "yomi-watcher-"));
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test("md ファイルの作成/変更で onChange が呼ばれる", async () => {
-    const calls: Array<{ path: string; kind: string }> = [];
-    const { handle, ready } = startWatcher(root, (path, kind) => {
-      calls.push({ path, kind });
-    });
+  test(
+    "md ファイルの作成/変更で onChange が呼ばれる",
+    async () => {
+      const calls: Array<{ path: string; kind: string }> = [];
+      const { handle, ready } = startWatcher(root, (path, kind) => {
+        calls.push({ path, kind });
+      });
 
-    try {
-      await ready;
-      await writeFile(join(root, "a.md"), "hello");
-      await waitFor(() => calls.some((c) => c.path === "a.md"));
-      expect(calls.every((c) => c.path === "a.md")).toBe(true);
-    } finally {
-      handle.close();
-    }
-  });
+      try {
+        await ready;
+        await writeFile(join(root, "a.md"), "hello");
+        await waitForFs(() => calls.some((c) => c.path === "a.md"));
+        expect(calls.every((c) => c.path === "a.md")).toBe(true);
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  test("ネストしたサブディレクトリ内の md 変更で onChange が呼ばれる", async () => {
-    const sub = join(root, "docs", "guide");
-    await mkdir(sub, { recursive: true });
-
-    const calls: string[] = [];
-    const { handle, ready } = startWatcher(root, (path) => {
-      calls.push(path);
-    });
-
-    try {
-      await ready;
-      await writeFile(join(sub, "nested.md"), "deep");
-      await waitFor(() => calls.includes("docs/guide/nested.md"));
-      expect(calls).toContain("docs/guide/nested.md");
-    } finally {
-      handle.close();
-    }
-  });
-
-  test("深いネスト (3 階層以上) の最深部 md も検知する", async () => {
-    const deep = join(root, "l1", "l2", "l3");
-    await mkdir(deep, { recursive: true });
-
-    const calls: string[] = [];
-    const { handle, ready } = startWatcher(root, (path) => {
-      calls.push(path);
-    });
-
-    try {
-      await ready;
-      await writeFile(join(deep, "deepest.md"), "x");
-      await waitFor(() => calls.includes("l1/l2/l3/deepest.md"));
-      expect(calls).toContain("l1/l2/l3/deepest.md");
-    } finally {
-      handle.close();
-    }
-  });
-
-  test("監視開始後に新規作成したディレクトリと中身がほぼ同時に出現しても md を取りこぼさない", async () => {
-    // F2: git checkout / cp -r / tar 展開のように mkdir 直後に中身が現れるケース
-    const calls: string[] = [];
-    const { handle, ready } = startWatcher(root, (path) => {
-      calls.push(path);
-    });
-
-    try {
-      await ready;
-      const fresh = join(root, "atomic");
-      await mkdir(fresh, { recursive: true });
-      // debounce 待ちを挟まず即座に書き込む (レース再現)
-      await writeFile(join(fresh, "race.md"), "appeared");
-      await waitFor(() => calls.includes("atomic/race.md"));
-      expect(calls).toContain("atomic/race.md");
-    } finally {
-      handle.close();
-    }
-  });
-
-  test("ディレクトリをリネームすると新パスでツリーに現れる", async () => {
-    // F1 回帰ガード: 旧実装はディレクトリ rename で移動先を検知できなかった。
-    // chokidar では rename 時に移動先 (add) が正しく検知される。
-    const d1 = join(root, "ren-src");
-    await mkdir(d1, { recursive: true });
-    await writeFile(join(d1, "a.md"), "v0");
-
-    const calls: Array<{ path: string; kind: string }> = [];
-    const { handle, ready } = startWatcher(root, (path, kind) => {
-      calls.push({ path, kind });
-    });
-
-    try {
-      await ready;
-      await rename(d1, join(root, "ren-dst"));
-      // 移動先の新パスでツリーに現れる (旧コードはこれを満たせなかった)
-      await waitFor(() => calls.some((c) => c.path === "ren-dst/a.md"));
-      expect(calls.some((c) => c.path === "ren-dst/a.md")).toBe(true);
-    } finally {
-      handle.close();
-    }
-  });
-
-  test("ディレクトリ削除→同名再作成でも再び検知できる (watcher が死なない)", async () => {
-    const sub = join(root, "to-remove");
-    await mkdir(sub, { recursive: true });
-    await writeFile(join(sub, "x.md"), "v1");
-
-    const calls: string[] = [];
-    const { handle, ready } = startWatcher(root, (path) => {
-      calls.push(path);
-    });
-
-    try {
-      await ready;
-      await rm(sub, { recursive: true, force: true });
-      await wait(DEBOUNCE_MARGIN_MS); // 削除イベントが落ち着くのを待つ
-
-      calls.length = 0;
+  test(
+    "ネストしたサブディレクトリ内の md 変更で onChange が呼ばれる",
+    async () => {
+      const sub = join(root, "docs", "guide");
       await mkdir(sub, { recursive: true });
-      await writeFile(join(sub, "x.md"), "v2");
-      // 再作成が検知されること (発火回数は FSEvents の重複/遅延で保証できないため presence のみ)
-      await waitFor(() => calls.includes("to-remove/x.md"));
-      expect(calls).toContain("to-remove/x.md");
-    } finally {
-      handle.close();
-    }
-  });
 
-  test("除外ディレクトリ配下は監視されない (実 chokidar 統合スモーク)", async () => {
-    const nm = join(root, "node_modules");
-    await mkdir(nm, { recursive: true });
+      const calls: string[] = [];
+      const { handle, ready } = startWatcher(root, (path) => {
+        calls.push(path);
+      });
 
-    const calls: string[] = [];
-    const { handle, ready } = startWatcher(root, (path) => {
-      calls.push(path);
-    });
+      try {
+        await ready;
+        await writeFile(join(sub, "nested.md"), "deep");
+        await waitForFs(() => calls.includes("docs/guide/nested.md"));
+        expect(calls).toContain("docs/guide/nested.md");
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-    try {
-      await ready;
-      await writeFile(join(nm, "skip.md"), "skip"); // 除外対象 (chokidar は descend しない)
-      await writeFile(join(root, "included.md"), "yes"); // positive control
-      // included が届いた = watcher は生きている。除外ファイルは chokidar が emit しない
-      await waitFor(() => calls.includes("included.md"));
-      expect(calls.find((p) => p.includes("node_modules"))).toBeUndefined();
-    } finally {
-      handle.close();
-    }
-  });
+  test(
+    "深いネスト (3 階層以上) の最深部 md も検知する",
+    async () => {
+      const deep = join(root, "l1", "l2", "l3");
+      await mkdir(deep, { recursive: true });
 
-  test("depth 指定で深い階層の変更は publish されない (Issue #44)", async () => {
-    // 共有 root とは別の専用ツリーで検証する
-    const droot = await mkdtemp(join(tmpdir(), "yomi-watcher-depth-"));
-    await mkdir(join(droot, "d1"), { recursive: true });
-    await writeFile(join(droot, "shallow.md"), "x"); // level 1
-    await writeFile(join(droot, "d1", "deep.md"), "x"); // level 2
+      const calls: string[] = [];
+      const { handle, ready } = startWatcher(root, (path) => {
+        calls.push(path);
+      });
 
-    const calls: string[] = [];
-    // depth=1: ルート直下のみ監視 (chokidar depth 0)
-    const { handle, ready } = startWatcher(droot, (path) => calls.push(path), { depth: 1 });
+      try {
+        await ready;
+        await writeFile(join(deep, "deepest.md"), "x");
+        await waitForFs(() => calls.includes("l1/l2/l3/deepest.md"));
+        expect(calls).toContain("l1/l2/l3/deepest.md");
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-    try {
-      await ready;
-      await writeFile(join(droot, "shallow.md"), "changed"); // 監視内 (level 1)
-      await writeFile(join(droot, "d1", "deep.md"), "changed"); // 監視外 (level 2)
+  test(
+    "監視開始後に新規作成したディレクトリと中身がほぼ同時に出現しても md を取りこぼさない",
+    async () => {
+      // F2: git checkout / cp -r / tar 展開のように mkdir 直後に中身が現れるケース
+      const calls: string[] = [];
+      const { handle, ready } = startWatcher(root, (path) => {
+        calls.push(path);
+      });
 
-      // positive control: 浅い変更は届く (= watcher は生きている)
-      await waitFor(() => calls.includes("shallow.md"));
-      // depth 制限: 深い変更は chokidar が descend しないので届かない
-      expect(calls).not.toContain("d1/deep.md");
-    } finally {
-      handle.close();
-      await rm(droot, { recursive: true, force: true });
-    }
-  });
+      try {
+        await ready;
+        const fresh = join(root, "atomic");
+        await mkdir(fresh, { recursive: true });
+        // debounce 待ちを挟まず即座に書き込む (レース再現)
+        await writeFile(join(fresh, "race.md"), "appeared");
+        await waitForFs(() => calls.includes("atomic/race.md"));
+        expect(calls).toContain("atomic/race.md");
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "ディレクトリをリネームすると新パスでツリーに現れる",
+    async () => {
+      // F1 回帰ガード: 旧実装はディレクトリ rename で移動先を検知できなかった。
+      // chokidar では rename 時に移動先 (add) が正しく検知される。
+      const d1 = join(root, "ren-src");
+      await mkdir(d1, { recursive: true });
+      await writeFile(join(d1, "a.md"), "v0");
+
+      const calls: Array<{ path: string; kind: string }> = [];
+      const { handle, ready } = startWatcher(root, (path, kind) => {
+        calls.push({ path, kind });
+      });
+
+      try {
+        await ready;
+        await rename(d1, join(root, "ren-dst"));
+        // 移動先の新パスでツリーに現れる (旧コードはこれを満たせなかった)
+        await waitForFs(() => calls.some((c) => c.path === "ren-dst/a.md"));
+        expect(calls.some((c) => c.path === "ren-dst/a.md")).toBe(true);
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "ディレクトリ削除→同名再作成でも再び検知できる (watcher が死なない)",
+    async () => {
+      const sub = join(root, "to-remove");
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(sub, "x.md"), "v1");
+
+      const calls: string[] = [];
+      const { handle, ready } = startWatcher(root, (path) => {
+        calls.push(path);
+      });
+
+      try {
+        await ready;
+        await rm(sub, { recursive: true, force: true });
+        await wait(DEBOUNCE_MARGIN_MS); // 削除イベントが落ち着くのを待つ
+
+        calls.length = 0;
+        await mkdir(sub, { recursive: true });
+        await writeFile(join(sub, "x.md"), "v2");
+        // 再作成が検知されること (発火回数は FSEvents の重複/遅延で保証できないため presence のみ)
+        await waitForFs(() => calls.includes("to-remove/x.md"));
+        expect(calls).toContain("to-remove/x.md");
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "除外ディレクトリ配下は監視されない (実 chokidar 統合スモーク)",
+    async () => {
+      const nm = join(root, "node_modules");
+      await mkdir(nm, { recursive: true });
+
+      const calls: string[] = [];
+      const { handle, ready } = startWatcher(root, (path) => {
+        calls.push(path);
+      });
+
+      try {
+        await ready;
+        await writeFile(join(nm, "skip.md"), "skip"); // 除外対象 (chokidar は descend しない)
+        await writeFile(join(root, "included.md"), "yes"); // positive control
+        // included が届いた = watcher は生きている。除外ファイルは chokidar が emit しない
+        await waitForFs(() => calls.includes("included.md"));
+        expect(calls.find((p) => p.includes("node_modules"))).toBeUndefined();
+      } finally {
+        handle.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  test(
+    "depth 指定で深い階層の変更は publish されない (Issue #44)",
+    async () => {
+      // 共有 root とは別の専用ツリーで検証する
+      const droot = await mkdtemp(join(tmpdir(), "yomi-watcher-depth-"));
+      await mkdir(join(droot, "d1"), { recursive: true });
+      await writeFile(join(droot, "shallow.md"), "x"); // level 1
+      await writeFile(join(droot, "d1", "deep.md"), "x"); // level 2
+
+      const calls: string[] = [];
+      // depth=1: ルート直下のみ監視 (chokidar depth 0)
+      const { handle, ready } = startWatcher(droot, (path) => calls.push(path), { depth: 1 });
+
+      try {
+        await ready;
+        await writeFile(join(droot, "shallow.md"), "changed"); // 監視内 (level 1)
+        await writeFile(join(droot, "d1", "deep.md"), "changed"); // 監視外 (level 2)
+
+        // positive control: 浅い変更は届く (= watcher は生きている)
+        await waitForFs(() => calls.includes("shallow.md"));
+        // depth 制限: 深い変更は chokidar が descend しないので届かない
+        expect(calls).not.toContain("d1/deep.md");
+      } finally {
+        handle.close();
+        await rm(droot, { recursive: true, force: true });
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 });
 
 /**

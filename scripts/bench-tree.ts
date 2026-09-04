@@ -184,6 +184,22 @@ export function renderTreeInto(
     ul.style.display = open ? "" : "none";
   };
 
+  /**
+   * 削除ボタン (Issue #171)。これを落とすと要素数が実物と食い違う。
+   *
+   * **実物と同じくリスナも `data-*` も持たせない**（クリックはツリー 1 つのリスナへ
+   * 委譲している）。ここで付けると、実物より重いものを測ることになる。
+   */
+  const deleteButton = (node: TreeNode): HTMLElement => {
+    const delBtn = document.createElement("button");
+    delBtn.setAttribute("type", "button");
+    delBtn.className = `tree-del-btn${node.type === "dir" ? " is-in-dir" : ""}`;
+    delBtn.textContent = "×";
+    delBtn.title = `${node.path} を削除`;
+    delBtn.setAttribute("aria-label", `${node.name} を削除`);
+    return delBtn;
+  };
+
   const renderNode = (node: TreeNode): HTMLElement => {
     const li = document.createElement("li");
     li.dataset.nodeKey = `${node.type}:${node.path}`;
@@ -223,10 +239,12 @@ export function renderTreeInto(
         addBtn.addEventListener("click", NOOP);
         li.insertBefore(addBtn, ul);
       }
+      li.insertBefore(deleteButton(node), ul);
     } else {
       fileButtons.set(node.path, button);
       rendered.set(nodeKey(node), { li, button, nameEl: name, name: node.name, ul: null });
       button.addEventListener("click", NOOP);
+      li.appendChild(deleteButton(node));
     }
     return li;
   };

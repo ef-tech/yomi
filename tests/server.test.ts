@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { sha256 } from "../src/save-mark.ts";
 import {
+  countDeletable,
   createServer,
   MAX_ASSET_BYTES,
   MAX_TEXT_BYTES,
@@ -2451,5 +2452,281 @@ describe("server - symlink 越しの許可リスト検査 (Issue #156)", () => {
     if (!symlinkOk) return;
     const res = await fetch(`${url}/api/images.zip?path=alias2.md`);
     expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * 削除 API (Issue #171)。
+ *
+ * **専用の root を使う。** 消す操作なので、他のテストが並べたファイルを巻き込むと
+ * 「なぜか別のテストが落ちる」形の壊れ方をする。
+ */
+describe("削除 (Issue #171)", () => {
+  let root: string;
+  let url: string;
+  let handle: ServerHandle;
+  /** symlink を作れない環境（Windows の一部・権限なし）ではテストを skip する */
+  let symlinkOk = true;
+
+  const delFile = (body: unknown, origin?: string) =>
+    fetch(`${url}/api/file/delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(origin ? { Origin: origin } : {}),
+      },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  const delDir = (body: unknown, origin?: string) =>
+    fetch(`${url}/api/dir/delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(origin ? { Origin: origin } : {}),
+      },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  const preview = (path: string) => fetch(`${url}/api/dir/delete?path=${encodeURIComponent(path)}`);
+
+  const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code;
+  const exists = async (rel: string) =>
+    await stat(join(root, rel))
+      .then(() => true)
+      .catch(() => false);
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "yomi-delete-"));
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await writeFile(join(root, "node_modules", "keep.md"), "# keep");
+    const ctx = await startServer(root);
+    url = ctx.url;
+    handle = ctx.handle;
+  });
+
+  afterAll(async () => {
+    handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("Markdown を削除できる", async () => {
+    await writeFile(join(root, "gone.md"), "# gone");
+    const res = await delFile({ path: "gone.md" });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { path: string }).path).toBe("gone.md");
+    expect(await exists("gone.md")).toBe(false);
+  });
+
+  test("テキストファイル (.txt) も削除できる", async () => {
+    await writeFile(join(root, "note.txt"), "text");
+    expect((await delFile({ path: "note.txt" })).status).toBe(200);
+    expect(await exists("note.txt")).toBe(false);
+  });
+
+  test("ツリーに載らない拡張子は削除できない (not_viewable)", async () => {
+    await writeFile(join(root, "photo.png"), "PNG");
+    const res = await delFile({ path: "photo.png" });
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("not_viewable");
+    // **消えていないこと**が要点（拒否したのに消えていたら意味がない）
+    expect(await exists("photo.png")).toBe(true);
+  });
+
+  test("ディレクトリを /api/file/delete に渡すと not_a_file", async () => {
+    await mkdir(join(root, "as-file.md"), { recursive: true });
+    const res = await delFile({ path: "as-file.md" });
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe("not_a_file");
+    expect(await exists("as-file.md")).toBe(true);
+  });
+
+  test("ディレクトリを配下ごと削除する (非 Markdown も一緒に消える)", async () => {
+    await mkdir(join(root, "trash", "inner"), { recursive: true });
+    await writeFile(join(root, "trash", "a.md"), "a");
+    await writeFile(join(root, "trash", "b.png"), "png");
+    await writeFile(join(root, "trash", "inner", "c.md"), "c");
+
+    const res = await delDir({ path: "trash" });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { path: string; symlink: boolean }).toEqual({
+      path: "trash",
+      symlink: false,
+    });
+    expect(await exists("trash")).toBe(false);
+  });
+
+  test("GET は消さずに内訳だけ返す", async () => {
+    await mkdir(join(root, "count", "sub"), { recursive: true });
+    await writeFile(join(root, "count", "a.md"), "a");
+    await writeFile(join(root, "count", "b.markdown"), "b");
+    await writeFile(join(root, "count", "c.png"), "png");
+    await writeFile(join(root, "count", "sub", "d.md"), "d");
+
+    const res = await preview("count");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      path: "count",
+      symlink: false,
+      markdown: 3,
+      other: 1,
+      dirs: 1,
+      truncated: false,
+    });
+    // **数えただけで消していない**
+    expect(await exists("count/a.md")).toBe(true);
+  });
+
+  test("内訳は除外設定を適用しない (消えるものを数えるため)", async () => {
+    await mkdir(join(root, "withdep", "node_modules"), { recursive: true });
+    await writeFile(join(root, "withdep", "keep.md"), "keep");
+    await writeFile(join(root, "withdep", "node_modules", "dep.js"), "dep");
+
+    const json = (await (await preview("withdep")).json()) as {
+      markdown: number;
+      other: number;
+      dirs: number;
+    };
+    // `node_modules` は除外されているのにツリーに出ない `dep.js` まで数える
+    expect([json.markdown, json.other, json.dirs]).toEqual([1, 1, 1]);
+  });
+
+  test("走査上限を超えたら truncated を立てる", async () => {
+    await mkdir(join(root, "many"), { recursive: true });
+    for (const name of ["a.md", "b.md", "c.md", "d.md"]) {
+      await writeFile(join(root, "many", name), name);
+    }
+    // 上限は**テストのためだけに開けてある**。20,000 件を実際に作らずに経路を確かめる
+    const limited = await countDeletable(join(root, "many"), 2);
+    expect(limited.truncated).toBe(true);
+    expect(limited.markdown).toBe(2);
+
+    const full = await countDeletable(join(root, "many"));
+    expect(full).toEqual({ markdown: 4, other: 0, dirs: 0, truncated: false });
+  });
+
+  test("ファイルを /api/dir/delete に渡すと not_a_dir (GET / POST とも)", async () => {
+    await writeFile(join(root, "plain.md"), "# plain");
+    expect(await codeOf(await preview("plain.md"))).toBe("not_a_dir");
+    expect(await codeOf(await delDir({ path: "plain.md" }))).toBe("not_a_dir");
+    expect(await exists("plain.md")).toBe(true);
+  });
+
+  test("除外配下は削除できない (excluded_path)", async () => {
+    expect(await codeOf(await delFile({ path: "node_modules/keep.md" }))).toBe("excluded_path");
+    expect(await codeOf(await delDir({ path: "node_modules" }))).toBe("excluded_path");
+    expect(await codeOf(await preview("node_modules"))).toBe("excluded_path");
+    expect(await exists("node_modules/keep.md")).toBe(true);
+  });
+
+  test("ルート自身は削除できない (unsafe_path)", async () => {
+    for (const path of [".", "./"]) {
+      const res = await delDir({ path });
+      expect(res.status).toBe(400);
+      expect(await codeOf(res)).toBe("unsafe_path");
+    }
+    // root がまだあること（ここが消えると以降のテストが全部壊れる）
+    expect(await stat(root).then((s) => s.isDirectory())).toBe(true);
+  });
+
+  test("ルート外へ抜けるパスは unsafe_path", async () => {
+    expect(await codeOf(await delFile({ path: "../evil.md" }))).toBe("unsafe_path");
+    expect(await codeOf(await delDir({ path: "../evil" }))).toBe("unsafe_path");
+    // **絶対パスは拡張子を付けて渡す** —— `isViewableFile` が先に走るので、拡張子の無い
+    // パスは `unsafe_path` へ届く前に `not_viewable` で落ちる（それも拒否ではある）
+    expect(await codeOf(await delFile({ path: "/etc/passwd.md" }))).toBe("unsafe_path");
+  });
+
+  test("存在しないものは 404", async () => {
+    expect((await delFile({ path: "no-such.md" })).status).toBe(404);
+    expect((await delDir({ path: "no-such-dir" })).status).toBe(404);
+    expect((await preview("no-such-dir")).status).toBe(404);
+    // 親ごと無いケース（`realpath(dirname)` が ENOENT になる経路）
+    expect((await delFile({ path: "no-such-dir/x.md" })).status).toBe(404);
+  });
+
+  test("Origin が異なれば 403 (GET のプレビューは読み取りなので通る)", async () => {
+    await writeFile(join(root, "csrf.md"), "# csrf");
+    expect((await delFile({ path: "csrf.md" }, "http://attacker.example")).status).toBe(403);
+    expect((await delDir({ path: "csrf.md" }, "http://attacker.example")).status).toBe(403);
+    expect(await exists("csrf.md")).toBe(true);
+  });
+
+  test("GET /api/file/delete は 405 + Allow: POST", async () => {
+    const res = await fetch(`${url}/api/file/delete`);
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
+
+  test("DELETE /api/dir/delete は 405 + Allow: GET, POST", async () => {
+    const res = await fetch(`${url}/api/dir/delete`, { method: "DELETE" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, POST");
+  });
+
+  // Issue #48: フロントの i18n はサーバの error `code` を翻訳キーに対応づける
+  test("エラー応答は i18n 用の code を含む", async () => {
+    expect(await codeOf(await delFile({}))).toBe("path_required");
+    expect(await codeOf(await delFile("{not json"))).toBe("invalid_json");
+    expect(await codeOf(await preview(""))).toBe("path_required");
+    expect(await codeOf(await delFile({ path: "no-such.md" }))).toBe("not_found");
+    expect(await codeOf(await delFile({ path: "csrf.md" }, "http://attacker.example"))).toBe(
+      "origin_forbidden",
+    );
+  });
+
+  describe("symlink は辿らない", () => {
+    beforeAll(async () => {
+      await writeFile(join(root, "real.md"), "# real");
+      await mkdir(join(root, "real-dir"), { recursive: true });
+      await writeFile(join(root, "real-dir", "inside.md"), "inside");
+      try {
+        await symlink(join(root, "real.md"), join(root, "link.md"));
+        await symlink(join(root, "real-dir"), join(root, "link-dir"));
+      } catch {
+        symlinkOk = false;
+      }
+    });
+
+    test("ファイルへの symlink はリンクだけが消え、実体は残る", async () => {
+      if (!symlinkOk) return;
+      expect((await delFile({ path: "link.md" })).status).toBe(200);
+      expect(await exists("link.md")).toBe(false);
+      // **ここが要点。** `resolveSafe` の realpath 済み abs を消していたら実体が消える
+      expect(await exists("real.md")).toBe(true);
+    });
+
+    test("ディレクトリへの symlink は中を数えず、リンクだけが消える", async () => {
+      if (!symlinkOk) return;
+      expect(await (await preview("link-dir")).json()).toEqual({
+        path: "link-dir",
+        symlink: true,
+        markdown: 0,
+        other: 0,
+        dirs: 0,
+        truncated: false,
+      });
+
+      const res = await delDir({ path: "link-dir" });
+      expect(res.status).toBe(200);
+      expect((await res.json()) as { path: string; symlink: boolean }).toEqual({
+        path: "link-dir",
+        symlink: true,
+      });
+      expect(await exists("link-dir")).toBe(false);
+      // リンク先のディレクトリと中身は無傷
+      expect(await exists("real-dir/inside.md")).toBe(true);
+    });
+
+    test("配下の symlink はリンクとして消え、リンク先は残る", async () => {
+      if (!symlinkOk) return;
+      await mkdir(join(root, "holder"), { recursive: true });
+      await writeFile(join(root, "outside.md"), "# outside");
+      await symlink(join(root, "outside.md"), join(root, "holder", "alias.md"));
+
+      expect((await delDir({ path: "holder" })).status).toBe(200);
+      expect(await exists("holder")).toBe(false);
+      expect(await exists("outside.md")).toBe(true);
+    });
   });
 });

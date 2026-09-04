@@ -32,6 +32,12 @@ export const ERROR_CODES = [
   "already_exists",
   "parent_missing",
   "create_failed",
+  // Issue #171: 削除の入口 (`/api/file/delete` / `/api/dir/delete`) で、対象の種類が
+  // 期待と違った。**`not_markdown` / `not_viewable` と分ける** —— あちらは拡張子の話で、
+  // こちらは「ファイルを消そうとしたらディレクトリだった (逆もある)」という取り違え。
+  "not_a_file",
+  "not_a_dir",
+  "delete_failed",
   "write_failed",
   // Issue #164: `.yomiignore` は書けたが、読み直しに失敗して除外を差し替えられなかった。
   // **`write_failed` と分ける** —— 書けているのに「保存に失敗」と言うと、利用者は

@@ -176,7 +176,7 @@ async function relFromDeepestReal(
  *
  * @param rel `relative(rootAbs, ...)` の結果、または `toPosix` 済みのそれ
  */
-function isOutsideRoot(rel: string): boolean {
+export function isOutsideRoot(rel: string): boolean {
   return rel === ".." || rel.startsWith("../") || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
